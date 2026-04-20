@@ -1,0 +1,27 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: kwsa-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: kwsa
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  gcs-emulator:
+    image: fsouza/fake-gcs-server:latest
+    container_name: kwsa-gcs-emulator
+    command: -scheme http -port 4443 -public
+    ports:
+      - "4443:4443"
+    volumes:
+      - gcs_data:/data
+
+volumes:
+  postgres_data:
+  gcs_data:

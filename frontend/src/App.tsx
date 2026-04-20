@@ -1,0 +1,29 @@
+import { Routes, Route, Navigate } from 'react-router-dom';
+import Layout from './components/layout/Layout';
+import Dashboard from './pages/Dashboard';
+import ListingsPage from './pages/Listings';
+import TransactionsPage from './pages/Transactions';
+import AgentsPage from './pages/Agents';
+import MarketCentresPage from './pages/MarketCentres';
+import AssociatesPage from './pages/Associates';
+import ReportsPage from './pages/Reports';
+import { REPORTS } from './pages/reportsConfig';
+
+function App() {
+  return (
+    <Layout>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/listings" element={<ListingsPage />} />
+        <Route path="/transactions" element={<TransactionsPage />} />
+        <Route path="/agents" element={<AgentsPage />} />
+        <Route path="/market-centres" element={<MarketCentresPage />} />
+        <Route path="/associates" element={<AssociatesPage />} />
+        <Route path="/reports" element={<Navigate to={`/reports/${REPORTS[0].id}`} replace />} />
+        <Route path="/reports/:reportId" element={<ReportsPage />} />
+      </Routes>
+    </Layout>
+  );
+}
+
+export default App;

@@ -1,0 +1,898 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// AUTHENTICATION & USERS
+// ============================================================================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  firstName String
+  lastName  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+  
+  associate   Associate?
+  roles       UserRole[]
+  
+  @@index([email])
+  @@map("users")
+}
+
+model Role {
+  id        String   @id @default(cuid())
+  name      String   @unique // "REGIONAL_ADMIN", "OFFICE_ADMIN", "AGENT"
+  createdAt DateTime @default(now())
+  
+  users UserRole[]
+  
+  @@map("roles")
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// ============================================================================
+// CORE BUSINESS ENTITIES
+// ============================================================================
+
+model Country {
+  id        Int     @id @default(autoincrement())
+  name      String
+  p24Id     Int?    @unique // Property24 integration ID
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  provinces Province[]
+  addresses Address[]
+  
+  @@index([p24Id])
+  @@map("countries")
+}
+
+model Province {
+  id        Int     @id @default(autoincrement())
+  name      String
+  countryId Int
+  p24Id     Int?    @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  cities  City[]
+  addresses Address[]
+  
+  @@index([countryId])
+  @@index([p24Id])
+  @@map("provinces")
+}
+
+model City {
+  id         Int     @id @default(autoincrement())
+  name       String
+  provinceId Int
+  p24Id      Int?    @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  province Province @relation(fields: [provinceId], references: [id], onDelete: Cascade)
+  suburbs  Suburb[]
+  addresses Address[]
+  
+  @@index([provinceId])
+  @@index([p24Id])
+  @@map("cities")
+}
+
+model Suburb {
+  id        Int     @id @default(autoincrement())
+  name      String
+  cityId    Int
+  p24Id     Int?    @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  city      City @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  addresses Address[]
+  
+  @@index([cityId])
+  @@index([p24Id])
+  @@map("suburbs")
+}
+
+model Address {
+  id              Int     @id @default(autoincrement())
+  streetNumber    String?
+  streetName      String?
+  unitNumber      String?
+  erfNumber       String?
+  postalCode      String?
+  estateName      String?
+  doorNumber      String?
+  suburbId        Int
+  cityId          Int
+  provinceId      Int
+  countryId       Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  suburb    Suburb   @relation(fields: [suburbId], references: [id])
+  city      City     @relation(fields: [cityId], references: [id])
+  province  Province @relation(fields: [provinceId], references: [id])
+  country   Country  @relation(fields: [countryId], references: [id])
+  
+  listings Listing[]
+  marketCenters MarketCenter[]
+  
+  @@index([suburbId])
+  @@index([cityId])
+  @@map("addresses")
+}
+
+// ============================================================================
+// MARKET CENTERS & ORGANIZATIONAL STRUCTURE
+// ============================================================================
+
+model MarketCenter {
+  id              Int     @id @default(autoincrement())
+  name            String
+  addressId       Int
+  frontdoorId     Int?    // KWW integration
+  statusId        Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+  
+  address         Address @relation(fields: [addressId], references: [id])
+  status          MarketCenterStatus @relation(fields: [statusId], references: [id])
+  associates      Associate[]
+  teams           Team[]
+  listings        Listing[]
+  
+  @@index([addressId])
+  @@index([statusId])
+  @@softDelete
+  @@map("market_centers")
+}
+
+model MarketCenterStatus {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  marketCenters MarketCenter[]
+  
+  @@map("market_center_statuses")
+}
+
+model Team {
+  id              Int     @id @default(autoincrement())
+  name            String
+  marketCenterId  Int
+  statusId        Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+  
+  marketCenter    MarketCenter @relation(fields: [marketCenterId], references: [id], onDelete: Cascade)
+  status          TeamStatus @relation(fields: [statusId], references: [id])
+  associates      Associate[]
+  
+  @@index([marketCenterId])
+  @@index([statusId])
+  @@softDelete
+  @@map("teams")
+}
+
+model TeamStatus {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  teams Team[]
+  
+  @@map("team_statuses")
+}
+
+// ============================================================================
+// ASSOCIATES (AGENTS)
+// ============================================================================
+
+model Associate {
+  id                    Int     @id @default(autoincrement())
+  firstName             String
+  lastName              String
+  statusId              Int
+  marketCenterId        Int
+  teamId                Int?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  deletedAt             DateTime?
+  
+  user                  User?
+  status                AssociateStatus @relation(fields: [statusId], references: [id])
+  marketCenter          MarketCenter @relation(fields: [marketCenterId], references: [id])
+  team                  Team? @relation(fields: [teamId], references: [id])
+  
+  businessDetail        AssociateBusinessDetail?
+  thirdPartyIntegration AssociateThirdPartyIntegration?
+  contactDetail         AssociateContactDetail?
+  listings              ListingAssociate[]
+  transactionAssociates TransactionAssociate[]
+  transfers             AssociateTransfer[]
+  
+  @@index([statusId])
+  @@index([marketCenterId])
+  @@index([teamId])
+  @@softDelete
+  @@map("associates")
+}
+
+model AssociateStatus {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  associates Associate[]
+  
+  @@map("associate_statuses")
+}
+
+model AssociateBusinessDetail {
+  id                      Int     @id @default(cuid())
+  associateId             Int     @unique
+  kwuid                   String?
+  breeNumber              String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  
+  associate               Associate @relation(fields: [associateId], references: [id], onDelete: Cascade)
+  
+  @@map("associate_business_details")
+}
+
+model AssociateThirdPartyIntegration {
+  id                Int     @id @default(cuid())
+  associateId       Int     @unique
+  p24AgentId        Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  associate         Associate @relation(fields: [associateId], references: [id], onDelete: Cascade)
+  
+  @@map("associate_third_party_integrations")
+}
+
+model AssociateContactDetail {
+  id                Int     @id @default(cuid())
+  associateId       Int     @unique
+  email             String?
+  phone             String?
+  fax               String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  associate         Associate @relation(fields: [associateId], references: [id], onDelete: Cascade)
+  
+  @@map("associate_contact_details")
+}
+
+model AssociateTransfer {
+  id                          Int     @id @default(autoincrement())
+  associateId                 Int
+  marketCenterFromId          Int
+  marketCenterToId            Int
+  teamId                      Int?
+  property24IdOldOffice       Int?
+  property24IdNewOffice       Int?
+  associateTransactionMove    Boolean @default(false)
+  transferStatusId            Int
+  errorMessage                String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+  whoUpdatedId                String?
+  
+  associate                   Associate @relation(fields: [associateId], references: [id], onDelete: Cascade)
+  transferStatus              AssociateTransferStatus @relation(fields: [transferStatusId], references: [id])
+  
+  @@index([associateId])
+  @@index([transferStatusId])
+  @@map("associate_transfers")
+}
+
+model AssociateTransferStatus {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  transfers AssociateTransfer[]
+  
+  @@map("associate_transfer_statuses")
+}
+
+// ============================================================================
+// LISTINGS
+// ============================================================================
+
+model Listing {
+  id                        Int     @id @default(autoincrement())
+  listingNumber             String  @unique
+  addressId                 Int
+  marketCenterId            Int
+  statusId                  Int
+  statusTagId               Int?
+  saleOrRentTypeId          Int
+  mandateTypeId             Int
+  listingTypeId             Int?
+  expiryDate                DateTime?
+  occupationDate            DateTime?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+  deletedAt                 DateTime?
+  
+  address                   Address @relation(fields: [addressId], references: [id])
+  marketCenter              MarketCenter @relation(fields: [marketCenterId], references: [id])
+  status                    ListingStatus @relation(fields: [statusId], references: [id])
+  statusTag                 ListingStatusTag? @relation(fields: [statusTagId], references: [id])
+  saleOrRentType            ListingSaleOrRentType @relation(fields: [saleOrRentTypeId], references: [id])
+  mandateInfo               ListingMandateInfo?
+  
+  description               ListingDescription?
+  priceDetail               ListingPriceDetail?
+  buildingInfo              ListingBuildingInfo?
+  lightStoneValidation      ListingLightStoneValidation?
+  thirdPartyIntegration     ListingThirdPartyIntegration?
+  
+  associates                ListingAssociate[]
+  images                    ListingImage[]
+  properties                ListingPropertyArea[]
+  marketingUrls             ListingMarketingUrl[]
+  p24Feed                   ListingP24FeedItem[]
+  transactions              Transaction[]
+  
+  @@index([addressId])
+  @@index([marketCenterId])
+  @@index([statusId])
+  @@softDelete
+  @@map("listings")
+}
+
+model ListingStatus {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  listings Listing[]
+  
+  @@map("listing_statuses")
+}
+
+model ListingStatusTag {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  listings Listing[]
+  
+  @@map("listing_status_tags")
+}
+
+model ListingSaleOrRentType {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  listings Listing[]
+  
+  @@map("listing_sale_or_rent_types")
+}
+
+model ListingDescription {
+  id                Int     @id @default(cuid())
+  listingId         Int     @unique
+  propertyTitle     String?
+  propertyDescription String?
+  shortDescription String?
+  listingTypeId     Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  listing           Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  listingType       ListingType @relation(fields: [listingTypeId], references: [id])
+  
+  @@map("listing_descriptions")
+}
+
+model ListingType {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  descriptions ListingDescription[]
+  
+  @@map("listing_types")
+}
+
+model ListingPriceDetail {
+  id                    Int     @id @default(cuid())
+  listingId             Int     @unique
+  price                 Decimal
+  poa                   Boolean @default(false)
+  noTransferDuty        Boolean @default(false)
+  ignoreForPriceReducedAlerts Boolean @default(false)
+  repossessed           Boolean @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  listing               Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  
+  @@map("listing_price_details")
+}
+
+model ListingBuildingInfo {
+  id                Int     @id @default(cuid())
+  listingId         Int     @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  listing           Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  areaFeatures      ListingBuildingAreaFeature[]
+  
+  @@map("listing_building_infos")
+}
+
+model ListingBuildingAreaFeature {
+  id                    Int     @id @default(autoincrement())
+  buildingInfoId        String
+  featureId             Int
+  createdAt             DateTime @default(now())
+  
+  buildingInfo          ListingBuildingInfo @relation(fields: [buildingInfoId], references: [id], onDelete: Cascade)
+  feature               ListingBuildingAreaFeatureType @relation(fields: [featureId], references: [id])
+  
+  @@map("listing_building_area_features")
+}
+
+model ListingBuildingAreaFeatureType {
+  id        Int     @id @default(autoincrement())
+  name      String
+  p24Tag    String?
+  
+  features  ListingBuildingAreaFeature[]
+  
+  @@map("listing_building_area_feature_types")
+}
+
+model ListingLightStoneValidation {
+  id                    Int     @id @default(cuid())
+  listingId             Int     @unique
+  lightStonePropertyId  Int?
+  validationStatus      String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  listing               Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  
+  @@map("listing_lightstone_validations")
+}
+
+model ListingThirdPartyIntegration {
+  id                    Int     @id @default(cuid())
+  listingId             Int     @unique
+  property24Reference   Int?
+  privatePropertyReference String?
+  kwwReference          String?
+  entegralReference     String?
+  kwwSyncMessage        String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  listing               Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  
+  @@map("listing_third_party_integrations")
+}
+
+model ListingMandateInfo {
+  id                    Int     @id @default(cuid())
+  listingId             Int     @unique
+  mandateTypeId         Int
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  listing               Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  mandateType           ListingMandateType @relation(fields: [mandateTypeId], references: [id])
+  
+  @@map("listing_mandate_infos")
+}
+
+model ListingMandateType {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  mandates ListingMandateInfo[]
+  
+  @@map("listing_mandate_types")
+}
+
+model ListingAssociate {
+  id          Int     @id @default(autoincrement())
+  listingId   Int
+  associateId Int
+  isPrimary   Boolean @default(false)
+  createdAt   DateTime @default(now())
+  
+  listing     Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  associate   Associate @relation(fields: [associateId], references: [id], onDelete: Cascade)
+  
+  @@unique([listingId, associateId])
+  @@map("listing_associates")
+}
+
+model ListingImage {
+  id          Int     @id @default(autoincrement())
+  listingId   Int
+  documentId  String
+  orderNumber Int @default(0)
+  createdAt   DateTime @default(now())
+  
+  listing     Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  
+  @@index([listingId])
+  @@map("listing_images")
+}
+
+model ListingPropertyArea {
+  id                    Int     @id @default(autoincrement())
+  listingId             Int
+  propertyAreaTypeId    Int
+  size                  Decimal?
+  createdAt             DateTime @default(now())
+  
+  listing               Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  propertyAreaType      ListingPropertyAreaType @relation(fields: [propertyAreaTypeId], references: [id])
+  
+  @@map("listing_property_areas")
+}
+
+model ListingPropertyAreaType {
+  id    Int     @id @default(autoincrement())
+  name  String  // "Bedroom", "Bathroom", "Garage", etc.
+  
+  properties ListingPropertyArea[]
+  
+  @@map("listing_property_area_types")
+}
+
+model ListingMarketingUrl {
+  id              Int     @id @default(autoincrement())
+  listingId       Int
+  url             String
+  marketingUrlTypeId Int
+  createdAt       DateTime @default(now())
+  
+  listing         Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  marketingUrlType ListingMarketingUrlType @relation(fields: [marketingUrlTypeId], references: [id])
+  
+  @@map("listing_marketing_urls")
+}
+
+model ListingMarketingUrlType {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  urls  ListingMarketingUrl[]
+  
+  @@map("listing_marketing_url_types")
+}
+
+model ListingP24FeedItem {
+  id        Int     @id @default(autoincrement())
+  listingId Int
+  statusId  Int
+  jsonToFeed String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  status    ListingP24FeedItemStatus @relation(fields: [statusId], references: [id])
+  
+  @@index([listingId])
+  @@index([statusId])
+  @@map("listing_p24_feed_items")
+}
+
+model ListingP24FeedItemStatus {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  items ListingP24FeedItem[]
+  
+  @@map("listing_p24_feed_item_statuses")
+}
+
+// ============================================================================
+// TRANSACTIONS
+// ============================================================================
+
+model Transaction {
+  id                      Int     @id @default(autoincrement())
+  transactionNumber       String  @unique
+  listingId               Int
+  statusId                Int
+  statusChangeDate        DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  whoUpdatedId            String?
+  whenUpdated             DateTime @updatedAt
+  deletedAt               DateTime?
+  
+  listing                 Listing @relation(fields: [listingId], references: [id])
+  status                  TransactionStatus @relation(fields: [statusId], references: [id])
+  
+  description             TransactionDescription?
+  bond                    TransactionBond?
+  associates              TransactionAssociate[]
+  contacts                TransactionContact[]
+  documents               TransactionDocument[]
+  notes                   TransactionNote[]
+  
+  @@index([listingId])
+  @@index([statusId])
+  @@softDelete
+  @@map("transactions")
+}
+
+model TransactionStatus {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  transactions Transaction[]
+  
+  @@map("transaction_statuses")
+}
+
+model TransactionDescription {
+  id                      Int     @id @default(cuid())
+  transactionId           Int     @unique
+  soldPrice               Decimal
+  contractGCIExclVAT      Decimal
+  transactionDate         DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  
+  transaction             Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  
+  @@map("transaction_descriptions")
+}
+
+model TransactionBond {
+  id                                    Int     @id @default(autoincrement())
+  transactionId                         Int     @unique
+  bondAmount                            Decimal?
+  registrationNumber                    String?
+  transactionFinancingTypeId            Int?
+  transactionFinancialInstitutionId     Int?
+  transactionFinancingChannelId         Int?
+  transferAttorneyId                    Int?
+  bondAttorneyId                        Int?
+  transactionFinancingChannelContactPersonId String?
+  createdAt                             DateTime @default(now())
+  updatedAt                             DateTime @updatedAt
+  
+  transaction                           Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  financingType                         TransactionFinancingType? @relation(fields: [transactionFinancingTypeId], references: [id])
+  financialInstitution                  TransactionFinancialInstitution? @relation(fields: [transactionFinancialInstitutionId], references: [id])
+  financingChannel                      TransactionFinancingChannel? @relation(fields: [transactionFinancingChannelId], references: [id])
+  transferAttorney                      Contact? @relation("transferAttorney", fields: [transferAttorneyId], references: [id])
+  bondAttorney                          Contact? @relation("bondAttorney", fields: [bondAttorneyId], references: [id])
+  
+  @@map("transaction_bonds")
+}
+
+model TransactionFinancingType {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  bonds TransactionBond[]
+  
+  @@map("transaction_financing_types")
+}
+
+model TransactionFinancialInstitution {
+  id                    Int     @id @default(autoincrement())
+  name                  String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  bonds                 TransactionBond[]
+  
+  @@map("transaction_financial_institutions")
+}
+
+model TransactionFinancingChannel {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  bonds TransactionBond[]
+  
+  @@map("transaction_financing_channels")
+}
+
+model TransactionAssociate {
+  id                                Int     @id @default(autoincrement())
+  transactionId                     Int
+  associateId                       Int
+  marketCenterId                    Int?
+  teamId                            Int?
+  managementMarketCenterId          Int?
+  transactionAssociateTypeId        Int
+  contactId                         Int?
+  softDelete                        Boolean @default(false)
+  createdAt                         DateTime @default(now())
+  updatedAt                         DateTime @updatedAt
+  
+  transaction                       Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  associate                         Associate @relation(fields: [associateId], references: [id], onDelete: Cascade)
+  transactionAssociateType          TransactionAssociateType @relation(fields: [transactionAssociateTypeId], references: [id])
+  contact                           Contact? @relation(fields: [contactId], references: [id])
+  paymentDetail                     TransactionAssociatePaymentDetail?
+  
+  @@index([transactionId])
+  @@index([associateId])
+  @@map("transaction_associates")
+}
+
+model TransactionAssociateType {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  associates TransactionAssociate[]
+  
+  @@map("transaction_associate_types")
+}
+
+model TransactionAssociatePaymentDetail {
+  id                              Int     @id @default(autoincrement())
+  transactionAssociateId          Int     @unique
+  paymentAmount                   Decimal?
+  commissionPercentage            Decimal?
+  paymentStatus                   String?
+  createdAt                       DateTime @default(now())
+  updatedAt                       DateTime @updatedAt
+  
+  transactionAssociate            TransactionAssociate @relation(fields: [transactionAssociateId], references: [id], onDelete: Cascade)
+  
+  @@map("transaction_associate_payment_details")
+}
+
+model TransactionContact {
+  id                        Int     @id @default(autoincrement())
+  transactionId             Int
+  contactId                 Int
+  transactionContactTypeId  Int
+  createdAt                 DateTime @default(now())
+  
+  transaction               Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  contact                   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactType               TransactionContactType @relation(fields: [transactionContactTypeId], references: [id])
+  
+  @@map("transaction_contacts")
+}
+
+model TransactionContactType {
+  id    Int     @id @default(autoincrement())
+  name  String
+  
+  contacts TransactionContact[]
+  
+  @@map("transaction_contact_types")
+}
+
+model TransactionDocument {
+  id            Int     @id @default(autoincrement())
+  transactionId Int
+  documentId    String
+  createdAt     DateTime @default(now())
+  
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  
+  @@map("transaction_documents")
+}
+
+model TransactionNote {
+  id            Int     @id @default(autoincrement())
+  transactionId Int
+  content       String
+  createdAt     DateTime @default(now())
+  
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  
+  @@map("transaction_notes")
+}
+
+// ============================================================================
+// SHARED ENTITIES
+// ============================================================================
+
+model Contact {
+  id            Int     @id @default(autoincrement())
+  name          String
+  email         String?
+  phone         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+  
+  transferAttorneyBonds TransactionBond[] @relation("transferAttorney")
+  bondAttorneyBonds     TransactionBond[] @relation("bondAttorney")
+  transactionAssociates TransactionAssociate[]
+  transactionContacts   TransactionContact[]
+  
+  @@softDelete
+  @@map("contacts")
+}
+
+model Document {
+  id            String   @id @default(cuid())
+  url           String
+  contentType   String
+  size          Int
+  orderNumber   Int @default(0)
+  createdAt     DateTime @default(now())
+  
+  listingImages ListingImage[]
+  transactionDocs TransactionDocument[]
+  
+  @@map("documents")
+}
+
+// ============================================================================
+// AUDIT & LOGGING
+// ============================================================================
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String   // "CREATE", "UPDATE", "DELETE"
+  entity    String   // "Listing", "Transaction", "Associate"
+  entityId  Int
+  changes   Json?    // JSON diff of changes
+  createdAt DateTime @default(now())
+  
+  @@index([userId])
+  @@index([entity])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum ListingStatusEnum {
+  ACTIVE
+  INACTIVE
+  SOLD
+  WITHDRAWN
+  EXPIRED
+}
+
+// Soft delete helper
+model SoftDeleteHelper {
+  id String @id @default(cuid())
+  
+  @@ignore
+}

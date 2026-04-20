@@ -1,0 +1,3 @@
+team_id,market_center_id,name,status,updated_at
+T-01,MC-01,Residential Sales,ACTIVE,2026-04-01T09:00:00Z
+T-02,MC-02,Commercial Leasing,ACTIVE,2026-04-02T09:15:00Z

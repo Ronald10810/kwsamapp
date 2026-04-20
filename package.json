@@ -1,0 +1,15 @@
+{
+  "name": "kwsa-cloud-console",
+  "version": "1.0.0",
+  "description": "Modern real estate operations platform",
+  "scripts": {
+    "dev": "docker-compose up",
+    "build": "docker-compose build",
+    "test": "npm run test --prefix backend && npm run test --prefix frontend",
+    "lint": "npm run lint --prefix backend && npm run lint --prefix frontend"
+  },
+  "workspaces": [
+    "backend",
+    "frontend"
+  ]
+}

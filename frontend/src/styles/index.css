@@ -1,0 +1,99 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f6f3f2;
+  --bg-accent: #f0d8d3;
+  --surface: #ffffff;
+  --surface-strong: #f9f5f4;
+  --text-primary: #261514;
+  --text-muted: #6d4b47;
+  --brand: #b01e23;
+  --brand-soft: #fde8e8;
+  --brand-strong: #7c1318;
+  --border-soft: #ead5d0;
+  --ink-dark: #17100f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'IBM Plex Sans', sans-serif;
+  background:
+    radial-gradient(1200px 500px at 10% -10%, var(--bg-accent), transparent 60%),
+    radial-gradient(1100px 620px at 100% 0%, #f3ddd8, transparent 55%),
+    linear-gradient(180deg, #f7f9fc 0%, var(--bg) 100%);
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+
+a {
+  @apply transition-colors duration-200;
+  color: var(--brand);
+}
+
+a:hover {
+  color: var(--brand-strong);
+}
+
+button {
+  @apply transition-colors duration-200;
+}
+
+.page-title {
+  font-family: 'Space Grotesk', sans-serif;
+  @apply text-4xl font-semibold tracking-tight;
+  color: var(--text-primary);
+}
+
+.surface-card {
+  background: linear-gradient(180deg, var(--surface) 0%, var(--surface-strong) 100%);
+  border: 1px solid var(--border-soft);
+  @apply rounded-xl shadow-sm;
+}
+
+.primary-btn {
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-strong) 100%);
+  @apply text-white px-4 py-2 rounded-lg font-medium shadow-sm;
+}
+
+.primary-btn:hover {
+  background: linear-gradient(135deg, #8f171c 0%, #661014 100%);
+}
+
+.muted-text {
+  color: var(--text-muted);
+}
+
+.sidebar-shell {
+  background:
+    radial-gradient(500px 260px at 100% 0%, #8f1b20 0%, transparent 70%),
+    linear-gradient(180deg, #1f1112 0%, #10090a 100%);
+}
+
+.kpi-card {
+  border: 1px solid var(--border-soft);
+  background: linear-gradient(165deg, #ffffff 0%, #f1f5f0 100%);
+  @apply rounded-2xl p-5 shadow-sm;
+}
+
+.status-chip {
+  @apply inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold;
+}
+
+.status-chip.good {
+  @apply bg-red-100 text-red-800;
+}
+
+.status-chip.warn {
+  @apply bg-amber-100 text-amber-800;
+}
+
+.status-chip.info {
+  @apply bg-slate-100 text-slate-700;
+}
