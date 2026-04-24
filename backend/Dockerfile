@@ -1,4 +1,4 @@
-FROM node:20-alpine AS builder
+FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -8,16 +8,18 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 
+ENV NODE_ENV=production
+
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 COPY prisma ./prisma
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+CMD ["node", "dist/index.js"]

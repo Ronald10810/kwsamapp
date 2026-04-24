@@ -579,6 +579,22 @@ async function main(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_transactions_raw_associate
         ON staging.transactions_raw(source_associate_id);
 
+      CREATE TABLE IF NOT EXISTS staging.transaction_agents (
+        id BIGSERIAL PRIMARY KEY,
+        transaction_id BIGINT REFERENCES staging.transactions_raw(id) ON DELETE CASCADE,
+        source_associate_id TEXT,
+        associate_name TEXT,
+        split_percentage NUMERIC(10,4),
+        agent_type TEXT,
+        sort_order INT DEFAULT 0,
+        loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_staging_transaction_agents_tx
+        ON staging.transaction_agents(transaction_id);
+      CREATE INDEX IF NOT EXISTS idx_staging_transaction_agents_associate
+        ON staging.transaction_agents(source_associate_id);
+
       CREATE TABLE IF NOT EXISTS migration.transactions_prepared (
         source_transaction_id TEXT NOT NULL,
         source_associate_id TEXT NOT NULL DEFAULT '',
@@ -614,10 +630,8 @@ async function main(): Promise<void> {
 
       CREATE TABLE IF NOT EXISTS migration.core_transactions (
         id BIGSERIAL PRIMARY KEY,
-        source_transaction_id TEXT NOT NULL,
-        source_associate_id TEXT NOT NULL DEFAULT '',
-        associate_id BIGINT REFERENCES migration.core_associates(id),
-        market_center_id BIGINT REFERENCES migration.core_market_centers(id),
+        source_transaction_id TEXT NOT NULL UNIQUE,
+        primary_market_center_id BIGINT REFERENCES migration.core_market_centers(id),
         transaction_number TEXT,
         transaction_status TEXT,
         transaction_type TEXT,
@@ -629,11 +643,9 @@ async function main(): Promise<void> {
         sales_price NUMERIC(18,2),
         list_price NUMERIC(18,2),
         gci_excl_vat NUMERIC(18,2),
-        split_percentage NUMERIC(10,4),
         net_comm NUMERIC(18,2),
         total_gci NUMERIC(18,2),
         sale_type TEXT,
-        agent_type TEXT,
         buyer TEXT,
         seller TEXT,
         list_date TIMESTAMPTZ,
@@ -641,18 +653,101 @@ async function main(): Promise<void> {
         status_change_date TIMESTAMPTZ,
         expected_date TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (source_transaction_id, source_associate_id)
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
-      CREATE INDEX IF NOT EXISTS idx_core_transactions_associate
-        ON migration.core_transactions(associate_id);
-      CREATE INDEX IF NOT EXISTS idx_core_transactions_mc
-        ON migration.core_transactions(market_center_id);
+      CREATE TABLE IF NOT EXISTS migration.transaction_agents (
+        id BIGSERIAL PRIMARY KEY,
+        transaction_id BIGINT NOT NULL REFERENCES migration.core_transactions(id) ON DELETE CASCADE,
+        associate_id BIGINT REFERENCES migration.core_associates(id),
+        source_associate_id TEXT,
+        agent_role TEXT,
+        split_percentage NUMERIC(10,4),
+        net_comm NUMERIC(18,2),
+        sort_order INT DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (transaction_id, source_associate_id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_core_transactions_date
         ON migration.core_transactions(transaction_date);
       CREATE INDEX IF NOT EXISTS idx_core_transactions_status
         ON migration.core_transactions(transaction_status);
+      CREATE INDEX IF NOT EXISTS idx_transaction_agents_transaction
+        ON migration.transaction_agents(transaction_id);
+      CREATE INDEX IF NOT EXISTS idx_transaction_agents_associate
+        ON migration.transaction_agents(associate_id);
+    `);
+
+    // Ensure new columns exist on core_transactions (idempotent migration for older DBs)
+    await client.query(`
+      ALTER TABLE migration.core_transactions
+        ADD COLUMN IF NOT EXISTS primary_market_center_id BIGINT REFERENCES migration.core_market_centers(id);
+    `);
+
+    // Outside agency contacts table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.outside_agency_contacts (
+        id BIGSERIAL PRIMARY KEY,
+        transaction_agent_id BIGINT REFERENCES migration.transaction_agents(id) ON DELETE CASCADE,
+        transaction_id BIGINT REFERENCES migration.core_transactions(id) ON DELETE CASCADE,
+        first_name TEXT,
+        last_name TEXT,
+        email TEXT,
+        phone TEXT,
+        agency_name TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_outside_agency_tx
+        ON migration.outside_agency_contacts(transaction_id);
+
+      CREATE TABLE IF NOT EXISTS migration.transaction_agent_calculations (
+        id BIGSERIAL PRIMARY KEY,
+        transaction_agent_id BIGINT NOT NULL UNIQUE REFERENCES migration.transaction_agents(id) ON DELETE CASCADE,
+        transaction_id BIGINT NOT NULL REFERENCES migration.core_transactions(id) ON DELETE CASCADE,
+        associate_id BIGINT REFERENCES migration.core_associates(id),
+        source_associate_id TEXT,
+        is_outside_agent BOOLEAN NOT NULL DEFAULT false,
+        agent_name TEXT,
+        office_name TEXT,
+        transaction_side TEXT,
+        split_percentage NUMERIC(10,4) NOT NULL DEFAULT 0,
+        variance_sale_list_pct NUMERIC(12,6) NOT NULL DEFAULT 0,
+        sales_value_component NUMERIC(18,2) NOT NULL DEFAULT 0,
+        transaction_gci_before_fees NUMERIC(18,2) NOT NULL DEFAULT 0,
+        average_commission_pct NUMERIC(12,6) NOT NULL DEFAULT 0,
+        production_royalties NUMERIC(18,2) NOT NULL DEFAULT 0,
+        growth_share NUMERIC(18,2) NOT NULL DEFAULT 0,
+        total_pr_and_gs NUMERIC(18,2) NOT NULL DEFAULT 0,
+        gci_after_fees_excl_vat NUMERIC(18,2) NOT NULL DEFAULT 0,
+        associate_split_pct NUMERIC(10,4) NOT NULL DEFAULT 0,
+        market_center_split_pct NUMERIC(10,4) NOT NULL DEFAULT 0,
+        associate_dollar NUMERIC(18,2) NOT NULL DEFAULT 0,
+        cap_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+        cap_contribution NUMERIC(18,2) NOT NULL DEFAULT 0,
+        cap_remaining NUMERIC(18,2) NOT NULL DEFAULT 0,
+        team_dollar NUMERIC(18,2) NOT NULL DEFAULT 0,
+        market_center_dollar NUMERIC(18,2) NOT NULL DEFAULT 0,
+        cap_cycle_start_date DATE,
+        cap_cycle_end_date DATE,
+        effective_reporting_date DATE,
+        is_registered BOOLEAN NOT NULL DEFAULT false,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_tx_calc_transaction_id
+        ON migration.transaction_agent_calculations(transaction_id);
+      CREATE INDEX IF NOT EXISTS idx_tx_calc_associate_id
+        ON migration.transaction_agent_calculations(associate_id);
+      CREATE INDEX IF NOT EXISTS idx_tx_calc_reporting_date
+        ON migration.transaction_agent_calculations(effective_reporting_date);
+      CREATE INDEX IF NOT EXISTS idx_tx_calc_registered
+        ON migration.transaction_agent_calculations(is_registered);
+      CREATE INDEX IF NOT EXISTS idx_tx_calc_office
+        ON migration.transaction_agent_calculations(office_name);
     `);
   });
 

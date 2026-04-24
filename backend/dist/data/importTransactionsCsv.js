@@ -24,41 +24,50 @@ async function main() {
     if (rows.length === 0) {
         throw new Error(`No rows found in ${filePath}`);
     }
+    // Group rows by source_transaction_id to handle multi-agent transactions
+    const transactionMap = new Map();
+    for (const row of rows) {
+        const sourceTransactionId = getValue(row, ['TransactionId', 'transaction_id']);
+        if (!sourceTransactionId)
+            continue;
+        if (!transactionMap.has(sourceTransactionId)) {
+            transactionMap.set(sourceTransactionId, []);
+        }
+        transactionMap.get(sourceTransactionId).push(row);
+    }
     let imported = 0;
     const CHUNK = 500;
-    for (let i = 0; i < rows.length; i += CHUNK) {
-        const chunk = rows.slice(i, i + CHUNK);
+    const txIds = Array.from(transactionMap.keys());
+    for (let i = 0; i < txIds.length; i += CHUNK) {
+        const chunk = txIds.slice(i, i + CHUNK);
         await runInTransaction(async (client) => {
-            for (const row of chunk) {
-                const sourceTransactionId = getValue(row, ['TransactionId', 'transaction_id']);
-                if (!sourceTransactionId)
-                    continue;
-                const sourceAssociateId = getValue(row, ['AssociateId', 'associate_id']) || null;
-                const transactionNumber = getValue(row, ['TransactionNumber', 'transaction_number']) || null;
-                const sourceMcId = getValue(row, ['MarketCenterId', 'market_center_id']) || null;
-                const mcName = getValue(row, ['MarketCenterName', 'market_center_name']) || null;
-                const associateName = getValue(row, ['Associate', 'associate_name']) || null;
-                const status = getValue(row, ['TransactionStatus', 'transaction_status']) || null;
-                const sourceListingId = getValue(row, ['ListingId', 'listing_id']) || null;
-                const listingNumber = getValue(row, ['ListingNumber', 'listing_number']) || null;
-                const txType = getValue(row, ['TransactionType', 'transaction_type']) || null;
-                const address = getValue(row, ['Address', 'address']) || null;
-                const suburb = getValue(row, ['Suburb', 'suburb']) || null;
-                const city = getValue(row, ['City', 'city']) || null;
-                const salesPrice = parseNum(getValue(row, ['SalesPrice', 'sales_price']));
-                const listPrice = parseNum(getValue(row, ['ListPrice', 'list_price']));
-                const gci = parseNum(getValue(row, ['ContractGCIExclVAT', 'gci_excl_vat']));
-                const splitPct = parseNum(getValue(row, ['SplitPercentage', 'split_percentage']));
-                const netComm = parseNum(getValue(row, ['NetComm', 'net_comm']));
-                const totalGci = parseNum(getValue(row, ['TotalGCI', 'total_gci']));
-                const saleType = getValue(row, ['SaleType', 'sale_type']) || null;
-                const agentType = getValue(row, ['AgentType', 'agent_type']) || null;
-                const buyer = getValue(row, ['Buyer', 'buyer']) || null;
-                const seller = getValue(row, ['Seller', 'seller']) || null;
-                const listDate = parseDate(getValue(row, ['ListDate', 'list_date']));
-                const txDate = parseDate(getValue(row, ['TransactionDate', 'transaction_date']));
-                const statusChangeDate = parseDate(getValue(row, ['StatusChangeDate', 'status_change_date']));
-                const expectedDate = parseDate(getValue(row, ['ExpectedDate', 'expected_date']));
+            for (const sourceTransactionId of chunk) {
+                const txRows = transactionMap.get(sourceTransactionId);
+                // Use first row for transaction-level data (common across all agent rows)
+                const firstRow = txRows[0];
+                const transactionNumber = getValue(firstRow, ['TransactionNumber', 'transaction_number']) || null;
+                const sourceMcId = getValue(firstRow, ['MarketCenterId', 'market_center_id']) || null;
+                const mcName = getValue(firstRow, ['MarketCenterName', 'market_center_name']) || null;
+                const status = getValue(firstRow, ['TransactionStatus', 'transaction_status']) || null;
+                const sourceListingId = getValue(firstRow, ['ListingId', 'listing_id']) || null;
+                const listingNumber = getValue(firstRow, ['ListingNumber', 'listing_number']) || null;
+                const txType = getValue(firstRow, ['TransactionType', 'transaction_type']) || null;
+                const address = getValue(firstRow, ['Address', 'address']) || null;
+                const suburb = getValue(firstRow, ['Suburb', 'suburb']) || null;
+                const city = getValue(firstRow, ['City', 'city']) || null;
+                const salesPrice = parseNum(getValue(firstRow, ['SalesPrice', 'sales_price']));
+                const listPrice = parseNum(getValue(firstRow, ['ListPrice', 'list_price']));
+                const gci = parseNum(getValue(firstRow, ['ContractGCIExclVAT', 'gci_excl_vat']));
+                const netComm = parseNum(getValue(firstRow, ['NetComm', 'net_comm']));
+                const totalGci = parseNum(getValue(firstRow, ['TotalGCI', 'total_gci']));
+                const saleType = getValue(firstRow, ['SaleType', 'sale_type']) || null;
+                const buyer = getValue(firstRow, ['Buyer', 'buyer']) || null;
+                const seller = getValue(firstRow, ['Seller', 'seller']) || null;
+                const listDate = parseDate(getValue(firstRow, ['ListDate', 'list_date']));
+                const txDate = parseDate(getValue(firstRow, ['TransactionDate', 'transaction_date']));
+                const statusChangeDate = parseDate(getValue(firstRow, ['StatusChangeDate', 'status_change_date']));
+                const expectedDate = parseDate(getValue(firstRow, ['ExpectedDate', 'expected_date']));
+                // Insert one transaction record (not duplicated per agent)
                 await client.query(`INSERT INTO staging.transactions_raw (
             batch_id, source_transaction_id, transaction_number,
             source_market_center_id, market_center_name,
@@ -80,20 +89,35 @@ async function main() {
           )`, [
                     batchId, sourceTransactionId, transactionNumber,
                     sourceMcId, mcName,
-                    sourceAssociateId, associateName,
+                    '', '', // Leave associate fields empty for multi-agent transactions
                     status, sourceListingId, listingNumber,
                     listDate, txDate, statusChangeDate, expectedDate,
                     txType, address, suburb, city,
                     salesPrice, listPrice, gci,
-                    splitPct, netComm, totalGci,
-                    saleType, agentType, buyer, seller,
-                    JSON.stringify(row),
+                    null, netComm, totalGci,
+                    saleType, null, buyer, seller,
+                    JSON.stringify(firstRow),
                 ]);
+                // Get the inserted transaction record ID
+                const txResult = await client.query(`SELECT id FROM staging.transactions_raw WHERE source_transaction_id = $1 ORDER BY id DESC LIMIT 1`, [sourceTransactionId]);
+                const transactionDbId = txResult.rows[0]?.id;
+                // Insert agent records (one per agent in the transaction)
+                for (let agentIndex = 0; agentIndex < txRows.length; agentIndex++) {
+                    const agentRow = txRows[agentIndex];
+                    const sourceAssociateId = getValue(agentRow, ['AssociateId', 'associate_id']) || null;
+                    const associateName = getValue(agentRow, ['Associate', 'associate_name']) || null;
+                    const splitPct = parseNum(getValue(agentRow, ['SplitPercentage', 'split_percentage']));
+                    const agentType = getValue(agentRow, ['AgentType', 'agent_type']) || null;
+                    await client.query(`INSERT INTO staging.transaction_agents (
+              transaction_id, source_associate_id, associate_name,
+              split_percentage, agent_type, sort_order
+            ) VALUES ($1, $2, $3, $4, $5, $6)`, [transactionDbId, sourceAssociateId, associateName, splitPct, agentType, agentIndex]);
+                }
                 imported++;
             }
         });
     }
-    console.log(`Imported ${imported} rows into staging.transactions_raw (batch: ${batchId}).`);
+    console.log(`Imported ${imported} transactions with multi-agent support (batch: ${batchId}).`);
 }
 main()
     .catch((error) => {

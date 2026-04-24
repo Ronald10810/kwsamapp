@@ -113,10 +113,19 @@ async function main() {
         market_center_name TEXT,
         sale_or_rent TEXT,
         address_line TEXT,
+        erf_number TEXT,
+        unit_number TEXT,
+        door_number TEXT,
+        estate_name TEXT,
+        street_number TEXT,
+        street_name TEXT,
+        postal_code TEXT,
         suburb TEXT,
         city TEXT,
         province TEXT,
         country TEXT,
+        longitude NUMERIC(10, 7),
+        latitude NUMERIC(10, 7),
         price NUMERIC(18, 2),
         expiry_date DATE,
         property_title TEXT,
@@ -396,7 +405,22 @@ async function main() {
         await client.query(`
       ALTER TABLE migration.associates_prepared
         ADD COLUMN IF NOT EXISTS image_url TEXT,
-        ADD COLUMN IF NOT EXISTS mobile_number TEXT;
+        ADD COLUMN IF NOT EXISTS mobile_number TEXT,
+        ADD COLUMN IF NOT EXISTS office_number TEXT,
+        ADD COLUMN IF NOT EXISTS national_id TEXT,
+        ADD COLUMN IF NOT EXISTS ffc_number TEXT,
+        ADD COLUMN IF NOT EXISTS kwsa_email TEXT,
+        ADD COLUMN IF NOT EXISTS private_email TEXT,
+        ADD COLUMN IF NOT EXISTS growth_share_sponsor TEXT,
+        ADD COLUMN IF NOT EXISTS proposed_growth_share_sponsor TEXT,
+        ADD COLUMN IF NOT EXISTS temporary_growth_share_sponsor TEXT,
+        ADD COLUMN IF NOT EXISTS start_date DATE,
+        ADD COLUMN IF NOT EXISTS end_date DATE,
+        ADD COLUMN IF NOT EXISTS anniversary_date DATE,
+        ADD COLUMN IF NOT EXISTS cap_date DATE,
+        ADD COLUMN IF NOT EXISTS total_cap_amount NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS manual_cap NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS agent_split NUMERIC(10,4);
 
       ALTER TABLE migration.core_associates
         ADD COLUMN IF NOT EXISTS image_url TEXT,
@@ -487,7 +511,16 @@ async function main() {
         ADD COLUMN IF NOT EXISTS short_title TEXT,
         ADD COLUMN IF NOT EXISTS property_description TEXT,
         ADD COLUMN IF NOT EXISTS listing_images_json JSONB,
-        ADD COLUMN IF NOT EXISTS listing_payload JSONB;
+        ADD COLUMN IF NOT EXISTS listing_payload JSONB,
+        ADD COLUMN IF NOT EXISTS erf_number TEXT,
+        ADD COLUMN IF NOT EXISTS unit_number TEXT,
+        ADD COLUMN IF NOT EXISTS door_number TEXT,
+        ADD COLUMN IF NOT EXISTS estate_name TEXT,
+        ADD COLUMN IF NOT EXISTS street_number TEXT,
+        ADD COLUMN IF NOT EXISTS street_name TEXT,
+        ADD COLUMN IF NOT EXISTS postal_code TEXT,
+        ADD COLUMN IF NOT EXISTS longitude NUMERIC(10, 7),
+        ADD COLUMN IF NOT EXISTS latitude NUMERIC(10, 7);
 
       ALTER TABLE migration.core_listings
         ADD COLUMN IF NOT EXISTS property_title TEXT,
@@ -543,6 +576,22 @@ async function main() {
       CREATE INDEX IF NOT EXISTS idx_transactions_raw_associate
         ON staging.transactions_raw(source_associate_id);
 
+      CREATE TABLE IF NOT EXISTS staging.transaction_agents (
+        id BIGSERIAL PRIMARY KEY,
+        transaction_id BIGINT REFERENCES staging.transactions_raw(id) ON DELETE CASCADE,
+        source_associate_id TEXT,
+        associate_name TEXT,
+        split_percentage NUMERIC(10,4),
+        agent_type TEXT,
+        sort_order INT DEFAULT 0,
+        loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_staging_transaction_agents_tx
+        ON staging.transaction_agents(transaction_id);
+      CREATE INDEX IF NOT EXISTS idx_staging_transaction_agents_associate
+        ON staging.transaction_agents(source_associate_id);
+
       CREATE TABLE IF NOT EXISTS migration.transactions_prepared (
         source_transaction_id TEXT NOT NULL,
         source_associate_id TEXT NOT NULL DEFAULT '',
@@ -578,10 +627,8 @@ async function main() {
 
       CREATE TABLE IF NOT EXISTS migration.core_transactions (
         id BIGSERIAL PRIMARY KEY,
-        source_transaction_id TEXT NOT NULL,
-        source_associate_id TEXT NOT NULL DEFAULT '',
-        associate_id BIGINT REFERENCES migration.core_associates(id),
-        market_center_id BIGINT REFERENCES migration.core_market_centers(id),
+        source_transaction_id TEXT NOT NULL UNIQUE,
+        primary_market_center_id BIGINT REFERENCES migration.core_market_centers(id),
         transaction_number TEXT,
         transaction_status TEXT,
         transaction_type TEXT,
@@ -593,11 +640,9 @@ async function main() {
         sales_price NUMERIC(18,2),
         list_price NUMERIC(18,2),
         gci_excl_vat NUMERIC(18,2),
-        split_percentage NUMERIC(10,4),
         net_comm NUMERIC(18,2),
         total_gci NUMERIC(18,2),
         sale_type TEXT,
-        agent_type TEXT,
         buyer TEXT,
         seller TEXT,
         list_date TIMESTAMPTZ,
@@ -605,18 +650,317 @@ async function main() {
         status_change_date TIMESTAMPTZ,
         expected_date TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (source_transaction_id, source_associate_id)
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
-      CREATE INDEX IF NOT EXISTS idx_core_transactions_associate
-        ON migration.core_transactions(associate_id);
-      CREATE INDEX IF NOT EXISTS idx_core_transactions_mc
-        ON migration.core_transactions(market_center_id);
+      CREATE TABLE IF NOT EXISTS migration.transaction_agents (
+        id BIGSERIAL PRIMARY KEY,
+        transaction_id BIGINT NOT NULL REFERENCES migration.core_transactions(id) ON DELETE CASCADE,
+        associate_id BIGINT REFERENCES migration.core_associates(id),
+        source_associate_id TEXT,
+        agent_role TEXT,
+        split_percentage NUMERIC(10,4),
+        net_comm NUMERIC(18,2),
+        sort_order INT DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (transaction_id, source_associate_id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_core_transactions_date
         ON migration.core_transactions(transaction_date);
       CREATE INDEX IF NOT EXISTS idx_core_transactions_status
         ON migration.core_transactions(transaction_status);
+      CREATE INDEX IF NOT EXISTS idx_transaction_agents_transaction
+        ON migration.transaction_agents(transaction_id);
+      CREATE INDEX IF NOT EXISTS idx_transaction_agents_associate
+        ON migration.transaction_agents(associate_id);
+    `);
+        // Ensure new columns exist on core_transactions (idempotent migration for older DBs)
+        await client.query(`
+      ALTER TABLE migration.core_transactions
+        ADD COLUMN IF NOT EXISTS primary_market_center_id BIGINT REFERENCES migration.core_market_centers(id);
+    `);
+        // Outside agency contacts table
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.outside_agency_contacts (
+        id BIGSERIAL PRIMARY KEY,
+        transaction_agent_id BIGINT REFERENCES migration.transaction_agents(id) ON DELETE CASCADE,
+        transaction_id BIGINT REFERENCES migration.core_transactions(id) ON DELETE CASCADE,
+        first_name TEXT,
+        last_name TEXT,
+        email TEXT,
+        phone TEXT,
+        agency_name TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_outside_agency_tx
+        ON migration.outside_agency_contacts(transaction_id);
+
+      CREATE TABLE IF NOT EXISTS migration.transaction_agent_calculations (
+        id BIGSERIAL PRIMARY KEY,
+        transaction_agent_id BIGINT NOT NULL UNIQUE REFERENCES migration.transaction_agents(id) ON DELETE CASCADE,
+        transaction_id BIGINT NOT NULL REFERENCES migration.core_transactions(id) ON DELETE CASCADE,
+        associate_id BIGINT REFERENCES migration.core_associates(id),
+        source_associate_id TEXT,
+        is_outside_agent BOOLEAN NOT NULL DEFAULT false,
+        agent_name TEXT,
+        office_name TEXT,
+        transaction_side TEXT,
+        split_percentage NUMERIC(10,4) NOT NULL DEFAULT 0,
+        variance_sale_list_pct NUMERIC(12,6) NOT NULL DEFAULT 0,
+        sales_value_component NUMERIC(18,2) NOT NULL DEFAULT 0,
+        transaction_gci_before_fees NUMERIC(18,2) NOT NULL DEFAULT 0,
+        average_commission_pct NUMERIC(12,6) NOT NULL DEFAULT 0,
+        production_royalties NUMERIC(18,2) NOT NULL DEFAULT 0,
+        growth_share NUMERIC(18,2) NOT NULL DEFAULT 0,
+        total_pr_and_gs NUMERIC(18,2) NOT NULL DEFAULT 0,
+        gci_after_fees_excl_vat NUMERIC(18,2) NOT NULL DEFAULT 0,
+        associate_split_pct NUMERIC(10,4) NOT NULL DEFAULT 0,
+        market_center_split_pct NUMERIC(10,4) NOT NULL DEFAULT 0,
+        associate_dollar NUMERIC(18,2) NOT NULL DEFAULT 0,
+        cap_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+        cap_contribution NUMERIC(18,2) NOT NULL DEFAULT 0,
+        cap_remaining NUMERIC(18,2) NOT NULL DEFAULT 0,
+        team_dollar NUMERIC(18,2) NOT NULL DEFAULT 0,
+        market_center_dollar NUMERIC(18,2) NOT NULL DEFAULT 0,
+        cap_cycle_start_date DATE,
+        cap_cycle_end_date DATE,
+        effective_reporting_date DATE,
+        is_registered BOOLEAN NOT NULL DEFAULT false,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_tx_calc_transaction_id
+        ON migration.transaction_agent_calculations(transaction_id);
+      CREATE INDEX IF NOT EXISTS idx_tx_calc_associate_id
+        ON migration.transaction_agent_calculations(associate_id);
+      CREATE INDEX IF NOT EXISTS idx_tx_calc_reporting_date
+        ON migration.transaction_agent_calculations(effective_reporting_date);
+      CREATE INDEX IF NOT EXISTS idx_tx_calc_registered
+        ON migration.transaction_agent_calculations(is_registered);
+      CREATE INDEX IF NOT EXISTS idx_tx_calc_office
+        ON migration.transaction_agent_calculations(office_name);
+    `);
+    });
+    // Listing sub-tables and expanded core_listings columns
+    await runInTransaction(async (client) => {
+        // Expand core_listings with all new scalar fields
+        await client.query(`
+      ALTER TABLE migration.core_listings
+        ADD COLUMN IF NOT EXISTS listing_status_tag      TEXT,
+        ADD COLUMN IF NOT EXISTS ownership_type          TEXT,
+        ADD COLUMN IF NOT EXISTS is_draft                BOOLEAN NOT NULL DEFAULT true,
+        ADD COLUMN IF NOT EXISTS is_published            BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS agent_property_valuation NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS reduced_date            DATE,
+        ADD COLUMN IF NOT EXISTS no_transfer_duty        BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS property_auction        BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS poa                     BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS short_description       TEXT,
+        ADD COLUMN IF NOT EXISTS property_type           TEXT,
+        ADD COLUMN IF NOT EXISTS property_sub_type       TEXT,
+        ADD COLUMN IF NOT EXISTS descriptive_feature     TEXT,
+        ADD COLUMN IF NOT EXISTS retirement_living       BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS erf_number              TEXT,
+        ADD COLUMN IF NOT EXISTS unit_number             TEXT,
+        ADD COLUMN IF NOT EXISTS door_number             TEXT,
+        ADD COLUMN IF NOT EXISTS estate_name             TEXT,
+        ADD COLUMN IF NOT EXISTS street_number           TEXT,
+        ADD COLUMN IF NOT EXISTS street_name             TEXT,
+        ADD COLUMN IF NOT EXISTS postal_code             TEXT,
+        ADD COLUMN IF NOT EXISTS longitude               NUMERIC(12,7),
+        ADD COLUMN IF NOT EXISTS latitude                NUMERIC(12,7),
+        ADD COLUMN IF NOT EXISTS override_display_location BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS override_display_longitude NUMERIC(12,7),
+        ADD COLUMN IF NOT EXISTS override_display_latitude  NUMERIC(12,7),
+        ADD COLUMN IF NOT EXISTS loom_validation_status  TEXT,
+        ADD COLUMN IF NOT EXISTS loom_property_id        TEXT,
+        ADD COLUMN IF NOT EXISTS loom_address            TEXT,
+        ADD COLUMN IF NOT EXISTS display_address_on_website BOOLEAN NOT NULL DEFAULT true,
+        ADD COLUMN IF NOT EXISTS viewing_instructions    TEXT,
+        ADD COLUMN IF NOT EXISTS viewing_directions      TEXT,
+        ADD COLUMN IF NOT EXISTS feed_to_private_property BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS private_property_ref1   TEXT,
+        ADD COLUMN IF NOT EXISTS private_property_ref2   TEXT,
+        ADD COLUMN IF NOT EXISTS private_property_sync_status TEXT,
+        ADD COLUMN IF NOT EXISTS feed_to_kww             BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS kww_property_reference  TEXT,
+        ADD COLUMN IF NOT EXISTS kww_ref1                TEXT,
+        ADD COLUMN IF NOT EXISTS kww_ref2                TEXT,
+        ADD COLUMN IF NOT EXISTS kww_sync_status         TEXT,
+        ADD COLUMN IF NOT EXISTS feed_to_entegral        BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS entegral_sync_status    TEXT,
+        ADD COLUMN IF NOT EXISTS feed_to_property24      BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS property24_ref1         TEXT,
+        ADD COLUMN IF NOT EXISTS property24_ref2         TEXT,
+        ADD COLUMN IF NOT EXISTS property24_sync_status  TEXT,
+        ADD COLUMN IF NOT EXISTS signed_date             DATE,
+        ADD COLUMN IF NOT EXISTS on_market_since_date    DATE,
+        ADD COLUMN IF NOT EXISTS rates_and_taxes         NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS monthly_levy            NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS occupation_date         DATE,
+        ADD COLUMN IF NOT EXISTS mandate_type            TEXT,
+        ADD COLUMN IF NOT EXISTS erf_size                NUMERIC(18,4),
+        ADD COLUMN IF NOT EXISTS floor_area              NUMERIC(18,4),
+        ADD COLUMN IF NOT EXISTS construction_date       DATE,
+        ADD COLUMN IF NOT EXISTS height_restriction      NUMERIC(18,4),
+        ADD COLUMN IF NOT EXISTS out_building_size       NUMERIC(18,4),
+        ADD COLUMN IF NOT EXISTS zoning_type             TEXT,
+        ADD COLUMN IF NOT EXISTS is_furnished            BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS pet_friendly            BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS has_standalone_building BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS has_flatlet             BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS has_backup_water        BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS wheelchair_accessible   BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS has_generator           BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS has_borehole            BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS has_gas_geyser          BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS has_solar_panels        BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS has_backup_battery_or_inverter BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS has_solar_geyser        BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS has_water_tank          BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS adsl                    BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS fibre                   BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS isdn                    BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS dialup                  BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS fixed_wimax             BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS satellite               BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS nearby_bus_service      BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS nearby_minibus_taxi_service BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS nearby_train_service    BOOLEAN NOT NULL DEFAULT false;
+    `);
+        // Listing images — normalized table (replaces listing_images_json for new records)
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.listing_images (
+        id BIGSERIAL PRIMARY KEY,
+        listing_id BIGINT NOT NULL REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        file_name   TEXT,
+        file_url    TEXT NOT NULL,
+        media_type  TEXT NOT NULL DEFAULT 'image',
+        sort_order  INT  NOT NULL DEFAULT 0,
+        uploaded_by TEXT,
+        uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_listing_images_listing ON migration.listing_images(listing_id);
+    `);
+        // Listing agents junction
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.listing_agents (
+        id BIGSERIAL PRIMARY KEY,
+        listing_id        BIGINT NOT NULL REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        associate_id      BIGINT REFERENCES migration.core_associates(id),
+        agent_name        TEXT,
+        agent_role        TEXT NOT NULL DEFAULT 'Primary',
+        is_primary        BOOLEAN NOT NULL DEFAULT false,
+        market_center_id  BIGINT REFERENCES migration.core_market_centers(id),
+        sort_order        INT NOT NULL DEFAULT 0,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_listing_agents_listing   ON migration.listing_agents(listing_id);
+      CREATE INDEX IF NOT EXISTS idx_listing_agents_associate ON migration.listing_agents(associate_id);
+    `);
+        // Listing contacts
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.listing_contacts (
+        id           BIGSERIAL PRIMARY KEY,
+        listing_id   BIGINT NOT NULL REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        full_name    TEXT,
+        phone_number TEXT,
+        email_address TEXT,
+        sort_order   INT NOT NULL DEFAULT 0,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_listing_contacts_listing ON migration.listing_contacts(listing_id);
+    `);
+        // Listing show times
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.listing_show_times (
+        id           BIGSERIAL PRIMARY KEY,
+        listing_id   BIGINT NOT NULL REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        from_date    DATE,
+        from_time    TEXT,
+        to_date      DATE,
+        to_time      TEXT,
+        catch_phrase TEXT,
+        sort_order   INT NOT NULL DEFAULT 0,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_listing_show_times_listing ON migration.listing_show_times(listing_id);
+    `);
+        // Listing open house
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.listing_open_house (
+        id               BIGSERIAL PRIMARY KEY,
+        listing_id       BIGINT NOT NULL REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        open_house_date  DATE,
+        from_time        TEXT,
+        to_time          TEXT,
+        average_price    TEXT,
+        comments         TEXT,
+        sort_order       INT NOT NULL DEFAULT 0,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_listing_open_house_listing ON migration.listing_open_house(listing_id);
+    `);
+        // Listing marketing URLs
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.listing_marketing_urls (
+        id           BIGSERIAL PRIMARY KEY,
+        listing_id   BIGINT NOT NULL REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        url          TEXT NOT NULL,
+        url_type     TEXT,
+        display_name TEXT,
+        sort_order   INT NOT NULL DEFAULT 0,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_listing_marketing_urls_listing ON migration.listing_marketing_urls(listing_id);
+    `);
+        // Listing mandate documents
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.listing_mandate_documents (
+        id           BIGSERIAL PRIMARY KEY,
+        listing_id   BIGINT NOT NULL REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        file_name    TEXT,
+        file_url     TEXT NOT NULL,
+        file_type    TEXT,
+        uploaded_by  TEXT,
+        sort_order   INT NOT NULL DEFAULT 0,
+        uploaded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_listing_mandate_docs_listing ON migration.listing_mandate_documents(listing_id);
+    `);
+        // Listing features (facing, roof, style, walls, windows, lifestyle, property_features)
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.listing_features (
+        id               BIGSERIAL PRIMARY KEY,
+        listing_id       BIGINT NOT NULL REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        feature_category TEXT NOT NULL,
+        feature_value    TEXT NOT NULL,
+        sort_order       INT NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_listing_features_listing  ON migration.listing_features(listing_id);
+      CREATE INDEX IF NOT EXISTS idx_listing_features_category ON migration.listing_features(listing_id, feature_category);
+    `);
+        // Listing property areas (rooms with counts)
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS migration.listing_property_areas (
+        id          BIGSERIAL PRIMARY KEY,
+        listing_id  BIGINT NOT NULL REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        area_type   TEXT NOT NULL,
+        count       INT,
+        size        NUMERIC(12,2),
+        description TEXT,
+        sub_features TEXT[],
+        sort_order  INT NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_listing_property_areas_listing ON migration.listing_property_areas(listing_id);
+    `);
+        await client.query(`
+      ALTER TABLE migration.listing_property_areas
+      ADD COLUMN IF NOT EXISTS sub_features TEXT[];
     `);
     });
     console.log('Staging and migration schemas are ready.');

@@ -1,25 +1,5 @@
 import { closePool, runInTransaction } from './db.js';
 
-function safeDate(value: unknown): string | null {
-  if (!value || typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const d = new Date(trimmed);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
-}
-
-function safeNum(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
-function safePhone(value: unknown): string | null {
-  if (!value || typeof value !== 'string') return null;
-  const cleaned = value.replace(/\s+/g, '').trim();
-  return cleaned.length > 0 ? cleaned : null;
-}
-
 async function main(): Promise<void> {
   await runInTransaction(async (client) => {
     await client.query(`

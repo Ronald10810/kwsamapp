@@ -1,10 +1,6 @@
 import 'dotenv/config';
-import { Pool } from 'pg';
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-    throw new Error('DATABASE_URL is required to run data migration scripts.');
-}
-const pool = new Pool({ connectionString: databaseUrl });
+import { getRequiredPgPool } from '../config/db.js';
+const pool = getRequiredPgPool();
 export async function withClient(work) {
     const client = await pool.connect();
     try {

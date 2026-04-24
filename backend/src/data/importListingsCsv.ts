@@ -42,7 +42,9 @@ async function main(): Promise<void> {
   let importedCount = 0;
   let pendingInTransaction = 0;
 
-  const parser = createReadStream(filePath).pipe(
+  // Source CSV is Latin-1/Windows-1252 — must specify encoding here so that
+  // accented characters (é, â, ä, ² etc.) are decoded correctly.
+  const parser = createReadStream(filePath, { encoding: 'latin1' }).pipe(
     parse({
       columns: true,
       skip_empty_lines: true,

@@ -1,10 +1,28 @@
 import { Router } from 'express';
-import { Pool } from 'pg';
+import { getOptionalPgPool } from '../config/db.js';
 
 const router = Router();
+const pool = getOptionalPgPool();
 
-const databaseUrl = process.env.DATABASE_URL;
-const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : null;
+type MarketCenterPerformanceRow = {
+  market_center: string;
+  total_transactions: string;
+  total_gci: string;
+  total_sales_price: string;
+};
+
+type AssociatePerformanceRow = {
+  associate_name: string;
+  market_center: string;
+  total_transactions: string;
+  total_gci: string;
+};
+
+type ReportingWindowRow = {
+  start_date: string;
+  end_date: string;
+  basis: 'registered' | 'allStatuses';
+};
 
 router.get('/summary', async (_req, res) => {
   if (!pool) {
@@ -41,76 +59,264 @@ router.get('/summary', async (_req, res) => {
           WHERE LOWER(TRIM(COALESCE(status_name, ''))) = 'active'
         ) END AS active_listings,
 
-        CASE WHEN to_regclass('migration.load_rejections') IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM migration.load_rejections) END AS load_rejections,
-
-        CASE WHEN to_regclass('public."MarketCentre"') IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM "MarketCentre") END AS legacy_market_centers,
-        CASE WHEN to_regclass('public."Associate"') IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM "Associate") END AS legacy_associates,
-        CASE WHEN to_regclass('public."Listing"') IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM "Listing") END AS legacy_listings
+        CASE WHEN to_regclass('migration.load_rejections') IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM migration.load_rejections) END AS load_rejections
     `);
 
     const row = result.rows[0];
 
-    const transactionsExists = await pool.query<{ exists: string | null }>(
-      `SELECT to_regclass('migration.core_transactions') AS exists`
+    let legacyCounts = {
+      marketCenters: 0,
+      associates: 0,
+      listings: 0,
+    };
+
+    try {
+      const legacyResult = await pool.query(`
+        SELECT
+          CASE WHEN to_regclass('public."MarketCentre"') IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM "MarketCentre") END AS legacy_market_centers,
+          CASE WHEN to_regclass('public."Associate"') IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM "Associate") END AS legacy_associates,
+          CASE WHEN to_regclass('public."Listing"') IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM "Listing") END AS legacy_listings
+      `);
+
+      legacyCounts = {
+        marketCenters: Number(legacyResult.rows[0]?.legacy_market_centers ?? 0),
+        associates: Number(legacyResult.rows[0]?.legacy_associates ?? 0),
+        listings: Number(legacyResult.rows[0]?.legacy_listings ?? 0),
+      };
+    } catch {
+      legacyCounts = {
+        marketCenters: 0,
+        associates: 0,
+        listings: 0,
+      };
+    }
+
+    const transactionCalculationsExists = await pool.query<{ exists: string | null }>(
+      `SELECT to_regclass('migration.transaction_agent_calculations') AS exists`
     );
 
-    const marketCenterPerformance = transactionsExists.rows[0]?.exists
-      ? await pool.query<{
-          market_center: string;
-          total_transactions: string;
-          total_gci: string;
-          total_sales_price: string;
-        }>(
+    let marketCenterPerformance: { rows: MarketCenterPerformanceRow[] } = { rows: [] };
+    let associatePerformance: { rows: AssociatePerformanceRow[] } = { rows: [] };
+    let reportingWindow: ReportingWindowRow = {
+      start_date: new Date().toISOString().slice(0, 10),
+      end_date: new Date().toISOString().slice(0, 10),
+      basis: 'registered',
+    };
+
+    if (transactionCalculationsExists.rows[0]?.exists) {
+      try {
+        const reportingWindowResult = await pool.query<ReportingWindowRow>(
           `
+          WITH limits AS (
+            SELECT
+              date_trunc('month', CURRENT_DATE)::date AS month_start,
+              (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month')::date AS month_end
+          ),
+          eligible AS (
+            SELECT tac.effective_reporting_date::date AS effective_reporting_date
+                 , tac.is_registered
+            FROM migration.transaction_agent_calculations tac
+            LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+            LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+            WHERE (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+              AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
+          ),
+          reporting_window AS (
+            SELECT
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM eligible, limits
+                  WHERE is_registered = true
+                    AND effective_reporting_date >= limits.month_start
+                    AND effective_reporting_date < limits.month_end
+                ) THEN 'registered'
+                WHEN EXISTS (
+                  SELECT 1 FROM eligible, limits
+                  WHERE effective_reporting_date >= limits.month_start
+                    AND effective_reporting_date < limits.month_end
+                ) THEN 'allStatuses'
+                WHEN EXISTS (SELECT 1 FROM eligible WHERE is_registered = true) THEN 'registered'
+                ELSE 'allStatuses'
+              END AS basis,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM eligible, limits
+                  WHERE effective_reporting_date >= limits.month_start
+                    AND effective_reporting_date < limits.month_end
+                ) THEN (SELECT month_start FROM limits)
+                WHEN EXISTS (SELECT 1 FROM eligible WHERE is_registered = true) THEN (
+                  SELECT date_trunc('month', MAX(effective_reporting_date))::date
+                  FROM eligible
+                  WHERE is_registered = true
+                )
+                ELSE COALESCE((SELECT date_trunc('month', MAX(effective_reporting_date))::date FROM eligible), (SELECT month_start FROM limits))
+              END AS start_date
+          )
           SELECT
-            COALESCE(mc.name, 'Unassigned / Unknown') AS market_center,
-            COUNT(*)::text AS total_transactions,
-            COALESCE(SUM(ct.total_gci), 0)::text AS total_gci,
-            COALESCE(SUM(ct.sales_price), 0)::text AS total_sales_price
-          FROM migration.core_transactions ct
-          INNER JOIN migration.core_market_centers mc ON mc.id = ct.market_center_id
-          INNER JOIN migration.core_associates ca ON ca.id = ct.associate_id
-          WHERE LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered'
-            AND ct.status_change_date::date >= date_trunc('month', CURRENT_DATE)::date
-            AND ct.status_change_date::date <= CURRENT_DATE
-            AND LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1')
-            AND LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1')
-          GROUP BY COALESCE(mc.name, 'Unassigned / Unknown')
-          ORDER BY COALESCE(SUM(ct.total_gci), 0) DESC, COUNT(*) DESC
+            start_date::text,
+            (start_date + INTERVAL '1 month' - INTERVAL '1 day')::date::text AS end_date,
+            basis
+          FROM reporting_window
+          `
+        );
+
+        reportingWindow = reportingWindowResult.rows[0] ?? reportingWindow;
+
+        marketCenterPerformance = await pool.query<MarketCenterPerformanceRow>(
+          `
+          WITH limits AS (
+            SELECT
+              date_trunc('month', CURRENT_DATE)::date AS month_start,
+              (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month')::date AS month_end
+          ),
+          eligible AS (
+            SELECT
+              COALESCE(tac.office_name, mc.name, 'Unassigned / Unknown') AS market_center,
+              tac.transaction_id,
+              tac.transaction_gci_before_fees,
+              tac.sales_value_component,
+              tac.effective_reporting_date::date AS effective_reporting_date,
+              tac.is_registered
+            FROM migration.transaction_agent_calculations tac
+            LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+            LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+            WHERE (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+              AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
+          ),
+          reporting_window AS (
+            SELECT
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM eligible, limits
+                  WHERE is_registered = true
+                    AND effective_reporting_date >= limits.month_start
+                    AND effective_reporting_date < limits.month_end
+                ) THEN 'registered'
+                WHEN EXISTS (
+                  SELECT 1 FROM eligible, limits
+                  WHERE effective_reporting_date >= limits.month_start
+                    AND effective_reporting_date < limits.month_end
+                ) THEN 'allStatuses'
+                WHEN EXISTS (SELECT 1 FROM eligible WHERE is_registered = true) THEN 'registered'
+                ELSE 'allStatuses'
+              END AS basis,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM eligible, limits
+                  WHERE effective_reporting_date >= limits.month_start
+                    AND effective_reporting_date < limits.month_end
+                ) THEN (SELECT month_start FROM limits)
+                WHEN EXISTS (SELECT 1 FROM eligible WHERE is_registered = true) THEN (
+                  SELECT date_trunc('month', MAX(effective_reporting_date))::date
+                  FROM eligible
+                  WHERE is_registered = true
+                )
+                ELSE COALESCE((SELECT date_trunc('month', MAX(effective_reporting_date))::date FROM eligible), (SELECT month_start FROM limits))
+              END AS start_date
+          ),
+          mtd AS (
+            SELECT er.market_center, er.transaction_id, er.transaction_gci_before_fees, er.sales_value_component
+            FROM eligible er
+            CROSS JOIN reporting_window rw
+            WHERE er.effective_reporting_date >= rw.start_date
+              AND er.effective_reporting_date < (rw.start_date + INTERVAL '1 month')
+              AND (rw.basis = 'allStatuses' OR er.is_registered = true)
+          ),
+          sales_by_market_center AS (
+            SELECT
+              market_center,
+              COUNT(DISTINCT transaction_id)::text AS total_transactions,
+              COALESCE(SUM(transaction_gci_before_fees), 0)::text AS total_gci,
+              COALESCE(SUM(sales_value_component), 0)::text AS total_sales_price
+            FROM mtd
+            GROUP BY market_center
+          )
+          SELECT
+            smbmc.market_center,
+            smbmc.total_transactions,
+            smbmc.total_gci,
+            COALESCE(smbmc.total_sales_price, '0') AS total_sales_price
+          FROM sales_by_market_center smbmc
+          ORDER BY smbmc.total_gci::numeric DESC, smbmc.total_transactions::int DESC
           LIMIT 13
           `
-        )
-      : { rows: [] as Array<{ market_center: string; total_transactions: string; total_gci: string; total_sales_price: string }> };
+        );
 
-    const associatePerformance = transactionsExists.rows[0]?.exists
-      ? await pool.query<{
-          associate_name: string;
-          market_center: string;
-          total_transactions: string;
-          total_gci: string;
-        }>(
+        associatePerformance = await pool.query<AssociatePerformanceRow>(
           `
+          WITH limits AS (
+            SELECT
+              date_trunc('month', CURRENT_DATE)::date AS month_start,
+              (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month')::date AS month_end
+          ),
+          eligible AS (
+            SELECT
+              COALESCE(tac.agent_name, ca.full_name, ca.first_name || ' ' || ca.last_name, ca.source_associate_id, 'Unknown Associate') AS associate_name,
+              COALESCE(tac.office_name, mc.name, 'Unassigned / Unknown') AS market_center,
+              tac.transaction_id,
+              tac.transaction_gci_before_fees,
+              tac.effective_reporting_date::date AS effective_reporting_date,
+              tac.is_registered
+            FROM migration.transaction_agent_calculations tac
+            LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+            LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+            WHERE tac.is_outside_agent = false
+              AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
+              AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+          ),
+          reporting_window AS (
+            SELECT
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM eligible, limits
+                  WHERE is_registered = true
+                    AND effective_reporting_date >= limits.month_start
+                    AND effective_reporting_date < limits.month_end
+                ) THEN 'registered'
+                WHEN EXISTS (
+                  SELECT 1 FROM eligible, limits
+                  WHERE effective_reporting_date >= limits.month_start
+                    AND effective_reporting_date < limits.month_end
+                ) THEN 'allStatuses'
+                WHEN EXISTS (SELECT 1 FROM eligible WHERE is_registered = true) THEN 'registered'
+                ELSE 'allStatuses'
+              END AS basis,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM eligible, limits
+                  WHERE effective_reporting_date >= limits.month_start
+                    AND effective_reporting_date < limits.month_end
+                ) THEN (SELECT month_start FROM limits)
+                WHEN EXISTS (SELECT 1 FROM eligible WHERE is_registered = true) THEN (
+                  SELECT date_trunc('month', MAX(effective_reporting_date))::date
+                  FROM eligible
+                  WHERE is_registered = true
+                )
+                ELSE COALESCE((SELECT date_trunc('month', MAX(effective_reporting_date))::date FROM eligible), (SELECT month_start FROM limits))
+              END AS start_date
+          )
           SELECT
-            COALESCE(ca.full_name, ca.first_name || ' ' || ca.last_name, ca.source_associate_id, 'Unknown Associate') AS associate_name,
-            COALESCE(mc.name, 'Unassigned / Unknown') AS market_center,
-            COUNT(*)::text AS total_transactions,
-            COALESCE(SUM(ct.total_gci), 0)::text AS total_gci
-          FROM migration.core_transactions ct
-          INNER JOIN migration.core_market_centers mc ON mc.id = ct.market_center_id
-          INNER JOIN migration.core_associates ca ON ca.id = ct.associate_id
-          WHERE LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered'
-            AND ct.status_change_date::date >= date_trunc('month', CURRENT_DATE)::date
-            AND ct.status_change_date::date <= CURRENT_DATE
-            AND LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1')
-            AND LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1')
+            er.associate_name,
+            er.market_center,
+            COUNT(DISTINCT er.transaction_id)::text AS total_transactions,
+            COALESCE(SUM(er.transaction_gci_before_fees), 0)::text AS total_gci
+          FROM eligible er
+          CROSS JOIN reporting_window rw
+          WHERE er.effective_reporting_date >= rw.start_date
+            AND er.effective_reporting_date < (rw.start_date + INTERVAL '1 month')
+            AND (rw.basis = 'allStatuses' OR er.is_registered = true)
           GROUP BY
-            COALESCE(ca.full_name, ca.first_name || ' ' || ca.last_name, ca.source_associate_id, 'Unknown Associate'),
-            COALESCE(mc.name, 'Unassigned / Unknown')
-          ORDER BY COALESCE(SUM(ct.total_gci), 0) DESC, COUNT(*) DESC
+            er.associate_name,
+            er.market_center
+          ORDER BY COALESCE(SUM(er.transaction_gci_before_fees), 0) DESC, COUNT(*) DESC
           LIMIT 15
           `
-        )
-      : { rows: [] as Array<{ associate_name: string; market_center: string; total_transactions: string; total_gci: string }> };
+        );
+      } catch {
+        marketCenterPerformance = { rows: [] };
+        associatePerformance = { rows: [] };
+      }
+    }
 
     return res.json({
       generatedAt: new Date().toISOString(),
@@ -136,12 +342,10 @@ router.get('/summary', async (_req, res) => {
         associates: Number(row.active_associates),
         listings: Number(row.active_listings)
       },
-      legacy: {
-        marketCenters: Number(row.legacy_market_centers),
-        associates: Number(row.legacy_associates),
-        listings: Number(row.legacy_listings)
-      },
+      legacy: legacyCounts,
       rejections: Number(row.load_rejections),
+      reportingWindow,
+      performanceBasis: reportingWindow.basis,
       marketCenterPerformance: marketCenterPerformance.rows.map((item) => ({
         marketCenter: item.market_center,
         totalTransactions: Number(item.total_transactions),

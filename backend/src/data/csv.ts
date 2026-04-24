@@ -4,7 +4,11 @@ import { parse } from 'csv-parse/sync';
 export type CsvRow = Record<string, string>;
 
 export async function readCsvRows(filePath: string): Promise<CsvRow[]> {
-  const content = await readFile(filePath, 'utf8');
+  const rawBuffer = await readFile(filePath);
+  // Source CSVs are exported from SQL Server as Latin-1/Windows-1252.
+  // Reading as latin1 preserves the bytes so accented characters (é, â, ä, ²
+  // etc.) are decoded correctly instead of being replaced by U+FFFD.
+  const content = rawBuffer.toString('latin1');
 
   const rows = parse(content, {
     columns: true,

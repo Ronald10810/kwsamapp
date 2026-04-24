@@ -1,18 +1,17 @@
 import { closePool, runInTransaction, withClient } from './db.js';
+import { recomputeAllTransactionAgentCalculations } from '../services/transactionCalculations.js';
 
 async function main(): Promise<void> {
   await runInTransaction(async (client) => {
-    // Truncate and re-prepare from latest staging data
-    await client.query(`DELETE FROM migration.transactions_prepared`);
+    // Transform staging transactions into migration.core_transactions (one per transaction ID)
+    await client.query(`DELETE FROM migration.transaction_agents`);
+    await client.query(`DELETE FROM migration.core_transactions`);
 
     await client.query(`
-      INSERT INTO migration.transactions_prepared (
+      INSERT INTO migration.core_transactions (
         source_transaction_id,
-        source_associate_id,
         transaction_number,
-        source_market_center_id,
-        market_center_name,
-        associate_name,
+        primary_market_center_id,
         transaction_status,
         source_listing_id,
         listing_number,
@@ -23,87 +22,132 @@ async function main(): Promise<void> {
         sales_price,
         list_price,
         gci_excl_vat,
-        split_percentage,
         net_comm,
         total_gci,
         sale_type,
-        agent_type,
         buyer,
         seller,
         list_date,
         transaction_date,
         status_change_date,
         expected_date,
-        last_seen_at,
-        prepared_at
+        created_at,
+        updated_at
       )
-      SELECT DISTINCT ON (source_transaction_id, COALESCE(source_associate_id, ''))
-        source_transaction_id,
-        COALESCE(source_associate_id, '') AS source_associate_id,
-        transaction_number,
-        source_market_center_id,
-        market_center_name,
-        TRIM(associate_name),
-        transaction_status,
-        source_listing_id,
-        listing_number,
-        transaction_type,
-        TRIM(address),
-        TRIM(suburb),
-        TRIM(city),
-        sales_price,
-        list_price,
-        gci_excl_vat,
-        split_percentage,
-        net_comm,
-        total_gci,
-        sale_type,
-        agent_type,
-        TRIM(buyer),
-        TRIM(seller),
-        list_date,
-        transaction_date,
-        status_change_date,
-        expected_date,
-        MAX(loaded_at) OVER (PARTITION BY source_transaction_id, COALESCE(source_associate_id, '')) AS last_seen_at,
+      SELECT
+        str.source_transaction_id,
+        str.transaction_number,
+        cmc.id AS primary_market_center_id,
+        str.transaction_status,
+        str.source_listing_id,
+        str.listing_number,
+        str.transaction_type,
+        TRIM(str.address),
+        TRIM(str.suburb),
+        TRIM(str.city),
+        str.sales_price,
+        str.list_price,
+        str.gci_excl_vat,
+        str.net_comm,
+        str.total_gci,
+        str.sale_type,
+        TRIM(str.buyer),
+        TRIM(str.seller),
+        str.list_date,
+        COALESCE(str.loaded_at, str.transaction_date, NOW()),
+        str.status_change_date,
+        str.expected_date,
+        NOW(),
         NOW()
-      FROM staging.transactions_raw
-      ORDER BY source_transaction_id, COALESCE(source_associate_id, ''), loaded_at DESC
-      ON CONFLICT (source_transaction_id, source_associate_id) DO UPDATE SET
-        transaction_number    = EXCLUDED.transaction_number,
-        source_market_center_id = EXCLUDED.source_market_center_id,
-        market_center_name    = EXCLUDED.market_center_name,
-        associate_name        = EXCLUDED.associate_name,
-        transaction_status    = EXCLUDED.transaction_status,
-        source_listing_id     = EXCLUDED.source_listing_id,
-        listing_number        = EXCLUDED.listing_number,
-        transaction_type      = EXCLUDED.transaction_type,
-        address               = EXCLUDED.address,
-        suburb                = EXCLUDED.suburb,
-        city                  = EXCLUDED.city,
-        sales_price           = EXCLUDED.sales_price,
-        list_price            = EXCLUDED.list_price,
-        gci_excl_vat          = EXCLUDED.gci_excl_vat,
-        split_percentage      = EXCLUDED.split_percentage,
-        net_comm              = EXCLUDED.net_comm,
-        total_gci             = EXCLUDED.total_gci,
-        sale_type             = EXCLUDED.sale_type,
-        agent_type            = EXCLUDED.agent_type,
-        buyer                 = EXCLUDED.buyer,
-        seller                = EXCLUDED.seller,
-        list_date             = EXCLUDED.list_date,
-        transaction_date      = EXCLUDED.transaction_date,
-        status_change_date    = EXCLUDED.status_change_date,
-        expected_date         = EXCLUDED.expected_date,
-        last_seen_at          = EXCLUDED.last_seen_at,
-        prepared_at           = NOW()
+      FROM (
+        SELECT DISTINCT ON (source_transaction_id)
+          source_transaction_id,
+          transaction_number,
+          source_market_center_id,
+          transaction_status,
+          source_listing_id,
+          listing_number,
+          transaction_type,
+          address,
+          suburb,
+          city,
+          sales_price,
+          list_price,
+          gci_excl_vat,
+          net_comm,
+          total_gci,
+          sale_type,
+          buyer,
+          seller,
+          list_date,
+          transaction_date,
+          status_change_date,
+          expected_date,
+          loaded_at
+        FROM staging.transactions_raw
+        ORDER BY source_transaction_id, loaded_at DESC
+      ) str
+      LEFT JOIN migration.core_market_centers cmc 
+        ON str.source_market_center_id = cmc.source_market_center_id
     `);
+
+    // Transform agents from staging to migration
+    await client.query(`
+      INSERT INTO migration.transaction_agents (
+        transaction_id,
+        associate_id,
+        source_associate_id,
+        agent_role,
+        split_percentage,
+        sort_order,
+        created_at,
+        updated_at
+      )
+      SELECT
+        ct.id,
+        ca.id,
+        deduped.source_associate_id,
+        deduped.agent_type,
+        deduped.split_percentage,
+        deduped.sort_order,
+        NOW(),
+        NOW()
+      FROM (
+        SELECT
+          str.source_transaction_id,
+          sta.source_associate_id,
+          MIN(sta.associate_name) AS associate_name,
+          CASE
+            WHEN BOOL_OR(LOWER(TRIM(COALESCE(sta.agent_type, ''))) = 'seller')
+             AND BOOL_OR(LOWER(TRIM(COALESCE(sta.agent_type, ''))) = 'buyer') THEN 'Both'
+            ELSE COALESCE(MAX(NULLIF(TRIM(sta.agent_type), '')), '')
+          END AS agent_type,
+          COALESCE(SUM(COALESCE(sta.split_percentage, 0)), 0) AS split_percentage,
+          MIN(COALESCE(sta.sort_order, 0)) AS sort_order
+        FROM staging.transaction_agents sta
+        JOIN staging.transactions_raw str ON sta.transaction_id = str.id
+        WHERE sta.source_associate_id IS NOT NULL AND TRIM(sta.source_associate_id) != ''
+        GROUP BY str.source_transaction_id, sta.source_associate_id
+      ) deduped
+      JOIN migration.core_transactions ct ON deduped.source_transaction_id = ct.source_transaction_id
+      LEFT JOIN migration.core_associates ca ON deduped.source_associate_id = ca.source_associate_id
+      ORDER BY deduped.sort_order
+      ON CONFLICT (transaction_id, source_associate_id) DO UPDATE
+        SET agent_role = EXCLUDED.agent_role,
+            split_percentage = EXCLUDED.split_percentage,
+            updated_at = NOW()
+    `);
+
+    await recomputeAllTransactionAgentCalculations(client);
   });
 
-  const { rows } = await withClient((client) =>
-    client.query(`SELECT COUNT(*) AS cnt FROM migration.transactions_prepared`)
+  const { rows: txCount } = await withClient((client) =>
+    client.query(`SELECT COUNT(*) AS cnt FROM migration.core_transactions`)
   );
-  console.log(`Transactions transformed into migration.transactions_prepared. (${rows[0].cnt} rows)`);
+  const { rows: agentCount } = await withClient((client) =>
+    client.query(`SELECT COUNT(*) AS cnt FROM migration.transaction_agents`)
+  );
+  console.log(`Transactions transformed: ${txCount[0].cnt} transactions, ${agentCount[0].cnt} agent linkages`);
 }
 
 main()

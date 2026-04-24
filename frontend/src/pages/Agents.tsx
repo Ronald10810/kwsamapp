@@ -13,6 +13,9 @@ type AgentRow = {
   source_market_center_id: string | null;
   source_team_id: string | null;
   market_center_name: string | null;
+  market_center_logo_url: string | null;
+  active_listing_count: number;
+  registered_transaction_count: number;
   image_url: string | null;
   mobile_number: string | null;
   updated_at: string;
@@ -660,18 +663,45 @@ export default function AgentsPage() {
                 const statusClass = STATUS_COLORS[statusLabel] ?? 'bg-slate-100 text-slate-600';
                 return (
                   <div key={item.id} className="surface-card p-5 flex flex-col gap-3 hover:shadow-md transition-shadow">
+                    <div className="mb-1 flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        {item.market_center_logo_url ? (
+                          <img
+                            src={item.market_center_logo_url}
+                            alt={`${item.market_center_name ?? 'Market Centre'} logo`}
+                            className="h-7 w-7 rounded-md border border-slate-200 bg-white object-contain p-1"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="h-7 w-7 rounded-md border border-slate-200 bg-white text-center text-[10px] font-semibold leading-7 text-slate-500">MC</div>
+                        )}
+                        <p className="truncate text-xs font-medium uppercase tracking-wide text-slate-600">{item.market_center_name ?? item.source_market_center_id ?? 'Unassigned'}</p>
+                      </div>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}>{statusLabel}</span>
+                    </div>
+
                     <div className="flex items-start gap-3">
                       <AgentAvatar imageUrl={item.image_url} name={item.full_name} first={item.first_name} last={item.last_name} />
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-slate-900 truncate leading-snug">{name}</p>
-                        {item.market_center_name && <p className="text-xs text-slate-500 mt-1">{item.market_center_name}</p>}
                       </div>
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}>{statusLabel}</span>
                     </div>
                     <div className="text-xs text-slate-600 space-y-1">
                       <p>{item.email ?? '-'}</p>
                       <p>{item.mobile_number ?? '-'}</p>
                     </div>
+
+                    <div className="grid grid-cols-2 gap-2 border-t border-slate-100 pt-3">
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-slate-500">Active Listings</p>
+                        <p className="mt-0.5 text-base font-semibold text-slate-900">{item.active_listing_count ?? 0}</p>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-slate-500">Registered Deals</p>
+                        <p className="mt-0.5 text-base font-semibold text-slate-900">{item.registered_transaction_count ?? 0}</p>
+                      </div>
+                    </div>
+
                     <div className="flex items-center justify-between border-t border-slate-100 pt-2">
                       <p className="text-[11px] text-slate-400 font-mono">{item.kwuid ? `KWUID: ${item.kwuid}` : ''}</p>
                       <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>

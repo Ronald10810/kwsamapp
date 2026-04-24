@@ -1,11 +1,12 @@
 ﻿import { Router } from 'express';
-import { Pool } from 'pg';
+import { type Pool } from 'pg';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { getOptionalPgPool } from '../config/db.js';
+import { assertLocalUploadStorageEnabled, resolveLocalUploadDir, storageConfig } from '../config/storage.js';
 
 const router = Router();
-const databaseUrl = process.env.DATABASE_URL;
-const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : null;
+const pool = getOptionalPgPool();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -101,7 +102,8 @@ function decodeBase64Image(input: string | undefined): Buffer | null {
 }
 
 async function storeUploadedFiles(files: UploadFilePayload[], subdir = 'listings'): Promise<string[]> {
-  const uploadDir = path.resolve(process.cwd(), 'uploads', subdir);
+  assertLocalUploadStorageEnabled();
+  const uploadDir = resolveLocalUploadDir(subdir);
   await mkdir(uploadDir, { recursive: true });
   const urls: string[] = [];
   for (const file of files) {
@@ -287,6 +289,52 @@ router.get('/options', async (_req, res) => {
       suburb_by_city: {},
       suburb_by_province: {},
     });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Quick search endpoint for transaction listing selector
+// ---------------------------------------------------------------------------
+
+router.get('/search', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+
+  const q = String(req.query.q ?? '').trim();
+  if (!q) return res.json({ items: [] });
+
+  try {
+    const exists = await pool.query<{ exists: string | null }>(
+      `SELECT to_regclass('migration.core_listings') AS exists`
+    );
+    if (!exists.rows[0]?.exists) return res.json({ items: [] });
+
+    const result = await pool.query(
+      `SELECT
+         cl.id,
+         cl.source_listing_id,
+         cl.listing_number,
+         COALESCE(cl.address_line, TRIM(CONCAT_WS(' ', cl.street_number, cl.street_name))) AS address,
+         cl.suburb,
+         cl.city,
+         cl.price AS list_price
+       FROM migration.core_listings cl
+       WHERE (
+         cl.listing_number ILIKE $1
+         OR cl.source_listing_id ILIKE $1
+         OR COALESCE(cl.address_line, '') ILIKE $1
+         OR COALESCE(cl.street_name, '') ILIKE $1
+         OR COALESCE(cl.suburb, '') ILIKE $1
+         OR cl.property_title ILIKE $1
+       )
+       ORDER BY cl.listing_number
+       LIMIT 20`,
+      [`%${q}%`]
+    );
+
+    return res.json({ items: result.rows });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ error: message });
   }
 });
 
@@ -503,6 +551,18 @@ router.get('/', async (req, res) => {
          WHERE la.listing_id = cl.id
          ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
          LIMIT 1) AS primary_agent_image_url,
+        (SELECT COALESCE(a.mobile_number, a.office_number)
+         FROM migration.listing_agents la
+         LEFT JOIN migration.core_associates a ON a.id = la.associate_id
+         WHERE la.listing_id = cl.id
+         ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
+         LIMIT 1) AS primary_agent_phone,
+        (SELECT COALESCE(a.kwsa_email, a.private_email, a.email)
+         FROM migration.listing_agents la
+         LEFT JOIN migration.core_associates a ON a.id = la.associate_id
+         WHERE la.listing_id = cl.id
+         ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
+         LIMIT 1) AS primary_agent_email,
         COALESCE(
           (SELECT mc.logo_image_url
            FROM migration.listing_agents la
@@ -1025,6 +1085,9 @@ async function saveSubTables(pg: Pool, listingId: number, b: Record<string, unkn
 // ---------------------------------------------------------------------------
 
 router.post('/images/upload', async (req, res) => {
+  if (!storageConfig.localUploadsEnabled) {
+    return res.status(503).json({ error: 'Local file uploads are disabled in this environment. Configure managed storage before using upload endpoints.' });
+  }
   const files = Array.isArray(req.body?.files) ? (req.body.files as UploadFilePayload[]) : [];
   if (files.length === 0) return res.status(400).json({ error: 'No files were provided.' });
   try {
@@ -1038,6 +1101,9 @@ router.post('/images/upload', async (req, res) => {
 
 router.post('/:id/images/upload', async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+  if (!storageConfig.localUploadsEnabled) {
+    return res.status(503).json({ error: 'Local file uploads are disabled in this environment. Configure managed storage before using upload endpoints.' });
+  }
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid listing id.' });
 
@@ -1064,6 +1130,9 @@ router.post('/:id/images/upload', async (req, res) => {
 
 router.post('/:id/mandate-documents/upload', async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+  if (!storageConfig.localUploadsEnabled) {
+    return res.status(503).json({ error: 'Local file uploads are disabled in this environment. Configure managed storage before using upload endpoints.' });
+  }
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid listing id.' });
 

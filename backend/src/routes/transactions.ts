@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { Pool } from 'pg';
+import { type Pool } from 'pg';
+import { recomputeAllTransactionAgentCalculations } from '../services/transactionCalculations.js';
+import { getOptionalPgPool } from '../config/db.js';
 
 const router = Router();
-const databaseUrl = process.env.DATABASE_URL;
-const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : null;
+const pool = getOptionalPgPool();
 
 const ALLOWED_STATUSES = [
   'Start',
@@ -15,6 +16,21 @@ const ALLOWED_STATUSES = [
   'Withdrawn',
   'Pending',
 ] as const;
+
+type ReportingWindowRow = {
+  start_date: string;
+  end_date: string;
+  end_exclusive: string;
+  basis: 'registered' | 'allStatuses';
+};
+
+function reportingDateSql(alias: string): string {
+  return `CASE
+    WHEN LOWER(TRIM(COALESCE(${alias}.transaction_status, ''))) = 'registered'
+      THEN COALESCE(${alias}.status_change_date, ${alias}.transaction_date, ${alias}.created_at)
+    ELSE COALESCE(${alias}.transaction_date, ${alias}.status_change_date, ${alias}.created_at)
+  END`;
+}
 
 function toText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -43,6 +59,27 @@ function buildManualTransactionId(): string {
   const ts = Date.now().toString();
   const rand = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
   return `MAN-TX-${ts}-${rand}`;
+}
+
+function validateAgentSplits(agents: Array<Record<string, unknown>>): string | null {
+  if (agents.length === 0) {
+    return null;
+  }
+
+  let splitSum = 0;
+  for (const agent of agents) {
+    const splitValue = toNumber(agent?.split_percentage);
+    if (splitValue === null || splitValue < 0 || splitValue > 100) {
+      return 'Each agent split_percentage must be between 0 and 100.';
+    }
+    splitSum += splitValue;
+  }
+
+  if (Math.abs(splitSum - 100) > 0.01) {
+    return `Total split percentage must equal 100. Current total: ${splitSum.toFixed(2)}.`;
+  }
+
+  return null;
 }
 
 async function getNextTransactionNumber(db: Pool): Promise<string> {
@@ -99,8 +136,75 @@ router.get('/summary', async (_req, res) => {
         market_center_performance: [],
         associate_performance: [],
         expected_closings_90_days: [],
+        reporting_window: null,
+        performance_basis: 'registered',
       });
     }
+
+    const reportingWindowResult = await pool.query<ReportingWindowRow>(
+      `
+      WITH limits AS (
+        SELECT
+          date_trunc('month', CURRENT_DATE)::date AS month_start,
+          (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month')::date AS month_end
+      ),
+      eligible AS (
+        SELECT tac.effective_reporting_date::date AS effective_reporting_date,
+               tac.is_registered
+        FROM migration.transaction_agent_calculations tac
+        LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+        LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+        WHERE (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
+          AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+      ),
+      reporting_window AS (
+        SELECT
+          CASE
+            WHEN EXISTS (
+              SELECT 1 FROM eligible, limits
+              WHERE is_registered = true
+                AND effective_reporting_date >= limits.month_start
+                AND effective_reporting_date < limits.month_end
+            ) THEN 'registered'
+            WHEN EXISTS (
+              SELECT 1 FROM eligible, limits
+              WHERE effective_reporting_date >= limits.month_start
+                AND effective_reporting_date < limits.month_end
+            ) THEN 'allStatuses'
+            WHEN EXISTS (SELECT 1 FROM eligible WHERE is_registered = true) THEN 'registered'
+            ELSE 'allStatuses'
+          END AS basis,
+          CASE
+            WHEN EXISTS (
+              SELECT 1 FROM eligible, limits
+              WHERE effective_reporting_date >= limits.month_start
+                AND effective_reporting_date < limits.month_end
+            ) THEN (SELECT month_start FROM limits)
+            WHEN EXISTS (SELECT 1 FROM eligible WHERE is_registered = true) THEN (
+              SELECT date_trunc('month', MAX(effective_reporting_date))::date
+              FROM eligible
+              WHERE is_registered = true
+            )
+            ELSE COALESCE((SELECT date_trunc('month', MAX(effective_reporting_date))::date FROM eligible), (SELECT month_start FROM limits))
+          END AS start_date
+      )
+      SELECT
+        start_date::text,
+        (start_date + INTERVAL '1 month' - INTERVAL '1 day')::date::text AS end_date,
+        (start_date + INTERVAL '1 month')::date::text AS end_exclusive,
+        basis
+      FROM reporting_window
+      `
+    );
+
+    const reportingWindow = reportingWindowResult.rows[0] ?? {
+      start_date: new Date().toISOString().slice(0, 10),
+      end_date: new Date().toISOString().slice(0, 10),
+      end_exclusive: new Date().toISOString().slice(0, 10),
+      basis: 'registered',
+    };
+
+    const reportingWindowParams = [reportingWindow.start_date, reportingWindow.end_exclusive, reportingWindow.basis];
 
     const [totalsResult, mtdResult, statusResult, typeResult, marketCenterResult, associateResult, closingsResult] = await Promise.all([
       pool.query<{
@@ -111,11 +215,12 @@ router.get('/summary', async (_req, res) => {
       }>(
         `
         SELECT
-          COUNT(*)::text AS total_transactions,
-          COALESCE(SUM(sales_price), 0)::text AS total_sales_value,
-          COALESCE(SUM(net_comm), 0)::text AS total_net_commission,
-          COALESCE(AVG(split_percentage), 0)::text AS average_split_percentage
-        FROM migration.core_transactions
+          COUNT(DISTINCT ct.id)::text AS total_transactions,
+          COALESCE(SUM(ct.sales_price), 0)::text AS total_sales_value,
+          COALESCE(SUM(tac.gci_after_fees_excl_vat), 0)::text AS total_net_commission,
+          COALESCE(AVG(COALESCE(tac.split_percentage, 0)), 0)::text AS average_split_percentage
+        FROM migration.core_transactions ct
+        LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_id = ct.id
         `
       ),
       pool.query<{
@@ -126,19 +231,20 @@ router.get('/summary', async (_req, res) => {
       }>(
         `
         SELECT
-          COUNT(*)::text AS total_transactions,
-          COALESCE(SUM(ct.sales_price), 0)::text AS total_sales_value,
-          COALESCE(SUM(ct.net_comm), 0)::text AS total_net_commission,
-          COALESCE(AVG(ct.split_percentage), 0)::text AS average_split_percentage
-        FROM migration.core_transactions ct
-        INNER JOIN migration.core_market_centers mc ON mc.id = ct.market_center_id
-        INNER JOIN migration.core_associates ca ON ca.id = ct.associate_id
-        WHERE LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered'
-          AND ct.status_change_date::date >= date_trunc('month', CURRENT_DATE)::date
-          AND ct.status_change_date::date <= CURRENT_DATE
-          AND LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1')
-          AND LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1')
-        `
+          COUNT(DISTINCT tac.transaction_id)::text AS total_transactions,
+          COALESCE(SUM(tac.sales_value_component), 0)::text AS total_sales_value,
+          COALESCE(SUM(tac.gci_after_fees_excl_vat), 0)::text AS total_net_commission,
+          COALESCE(AVG(COALESCE(tac.split_percentage, 0)), 0)::text AS average_split_percentage
+        FROM migration.transaction_agent_calculations tac
+        LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+        LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+        WHERE ($3::text = 'allStatuses' OR tac.is_registered = true)
+          AND tac.effective_reporting_date >= $1::date
+          AND tac.effective_reporting_date < $2::date
+          AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
+          AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+        `,
+        reportingWindowParams
       ),
       pool.query<{ label: string; count: string }>(
         `
@@ -160,47 +266,70 @@ router.get('/summary', async (_req, res) => {
         ORDER BY COUNT(*) DESC
         `
       ),
-      pool.query<{ market_center: string; total_transactions: string; total_sales_value: string; total_net_commission: string }>(
+      pool.query<{ market_center: string; total_transactions: string; total_sales_value: string; total_net_commission: string; total_gci: string }>(
         `
+        WITH mtd AS (
+          SELECT
+            COALESCE(tac.office_name, mc.name, 'Unassigned / Unknown') AS market_center,
+            tac.transaction_id,
+            tac.sales_value_component,
+            tac.gci_after_fees_excl_vat,
+            tac.transaction_gci_before_fees
+          FROM migration.transaction_agent_calculations tac
+          LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+          LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+          WHERE ($3::text = 'allStatuses' OR tac.is_registered = true)
+            AND tac.effective_reporting_date >= $1::date
+            AND tac.effective_reporting_date < $2::date
+            AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
+            AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+        ),
+        grouped AS (
+          SELECT
+            market_center,
+            COUNT(DISTINCT transaction_id)::text AS total_transactions,
+            COALESCE(SUM(transaction_gci_before_fees), 0)::text AS total_gci,
+            COALESCE(SUM(gci_after_fees_excl_vat), 0)::text AS total_net_commission,
+            COALESCE(SUM(sales_value_component), 0)::text AS total_sales_value
+          FROM mtd
+          GROUP BY market_center
+        )
         SELECT
-          COALESCE(mc.name, 'Unassigned / Unknown') AS market_center,
-          COUNT(*)::text AS total_transactions,
-          COALESCE(SUM(ct.sales_price), 0)::text AS total_sales_value,
-          COALESCE(SUM(ct.net_comm), 0)::text AS total_net_commission
-        FROM migration.core_transactions ct
-        INNER JOIN migration.core_market_centers mc ON mc.id = ct.market_center_id
-        INNER JOIN migration.core_associates ca ON ca.id = ct.associate_id
-        WHERE LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered'
-          AND ct.status_change_date::date >= date_trunc('month', CURRENT_DATE)::date
-          AND ct.status_change_date::date <= CURRENT_DATE
-          AND LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1')
-          AND LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1')
-        GROUP BY COALESCE(mc.name, 'Unassigned / Unknown')
-        ORDER BY COALESCE(SUM(ct.sales_price), 0) DESC, COUNT(*) DESC
+          grouped.market_center,
+          grouped.total_transactions,
+          grouped.total_sales_value,
+          grouped.total_net_commission,
+          grouped.total_gci
+        FROM grouped
+        ORDER BY grouped.total_gci::numeric DESC, grouped.total_transactions::int DESC
         LIMIT 8
-        `
+        `,
+        reportingWindowParams
       ),
-      pool.query<{ associate_name: string; market_center: string; total_transactions: string; total_sales_value: string }>(
+      pool.query<{ associate_name: string; market_center: string; total_transactions: string; total_sales_value: string; total_gci: string }>(
         `
         SELECT
-          COALESCE(ca.full_name, ca.first_name || ' ' || ca.last_name, ca.source_associate_id, 'Unknown Associate') AS associate_name,
-          COALESCE(mc.name, 'Unassigned / Unknown') AS market_center,
-          COUNT(*)::text AS total_transactions,
-          COALESCE(SUM(ct.sales_price), 0)::text AS total_sales_value
-        FROM migration.core_transactions ct
-        INNER JOIN migration.core_market_centers mc ON mc.id = ct.market_center_id
-        INNER JOIN migration.core_associates ca ON ca.id = ct.associate_id
-        WHERE LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered'
-          AND ct.status_change_date::date >= date_trunc('month', CURRENT_DATE)::date
-          AND ct.status_change_date::date <= CURRENT_DATE
-          AND LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1')
-          AND LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1')
+          COALESCE(tac.agent_name, ca.full_name, ca.source_associate_id, 'Unknown Associate') AS associate_name,
+          COALESCE(tac.office_name, mc.name, 'Unassigned / Unknown') AS market_center,
+          COUNT(DISTINCT tac.transaction_id)::text AS total_transactions,
+          COALESCE(SUM(tac.sales_value_component), 0)::text AS total_sales_value,
+          COALESCE(SUM(tac.transaction_gci_before_fees), 0)::text AS total_gci
+        FROM migration.transaction_agent_calculations tac
+        LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+        LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+        WHERE ($3::text = 'allStatuses' OR tac.is_registered = true)
+          AND tac.is_outside_agent = false
+          AND tac.effective_reporting_date >= $1::date
+          AND tac.effective_reporting_date < $2::date
+          AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
+          AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
         GROUP BY
-          COALESCE(ca.full_name, ca.first_name || ' ' || ca.last_name, ca.source_associate_id, 'Unknown Associate'),
-          COALESCE(mc.name, 'Unassigned / Unknown')
-        ORDER BY COALESCE(SUM(ct.sales_price), 0) DESC, COUNT(*) DESC
+          COALESCE(tac.agent_name, ca.full_name, ca.source_associate_id, 'Unknown Associate'),
+          COALESCE(tac.office_name, mc.name, 'Unassigned / Unknown')
+        ORDER BY COALESCE(SUM(tac.transaction_gci_before_fees), 0) DESC, COUNT(DISTINCT tac.transaction_id) DESC
         LIMIT 10
-        `
+        `,
+        reportingWindowParams
       ),
       pool.query<{ bucket: string; count: string; total_gci: string }>(
         `
@@ -271,18 +400,26 @@ router.get('/summary', async (_req, res) => {
         total_transactions: Number(row.total_transactions),
         total_sales_value: Number(row.total_sales_value),
         total_net_commission: Number(row.total_net_commission),
+        total_gci: Number(row.total_gci),
       })),
       associate_performance: associateResult.rows.map((row) => ({
         associate_name: row.associate_name,
         market_center: row.market_center,
         total_transactions: Number(row.total_transactions),
         total_sales_value: Number(row.total_sales_value),
+        total_gci: Number(row.total_gci),
       })),
       expected_closings_90_days: closingsResult.rows.map((row) => ({
         bucket: row.bucket,
         count: Number(row.count),
         total_gci: Number(row.total_gci),
       })),
+      reporting_window: {
+        start_date: reportingWindow.start_date,
+        end_date: reportingWindow.end_date,
+        basis: reportingWindow.basis,
+      },
+      performance_basis: reportingWindow.basis,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -316,19 +453,43 @@ router.get('/', async (req, res) => {
     const params: Array<string | number> = [];
 
     if (searchInput.length > 0) {
-      params.push(`%${searchInput}%`);
-      const p = `$${params.length}`;
-      whereClauses.push(
-        `(t.transaction_number ILIKE ${p} OR t.address ILIKE ${p} OR t.city ILIKE ${p} OR a.full_name ILIKE ${p} OR mc.name ILIKE ${p} OR t.listing_number ILIKE ${p})`
-      );
+      const tokens = searchInput
+        .split(/[\s,]+/)
+        .map((token) => token.trim())
+        .filter(Boolean);
+
+      for (const token of tokens) {
+        params.push(`%${token}%`);
+        const p = `$${params.length}`;
+        whereClauses.push(
+          `(
+            ct.transaction_number ILIKE ${p}
+            OR ct.source_transaction_id ILIKE ${p}
+            OR ct.address ILIKE ${p}
+            OR ct.suburb ILIKE ${p}
+            OR ct.city ILIKE ${p}
+            OR ct.transaction_type ILIKE ${p}
+            OR ct.transaction_status ILIKE ${p}
+            OR ct.listing_number ILIKE ${p}
+            OR ct.source_listing_id ILIKE ${p}
+            OR ca.full_name ILIKE ${p}
+            OR ca.source_associate_id ILIKE ${p}
+            OR mc.name ILIKE ${p}
+            OR mc.source_market_center_id ILIKE ${p}
+            OR tac.agent_name ILIKE ${p}
+            OR tac.office_name ILIKE ${p}
+            OR tac.transaction_side ILIKE ${p}
+          )`
+        );
+      }
     }
     if (statusFilter.length > 0) {
       params.push(statusFilter);
-      whereClauses.push(`LOWER(TRIM(COALESCE(t.transaction_status, ''))) = LOWER(TRIM($${params.length}))`);
+      whereClauses.push(`LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = LOWER(TRIM($${params.length}))`);
     }
     if (typeFilter.length > 0) {
       params.push(typeFilter);
-      whereClauses.push(`LOWER(TRIM(COALESCE(t.transaction_type, ''))) = LOWER(TRIM($${params.length}))`);
+      whereClauses.push(`LOWER(TRIM(COALESCE(ct.transaction_type, ''))) = LOWER(TRIM($${params.length}))`);
     }
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -340,45 +501,151 @@ router.get('/', async (req, res) => {
 
     const [totalResult, dataResult] = await Promise.all([
       pool.query<{ total: string }>(
-        `SELECT COUNT(*)::text AS total
-         FROM migration.core_transactions t
-         LEFT JOIN migration.core_associates a ON a.id = t.associate_id
-         LEFT JOIN migration.core_market_centers mc ON mc.id = t.market_center_id
+        `SELECT COUNT(DISTINCT ct.id)::text AS total
+         FROM migration.core_transactions ct
+         LEFT JOIN migration.transaction_agents ta ON ta.transaction_id = ct.id
+         LEFT JOIN migration.core_associates ca ON ca.id = ta.associate_id
+         LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+         LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
          ${whereSql}`,
         countParams
       ),
       pool.query(
-        `SELECT
+        `WITH filtered AS (
+           SELECT DISTINCT ct.id
+           FROM migration.core_transactions ct
+           LEFT JOIN migration.transaction_agents ta ON ta.transaction_id = ct.id
+           LEFT JOIN migration.core_associates ca ON ca.id = ta.associate_id
+           LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+           LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
+           ${whereSql}
+         ),
+         page_tx AS (
+           SELECT ct.*
+           FROM migration.core_transactions ct
+           JOIN filtered f ON f.id = ct.id
+           ORDER BY ${reportingDateSql('ct')} DESC NULLS LAST, ct.id DESC
+           LIMIT ${limitParam} OFFSET ${offsetParam}
+         )
+         SELECT
            t.id, t.source_transaction_id, t.transaction_number,
-           t.source_associate_id,
            t.transaction_status, t.transaction_type,
            t.listing_number, t.source_listing_id,
            t.address, t.suburb, t.city,
            t.sales_price, t.list_price, t.gci_excl_vat,
-           t.split_percentage, t.net_comm, t.total_gci,
-           t.sale_type, t.agent_type,
-           t.buyer, t.seller,
+           t.net_comm, t.total_gci,
+           t.sale_type, t.buyer, t.seller,
            t.list_date::text, t.transaction_date::text,
            t.status_change_date::text, t.expected_date::text,
-           a.full_name AS associate_name, a.image_url AS associate_image_url,
-           mc.name AS market_center_name,
-           mc.source_market_center_id,
+           t.created_at::text AS created_at,
+           COALESCE(mc_primary.name, mc.name) AS market_center_name,
+           COALESCE(mc_primary.source_market_center_id, mc.source_market_center_id) AS source_market_center_id,
+           ta.id AS agent_id,
+           ta.associate_id,
+           COALESCE(ca.full_name, tac.agent_name) AS associate_name,
+           ca.image_url AS associate_image_url,
+           ta.source_associate_id,
+           COALESCE(ta.agent_role, tac.transaction_side, t.transaction_type) AS agent_role,
+           ta.split_percentage,
+           ta.sort_order,
+           tac.office_name,
+           tac.transaction_side,
+           tac.split_percentage::text AS calculated_split_percentage,
+           tac.variance_sale_list_pct::text,
+           tac.transaction_gci_before_fees::text,
+           tac.average_commission_pct::text,
+           tac.production_royalties::text,
+           tac.growth_share::text,
+           tac.total_pr_and_gs::text,
+           tac.gci_after_fees_excl_vat::text,
+           tac.associate_dollar::text,
+           tac.cap_amount::text,
+           tac.cap_remaining::text,
+           tac.team_dollar::text,
+           tac.market_center_dollar::text,
+           tac.is_outside_agent,
            t.updated_at::text
-         FROM migration.core_transactions t
-         LEFT JOIN migration.core_associates a ON a.id = t.associate_id
-         LEFT JOIN migration.core_market_centers mc ON mc.id = t.market_center_id
-         ${whereSql}
-         ORDER BY t.status_change_date DESC NULLS LAST, t.transaction_date DESC NULLS LAST, t.id DESC
-         LIMIT ${limitParam} OFFSET ${offsetParam}`,
+         FROM page_tx t
+         LEFT JOIN migration.core_market_centers mc_primary ON mc_primary.id = t.primary_market_center_id
+         LEFT JOIN migration.transaction_agents ta ON ta.transaction_id = t.id
+         LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
+         LEFT JOIN migration.core_associates ca ON ca.id = ta.associate_id
+         LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+         ORDER BY ${reportingDateSql('t')} DESC NULLS LAST, t.id DESC, ta.sort_order ASC`,
         params
       ),
     ]);
+
+    // Group agents by transaction
+    const txMap = new Map<string, any>();
+    for (const row of dataResult.rows) {
+      if (!txMap.has(row.id)) {
+        txMap.set(row.id, {
+          id: row.id,
+          source_transaction_id: row.source_transaction_id,
+          transaction_number: row.transaction_number,
+          transaction_status: row.transaction_status,
+          transaction_type: row.transaction_type,
+          listing_number: row.listing_number,
+          source_listing_id: row.source_listing_id,
+          address: row.address,
+          suburb: row.suburb,
+          city: row.city,
+          sales_price: row.sales_price,
+          list_price: row.list_price,
+          gci_excl_vat: row.gci_excl_vat,
+          net_comm: row.net_comm,
+          total_gci: row.total_gci,
+          sale_type: row.sale_type,
+          buyer: row.buyer,
+          seller: row.seller,
+          list_date: row.list_date,
+          transaction_date: row.transaction_date,
+          status_change_date: row.status_change_date,
+          expected_date: row.expected_date,
+          created_at: row.created_at,
+          market_center_name: row.market_center_name,
+          source_market_center_id: row.source_market_center_id,
+          updated_at: row.updated_at,
+          agents: [],
+        });
+      }
+
+      if (row.agent_id) {
+        txMap.get(row.id)!.agents.push({
+          associate_id: row.associate_id,
+          associate_name: row.associate_name,
+          image_url: row.associate_image_url,
+          source_associate_id: row.source_associate_id,
+          agent_role: row.agent_role,
+          split_percentage: row.split_percentage,
+          summary: {
+            office_name: row.office_name,
+            transaction_type: row.transaction_side,
+            split_percentage: row.calculated_split_percentage,
+            variance_sale_list_pct: row.variance_sale_list_pct,
+            transaction_gci_before_fees: row.transaction_gci_before_fees,
+            average_commission_pct: row.average_commission_pct,
+            production_royalties: row.production_royalties,
+            growth_share: row.growth_share,
+            total_pr_and_gs: row.total_pr_and_gs,
+            gci_after_fees_excl_vat: row.gci_after_fees_excl_vat,
+            associate_dollar: row.associate_dollar,
+            cap_amount: row.cap_amount,
+            cap_remaining: row.cap_remaining,
+            team_dollar: row.team_dollar,
+            market_center_dollar: row.market_center_dollar,
+            is_outside_agent: row.is_outside_agent,
+          },
+        });
+      }
+    }
 
     return res.json({
       total: parseInt(totalResult.rows[0]?.total ?? '0', 10),
       limit,
       offset,
-      items: dataResult.rows,
+      items: Array.from(txMap.values()),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -392,11 +659,6 @@ router.post('/', async (req, res) => {
   }
 
   const sourceTransactionId = toText(req.body?.source_transaction_id) ?? buildManualTransactionId();
-  const sourceAssociateId = toText(req.body?.source_associate_id) ?? '';
-  const sourceMarketCenterIdInput = toText(req.body?.source_market_center_id);
-  if (!toText(req.body?.transaction_number)) {
-    // transaction_number is generated on backend and read-only in UI
-  }
   const transactionNumber = await getNextTransactionNumber(pool);
   const transactionStatus = toText(req.body?.transaction_status);
   const transactionType = toText(req.body?.transaction_type);
@@ -408,50 +670,48 @@ router.post('/', async (req, res) => {
   const salesPrice = toNumber(req.body?.sales_price);
   const listPrice = toNumber(req.body?.list_price);
   const gci = toNumber(req.body?.gci_excl_vat);
-  const splitPct = toNumber(req.body?.split_percentage);
   const netComm = toNumber(req.body?.net_comm);
   const totalGci = toNumber(req.body?.total_gci);
   const saleType = toText(req.body?.sale_type);
-  const agentType = toText(req.body?.agent_type);
   const buyer = toText(req.body?.buyer);
   const seller = toText(req.body?.seller);
   const listDate = toDateValue(req.body?.list_date);
-  // transaction_date is immutable and is set on first load/creation only
   const txDate = new Date().toISOString();
-  // status_change_date starts at creation time and auto-updates on status transitions
   const statusChangeDate = txDate;
   const expectedDate = toDateValue(req.body?.expected_date);
+  const agents = Array.isArray(req.body?.agents) ? req.body.agents : [];
+
+  const splitError = validateAgentSplits(agents);
+  if (splitError) {
+    return res.status(400).json({ error: splitError });
+  }
 
   if (!transactionStatus || !ALLOWED_STATUSES.includes(transactionStatus as (typeof ALLOWED_STATUSES)[number])) {
     return res.status(400).json({ error: `transaction_status must be one of: ${ALLOWED_STATUSES.join(', ')}` });
   }
 
   try {
-    const assocLookup = sourceAssociateId
-      ? await pool.query<{ id: string; source_market_center_id: string | null }>(
-          `SELECT id::text AS id, source_market_center_id FROM migration.core_associates WHERE source_associate_id = $1 LIMIT 1`,
-          [sourceAssociateId]
-        )
-      : { rows: [] as Array<{ id: string; source_market_center_id: string | null }> };
-    const associateId = assocLookup.rows[0]?.id ? Number(assocLookup.rows[0].id) : null;
-
-    const sourceMarketCenterId = assocLookup.rows[0]?.source_market_center_id ?? sourceMarketCenterIdInput;
-
-    const mcLookup = sourceMarketCenterId
-      ? await pool.query<{ id: string; source_market_center_id: string | null }>(
+    // Get primary market center ID from first agent (if available)
+    let marketCenterId: number | null = null;
+    if (agents.length > 0 && agents[0].source_associate_id) {
+      const assocLookup = await pool.query<{ source_market_center_id: string | null }>(
+        `SELECT source_market_center_id FROM migration.core_associates WHERE source_associate_id = $1 LIMIT 1`,
+        [agents[0].source_associate_id]
+      );
+      if (assocLookup.rows[0]?.source_market_center_id) {
+        const mcLookup = await pool.query<{ id: string }>(
           `SELECT id::text AS id FROM migration.core_market_centers WHERE source_market_center_id = $1 LIMIT 1`,
-          [sourceMarketCenterId]
-        )
-      : { rows: [] as Array<{ id: string }> };
-    const marketCenterId = mcLookup.rows[0]?.id ? Number(mcLookup.rows[0].id) : null;
+          [assocLookup.rows[0].source_market_center_id]
+        );
+        marketCenterId = mcLookup.rows[0]?.id ? Number(mcLookup.rows[0].id) : null;
+      }
+    }
 
     const insert = await pool.query<{ id: string }>(
       `
       INSERT INTO migration.core_transactions (
         source_transaction_id,
-        source_associate_id,
-        associate_id,
-        market_center_id,
+        primary_market_center_id,
         transaction_number,
         transaction_status,
         transaction_type,
@@ -463,11 +723,9 @@ router.post('/', async (req, res) => {
         sales_price,
         list_price,
         gci_excl_vat,
-        split_percentage,
         net_comm,
         total_gci,
         sale_type,
-        agent_type,
         buyer,
         seller,
         list_date,
@@ -476,17 +734,15 @@ router.post('/', async (req, res) => {
         expected_date,
         updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
-        $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
-        $23::timestamptz,$24::timestamptz,$25::timestamptz,$26::timestamptz,
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+        $11,$12,$13,$14,$15,$16,$17,$18,
+        $19::timestamptz,$20::timestamptz,$21::timestamptz,$22::timestamptz,
         NOW()
       )
       RETURNING id::text
       `,
       [
         sourceTransactionId,
-        sourceAssociateId,
-        associateId,
         marketCenterId,
         transactionNumber,
         transactionStatus,
@@ -499,11 +755,9 @@ router.post('/', async (req, res) => {
         salesPrice,
         listPrice,
         gci,
-        splitPct,
         netComm,
         totalGci,
         saleType,
-        agentType,
         buyer,
         seller,
         listDate,
@@ -512,6 +766,50 @@ router.post('/', async (req, res) => {
         expectedDate,
       ]
     );
+
+    const transactionId = Number(insert.rows[0].id);
+
+    // Insert agents if provided
+    for (let i = 0; i < agents.length; i++) {
+      const agent = agents[i];
+      const sourceAssociateId = toText(agent?.source_associate_id);
+      const agentRole = toText(agent?.agent_role);
+      const splitPct = toNumber(agent?.split_percentage) ?? (agents.length === 1 ? 100 : null);
+
+      if (sourceAssociateId) {
+        const assocLookup = await pool.query<{ id: string }>(
+          `SELECT id::text AS id FROM migration.core_associates WHERE source_associate_id = $1 LIMIT 1`,
+          [sourceAssociateId]
+        );
+        const associateId = assocLookup.rows[0]?.id ? Number(assocLookup.rows[0].id) : null;
+
+        const agentInsert = await pool.query<{ id: string }>(
+          `INSERT INTO migration.transaction_agents (transaction_id, associate_id, source_associate_id, agent_role, split_percentage, sort_order, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW()) RETURNING id::text`,
+          [transactionId, associateId, sourceAssociateId, agentRole, splitPct, i]
+        );
+
+        // Save outside agency contact if provided
+        if (agentRole === 'Outside Agency Referral' && agent.outside_agency) {
+          const oa = agent.outside_agency;
+          await pool.query(
+            `INSERT INTO migration.outside_agency_contacts (transaction_agent_id, transaction_id, first_name, last_name, email, phone, agency_name)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              Number(agentInsert.rows[0].id),
+              transactionId,
+              toText(oa.first_name),
+              toText(oa.last_name),
+              toText(oa.email),
+              toText(oa.phone),
+              toText(oa.agency_name),
+            ]
+          );
+        }
+      }
+    }
+
+    await recomputeAllTransactionAgentCalculations(pool);
 
     return res.status(201).json({ id: insert.rows[0].id, source_transaction_id: sourceTransactionId });
   } catch (error) {
@@ -530,8 +828,6 @@ router.put('/:id', async (req, res) => {
     return res.status(400).json({ error: 'Invalid transaction id.' });
   }
 
-  const sourceAssociateId = toText(req.body?.source_associate_id) ?? '';
-  const sourceMarketCenterIdInput = toText(req.body?.source_market_center_id);
   const transactionNumber = toText(req.body?.transaction_number);
   const transactionStatus = toText(req.body?.transaction_status);
   const transactionType = toText(req.body?.transaction_type);
@@ -543,78 +839,58 @@ router.put('/:id', async (req, res) => {
   const salesPrice = toNumber(req.body?.sales_price);
   const listPrice = toNumber(req.body?.list_price);
   const gci = toNumber(req.body?.gci_excl_vat);
-  const splitPct = toNumber(req.body?.split_percentage);
   const netComm = toNumber(req.body?.net_comm);
   const totalGci = toNumber(req.body?.total_gci);
   const saleType = toText(req.body?.sale_type);
-  const agentType = toText(req.body?.agent_type);
   const buyer = toText(req.body?.buyer);
   const seller = toText(req.body?.seller);
   const listDate = toDateValue(req.body?.list_date);
   const expectedDate = toDateValue(req.body?.expected_date);
+  const agents = Array.isArray(req.body?.agents) ? req.body.agents : [];
+
+  const splitError = validateAgentSplits(agents);
+  if (splitError) {
+    return res.status(400).json({ error: splitError });
+  }
 
   if (!transactionStatus || !ALLOWED_STATUSES.includes(transactionStatus as (typeof ALLOWED_STATUSES)[number])) {
     return res.status(400).json({ error: `transaction_status must be one of: ${ALLOWED_STATUSES.join(', ')}` });
   }
 
   try {
-    const assocLookup = sourceAssociateId
-      ? await pool.query<{ id: string; source_market_center_id: string | null }>(
-          `SELECT id::text AS id, source_market_center_id FROM migration.core_associates WHERE source_associate_id = $1 LIMIT 1`,
-          [sourceAssociateId]
-        )
-      : { rows: [] as Array<{ id: string; source_market_center_id: string | null }> };
-    const associateId = assocLookup.rows[0]?.id ? Number(assocLookup.rows[0].id) : null;
-
-    const sourceMarketCenterId = assocLookup.rows[0]?.source_market_center_id ?? sourceMarketCenterIdInput;
-
-    const mcLookup = sourceMarketCenterId
-      ? await pool.query<{ id: string }>(
-          `SELECT id::text AS id FROM migration.core_market_centers WHERE source_market_center_id = $1 LIMIT 1`,
-          [sourceMarketCenterId]
-        )
-      : { rows: [] as Array<{ id: string }> };
-    const marketCenterId = mcLookup.rows[0]?.id ? Number(mcLookup.rows[0].id) : null;
+    // First, update the transaction itself (without agent fields)
+    const statusChangeUpdateSql = transactionStatus
+      ? `CASE WHEN transaction_status IS DISTINCT FROM $18 THEN NOW() ELSE status_change_date END`
+      : `status_change_date`;
 
     const update = await pool.query<{ id: string }>(
       `
       UPDATE migration.core_transactions
       SET
-        source_associate_id = $1,
-        associate_id = $2,
-        market_center_id = $3,
-        transaction_number = $4,
-        transaction_status = $5,
-        transaction_type = $6,
-        source_listing_id = $7,
-        listing_number = $8,
-        address = $9,
-        suburb = $10,
-        city = $11,
-        sales_price = $12,
-        list_price = $13,
-        gci_excl_vat = $14,
-        split_percentage = $15,
-        net_comm = $16,
-        total_gci = $17,
-        sale_type = $18,
-        agent_type = $19,
-        buyer = $20,
-        seller = $21,
-        list_date = $22::timestamptz,
-        status_change_date = CASE
-          WHEN COALESCE(transaction_status, '') <> COALESCE($5, '') THEN NOW()
-          ELSE status_change_date
-        END,
-        expected_date = $23::timestamptz,
+        transaction_number = $1,
+        transaction_status = $2,
+        transaction_type = $3,
+        source_listing_id = $4,
+        listing_number = $5,
+        address = $6,
+        suburb = $7,
+        city = $8,
+        sales_price = $9,
+        list_price = $10,
+        gci_excl_vat = $11,
+        net_comm = $12,
+        total_gci = $13,
+        sale_type = $14,
+        buyer = $15,
+        seller = $16,
+        list_date = $17::timestamptz,
+        status_change_date = ${statusChangeUpdateSql},
+        expected_date = $19::timestamptz,
         updated_at = NOW()
-      WHERE id = $24
+      WHERE id = $20
       RETURNING id::text
       `,
       [
-        sourceAssociateId,
-        associateId,
-        marketCenterId,
         transactionNumber,
         transactionStatus,
         transactionType,
@@ -626,14 +902,13 @@ router.put('/:id', async (req, res) => {
         salesPrice,
         listPrice,
         gci,
-        splitPct,
         netComm,
         totalGci,
         saleType,
-        agentType,
         buyer,
         seller,
         listDate,
+        transactionStatus,
         expectedDate,
         id,
       ]
@@ -643,7 +918,110 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Transaction not found.' });
     }
 
+    // Delete existing agents and insert new ones
+    if (agents.length >= 0) {
+      await pool.query(`DELETE FROM migration.transaction_agents WHERE transaction_id = $1`, [id]);
+
+      for (let i = 0; i < agents.length; i++) {
+        const agent = agents[i];
+        const sourceAssociateId = toText(agent?.source_associate_id);
+        const agentRole = toText(agent?.agent_role);
+        const splitPct = toNumber(agent?.split_percentage) ?? (agents.length === 1 ? 100 : null);
+
+        if (sourceAssociateId) {
+          const assocLookup = await pool.query<{ id: string }>(
+            `SELECT id::text AS id FROM migration.core_associates WHERE source_associate_id = $1 LIMIT 1`,
+            [sourceAssociateId]
+          );
+          const associateId = assocLookup.rows[0]?.id ? Number(assocLookup.rows[0].id) : null;
+
+          const agentInsert = await pool.query<{ id: string }>(
+            `INSERT INTO migration.transaction_agents (transaction_id, associate_id, source_associate_id, agent_role, split_percentage, sort_order, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW()) RETURNING id::text`,
+            [id, associateId, sourceAssociateId, agentRole, splitPct, i]
+          );
+
+          if (agentRole === 'Outside Agency Referral' && agent.outside_agency) {
+            const oa = agent.outside_agency;
+            await pool.query(
+              `INSERT INTO migration.outside_agency_contacts (transaction_agent_id, transaction_id, first_name, last_name, email, phone, agency_name)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [
+                Number(agentInsert.rows[0].id),
+                id,
+                toText(oa.first_name),
+                toText(oa.last_name),
+                toText(oa.email),
+                toText(oa.phone),
+                toText(oa.agency_name),
+              ]
+            );
+          }
+        }
+      }
+    }
+
+    await recomputeAllTransactionAgentCalculations(pool);
+
     return res.json({ id: update.rows[0].id });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ error: message });
+  }
+});
+
+router.get('/:id/calculated-summary', async (req, res) => {
+  if (!pool) {
+    return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+  }
+
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ error: 'Invalid transaction id.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        tac.id::text,
+        tac.transaction_id::text,
+        tac.transaction_agent_id::text,
+        tac.associate_id::text,
+        tac.source_associate_id,
+        tac.is_outside_agent,
+        tac.agent_name,
+        tac.office_name,
+        tac.transaction_side,
+        tac.split_percentage::text,
+        tac.variance_sale_list_pct::text,
+        tac.sales_value_component::text,
+        tac.transaction_gci_before_fees::text,
+        tac.average_commission_pct::text,
+        tac.production_royalties::text,
+        tac.growth_share::text,
+        tac.total_pr_and_gs::text,
+        tac.gci_after_fees_excl_vat::text,
+        tac.associate_split_pct::text,
+        tac.market_center_split_pct::text,
+        tac.associate_dollar::text,
+        tac.cap_amount::text,
+        tac.cap_contribution::text,
+        tac.cap_remaining::text,
+        tac.team_dollar::text,
+        tac.market_center_dollar::text,
+        tac.cap_cycle_start_date::text,
+        tac.cap_cycle_end_date::text,
+        tac.effective_reporting_date::text,
+        tac.is_registered
+      FROM migration.transaction_agent_calculations tac
+      WHERE tac.transaction_id = $1
+      ORDER BY tac.id ASC
+      `,
+      [id]
+    );
+
+    return res.json({ items: result.rows });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return res.status(500).json({ error: message });

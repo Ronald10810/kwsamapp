@@ -1,10 +1,11 @@
 import pino from 'pino';
 import { createRequire } from 'node:module';
+import { env } from './env.js';
 
 const require = createRequire(import.meta.url);
 
 function resolveDevTransport() {
-  if (process.env.NODE_ENV !== 'development') {
+  if (!env.isDevelopment) {
     return undefined;
   }
 
@@ -24,6 +25,6 @@ function resolveDevTransport() {
 }
 
 export const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
+  level: env.logLevel,
   transport: resolveDevTransport()
 });

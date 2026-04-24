@@ -1,9 +1,8 @@
 import { Router } from 'express';
-import { Pool } from 'pg';
+import { getOptionalPgPool } from '../config/db.js';
 
 const router = Router();
-const databaseUrl = process.env.DATABASE_URL;
-const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : null;
+const pool = getOptionalPgPool();
 
 // TODO: Implement associate routes based on legacy AssociateService
 // GET /api/associates - List associates (with filters, search, pagination)
@@ -22,6 +21,7 @@ router.get('/', async (req, res) => {
   const limitInput = Number(req.query.limit ?? 25);
   const offsetInput = Number(req.query.offset ?? 0);
   const searchInput = String(req.query.search ?? '').trim();
+  const statusInput = String(req.query.status ?? '').trim();
 
   const limit = Number.isFinite(limitInput) ? Math.min(Math.max(limitInput, 1), 100) : 25;
   const offset = Number.isFinite(offsetInput) ? Math.max(offsetInput, 0) : 0;
@@ -42,14 +42,25 @@ router.get('/', async (req, res) => {
       params.push(`%${searchInput}%`);
       const searchParam = `$${params.length}`;
       whereClauses.push(
-        `(full_name ILIKE ${searchParam} OR first_name ILIKE ${searchParam} OR last_name ILIKE ${searchParam} OR email ILIKE ${searchParam} OR kwuid ILIKE ${searchParam} OR source_associate_id ILIKE ${searchParam})`
+        `(ca.full_name ILIKE ${searchParam} OR ca.first_name ILIKE ${searchParam} OR ca.last_name ILIKE ${searchParam} OR ca.email ILIKE ${searchParam} OR ca.kwuid ILIKE ${searchParam} OR ca.source_associate_id ILIKE ${searchParam} OR mc.name ILIKE ${searchParam})`
       );
+    }
+
+    if (statusInput.length > 0) {
+      params.push(statusInput.toLowerCase());
+      const statusParam = `$${params.length}`;
+      whereClauses.push(`LOWER(TRIM(COALESCE(ca.status_name, ''))) = ${statusParam}`);
     }
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
     const totalResult = await pool.query<{ total: string }>(
-      `SELECT COUNT(*)::text AS total FROM migration.core_associates ${whereSql}`,
+      `
+      SELECT COUNT(*)::text AS total
+      FROM migration.core_associates ca
+      LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+      ${whereSql}
+      `,
       params
     );
 
@@ -69,24 +80,29 @@ router.get('/', async (req, res) => {
       kwuid: string | null;
       source_market_center_id: string | null;
       source_team_id: string | null;
+      market_center_name: string | null;
+      market_center_logo_url: string | null;
       updated_at: string;
     }>(
       `
       SELECT
-        id,
-        source_associate_id,
-        full_name,
-        first_name,
-        last_name,
-        email,
-        status_name,
-        kwuid,
-        source_market_center_id,
-        source_team_id,
-        updated_at::text
-      FROM migration.core_associates
+        ca.id,
+        ca.source_associate_id,
+        ca.full_name,
+        ca.first_name,
+        ca.last_name,
+        ca.email,
+        ca.status_name,
+        ca.kwuid,
+        ca.source_market_center_id,
+        ca.source_team_id,
+        COALESCE(mc.name, ca.source_market_center_id) AS market_center_name,
+        mc.logo_image_url AS market_center_logo_url,
+        ca.updated_at::text
+      FROM migration.core_associates ca
+      LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
       ${whereSql}
-      ORDER BY updated_at DESC, id DESC
+      ORDER BY COALESCE(ca.full_name, ca.first_name, ca.last_name, ca.source_associate_id) ASC, ca.id DESC
       LIMIT ${limitParam} OFFSET ${offsetParam}
       `,
       params

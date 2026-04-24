@@ -1,26 +1,24 @@
 import { Router, type ErrorRequestHandler } from 'express';
-import { Pool, PoolClient } from 'pg';
+import { type PoolClient } from 'pg';
 import multer from 'multer';
 import fs from 'fs/promises';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { recomputeAllTransactionAgentCalculations } from '../services/transactionCalculations.js';
+import { getOptionalPgPool } from '../config/db.js';
+import { ensureLocalUploadDirs, resolveLocalUploadDir, storageConfig } from '../config/storage.js';
 
 const router = Router();
-const databaseUrl = process.env.DATABASE_URL;
-const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : null;
+const pool = getOptionalPgPool();
 
 // File upload setup
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadsDir = path.join(__dirname, '../../uploads');
-const imagesDir = path.join(uploadsDir, 'images');
-const documentsDir = path.join(uploadsDir, 'documents');
+const imagesDir = resolveLocalUploadDir('images');
+const documentsDir = resolveLocalUploadDir('documents');
 
 // Ensure upload directories exist
 async function ensureUploadDirs(): Promise<void> {
   try {
-    await fs.mkdir(imagesDir, { recursive: true });
-    await fs.mkdir(documentsDir, { recursive: true });
+    await ensureLocalUploadDirs('images', 'documents');
   } catch (error) {
     console.error('Failed to create upload directories:', error);
   }
@@ -72,6 +70,19 @@ const uploadDocument = multer({
     }
   },
 });
+
+async function runUploadMiddleware(req: unknown, res: unknown, middleware: unknown): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    (middleware as (req: unknown, res: unknown, next: (error?: unknown) => void) => void)(req, res, (error?: unknown) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
 
 type SocialMediaInput = { platform: string | null; url: string | null };
 type DocumentInput = { document_type: string; document_name: string | null; document_url: string | null };
@@ -487,11 +498,32 @@ router.get('/', async (req, res) => {
       source_market_center_id: string | null;
       source_team_id: string | null;
       market_center_name: string | null;
+      market_center_logo_url: string | null;
+      active_listing_count: number;
+      registered_transaction_count: number;
       image_url: string | null;
       mobile_number: string | null;
       updated_at: string;
     }>(
       `
+      WITH listing_metrics AS (
+        SELECT
+          la.associate_id,
+          COUNT(DISTINCT la.listing_id)::int AS active_listing_count
+        FROM migration.listing_agents la
+        INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
+        WHERE LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+        GROUP BY la.associate_id
+      ),
+      transaction_metrics AS (
+        SELECT
+          ta.associate_id,
+          COUNT(DISTINCT ta.transaction_id)::int AS registered_transaction_count
+        FROM migration.transaction_agents ta
+        INNER JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
+        WHERE LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered'
+        GROUP BY ta.associate_id
+      )
       SELECT
         a.id,
         a.source_associate_id,
@@ -506,9 +538,14 @@ router.get('/', async (req, res) => {
         a.image_url,
         a.mobile_number,
         mc.name AS market_center_name,
+        mc.logo_image_url AS market_center_logo_url,
+        COALESCE(lm.active_listing_count, 0) AS active_listing_count,
+        COALESCE(tm.registered_transaction_count, 0) AS registered_transaction_count,
         a.updated_at::text
       FROM migration.core_associates a
       LEFT JOIN migration.core_market_centers mc ON mc.id = a.market_center_id
+      LEFT JOIN listing_metrics lm ON lm.associate_id = a.id
+      LEFT JOIN transaction_metrics tm ON tm.associate_id = a.id
       ${whereSql}
       ORDER BY a.full_name ASC NULLS LAST, a.id ASC
       LIMIT ${limitParam} OFFSET ${offsetParam}
@@ -573,7 +610,7 @@ router.post('/', async (req, res) => {
   const privatePropertyStatus = toText(body.private_property_status);
 
   const cap = toNumber(body.cap);
-  const manualCap = toBool(body.manual_cap) ? 1 : 0;
+  const manualCap = toNumber(body.manual_cap);
   const agentSplit = toNumber(body.agent_split);
   const projectedCos = toNumber(body.projected_cos);
   const projectedCap = toNumber(body.projected_cap);
@@ -696,6 +733,7 @@ router.post('/', async (req, res) => {
 
     const associateId = Number(insert.rows[0].id);
     await saveCollections(client, associateId, body);
+    await recomputeAllTransactionAgentCalculations(client);
 
     await client.query('COMMIT');
     return res.status(201).json({ id: insert.rows[0].id, source_associate_id: sourceAssociateId });
@@ -823,7 +861,7 @@ router.put('/:id', async (req, res) => {
         toBool(body.private_property_opt_in),
         toText(body.private_property_status),
         toNumber(body.cap),
-        toBool(body.manual_cap) ? 1 : 0,
+        toNumber(body.manual_cap),
         toNumber(body.agent_split),
         toNumber(body.projected_cos),
         toNumber(body.projected_cap),
@@ -841,6 +879,7 @@ router.put('/:id', async (req, res) => {
     }
 
     await saveCollections(client, id, body);
+  await recomputeAllTransactionAgentCalculations(client);
     await client.query('COMMIT');
     return res.json({ id: result.rows[0].id });
   } catch (error) {
@@ -852,7 +891,19 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.post('/:id/upload-image', uploadImage.single('image'), async (req, res) => {
+router.post('/:id/upload-image', async (req, res, next) => {
+  if (!storageConfig.localUploadsEnabled) {
+    return res.status(503).json({
+      error: 'Local file uploads are disabled in this environment. Configure managed storage before using upload endpoints.'
+    });
+  }
+
+  try {
+    await runUploadMiddleware(req, res, uploadImage.single('image'));
+  } catch (error) {
+    return next(error);
+  }
+
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }
@@ -890,7 +941,19 @@ router.post('/:id/upload-image', uploadImage.single('image'), async (req, res) =
   }
 });
 
-router.post('/:id/upload-document', uploadDocument.single('document'), async (req, res) => {
+router.post('/:id/upload-document', async (req, res, next) => {
+  if (!storageConfig.localUploadsEnabled) {
+    return res.status(503).json({
+      error: 'Local file uploads are disabled in this environment. Configure managed storage before using upload endpoints.'
+    });
+  }
+
+  try {
+    await runUploadMiddleware(req, res, uploadDocument.single('document'));
+  } catch (error) {
+    return next(error);
+  }
+
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }

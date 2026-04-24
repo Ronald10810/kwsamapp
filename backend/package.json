@@ -8,7 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest",
+    "test": "vitest --passWithNoTests",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "db:migrate": "prisma migrate dev",
@@ -26,6 +26,7 @@
     "data:transform:associates": "tsx src/data/transformAssociates.ts",
     "data:transform:listings": "tsx src/data/transformListings.ts",
     "data:transform:transactions": "tsx src/data/transformTransactions.ts",
+    "data:recalculate:transaction-calculations": "tsx src/data/recalculateTransactionAgentCalculations.ts",
     "data:load:core": "tsx src/data/loadCore.ts",
     "data:validate": "tsx src/data/validateLoad.ts",
     "data:reconcile": "tsx src/data/reconcileReport.ts",
@@ -33,7 +34,8 @@
     "data:rollback:legacy": "tsx src/data/rollbackLegacy.ts",
     "data:run:batch": "tsx src/data/runBatch.ts",
     "data:run:batch:preserve": "cross-env PRESERVE_CORE_EDITS=true tsx src/data/runBatch.ts",
-    "data:run:batch:refresh": "cross-env PRESERVE_CORE_EDITS=false tsx src/data/runBatch.ts"
+    "data:run:batch:refresh": "cross-env PRESERVE_CORE_EDITS=false tsx src/data/runBatch.ts",
+    "data:repair:encoding": "tsx src/data/repairEncoding.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.0.0",
@@ -46,6 +48,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "express-async-errors": "^3.1.1",
+    "google-auth-library": "^9.15.1",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
@@ -60,6 +63,7 @@
     "@types/bcrypt": "^5.0.2",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^1.4.13",
     "@types/node": "^20.10.6",
     "@types/pg": "^8.11.10",

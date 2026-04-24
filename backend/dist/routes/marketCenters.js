@@ -1,19 +1,16 @@
 import { Router } from 'express';
-import { Pool } from 'pg';
 import multer from 'multer';
 import fs from 'fs/promises';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { getOptionalPgPool } from '../config/db.js';
+import { ensureLocalUploadDirs, resolveLocalUploadDir, storageConfig } from '../config/storage.js';
 const router = Router();
-const databaseUrl = process.env.DATABASE_URL;
-const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : null;
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadsDir = path.join(__dirname, '../../uploads');
-const marketCenterImagesDir = path.join(uploadsDir, 'market-centers');
+const pool = getOptionalPgPool();
+const marketCenterImagesDir = resolveLocalUploadDir('market-centers');
 async function ensureUploadDirs() {
     try {
-        await fs.mkdir(marketCenterImagesDir, { recursive: true });
+        await ensureLocalUploadDirs('market-centers');
     }
     catch (error) {
         console.error('Failed to create market center upload directory:', error);
@@ -40,11 +37,17 @@ const uploadLogo = multer({
         }
     },
 });
-const uploadLogoMiddleware = uploadLogo.single('image');
-const ACTIVE_ASSOCIATE_WHERE = `(
-  LOWER(TRIM(COALESCE(status_name, ''))) = 'active'
-  OR TRIM(COALESCE(status_name, '')) = '1'
-)`;
+async function runUploadMiddleware(req, res) {
+    await new Promise((resolve, reject) => {
+        uploadLogo.single('image')(req, res, (error) => {
+            if (error) {
+                reject(error);
+                return;
+            }
+            resolve();
+        });
+    });
+}
 function toText(value) {
     if (typeof value !== 'string')
         return null;
@@ -504,7 +507,18 @@ router.put('/:id', async (req, res) => {
         return res.status(500).json({ error: message });
     }
 });
-router.post('/:id/upload-logo', uploadLogoMiddleware, async (req, res) => {
+router.post('/:id/upload-logo', async (req, res, next) => {
+    if (!storageConfig.localUploadsEnabled) {
+        return res.status(503).json({
+            error: 'Local file uploads are disabled in this environment. Configure managed storage before using upload endpoints.'
+        });
+    }
+    try {
+        await runUploadMiddleware(req, res);
+    }
+    catch (error) {
+        return next(error);
+    }
     if (!pool) {
         return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
     }

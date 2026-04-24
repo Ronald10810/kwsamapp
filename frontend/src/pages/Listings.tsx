@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 // ---------------------------------------------------------------------------
@@ -29,6 +29,8 @@ type ListingRow = {
   property_sub_type?: string | null;
   primary_agent_name?: string | null;
   primary_agent_image_url?: string | null;
+  primary_agent_phone?: string | null;
+  primary_agent_email?: string | null;
   market_center_logo_url?: string | null;
   primary_contact_name?: string | null;
   primary_contact_phone?: string | null;
@@ -468,7 +470,6 @@ export default function Listings() {
   const [securityEstateFilter, setSecurityEstateFilter] = useState(false);
   const [repossessedFilter, setRepossessedFilter] = useState(false);
   const [showOptionalFilters, setShowOptionalFilters] = useState(false);
-  const [imageIndexes, setImageIndexes] = useState<Record<string, number>>({});
   const [previewItem, setPreviewItem] = useState<ListingRow | null>(null);
   const [previewImageIdx, setPreviewImageIdx] = useState(0);
   const [previewExpandedDescription, setPreviewExpandedDescription] = useState(false);
@@ -565,10 +566,10 @@ export default function Listings() {
   }, [options, form.property_type]);
 
   // Available agents filtered by same market center as the first selected agent (if any)
-  const agentMarketCenterId = form.agents[0]?.source_market_center_id ?? '';
+  const agentMarketCenterId = form.agents[0]?.market_center_id ?? '';
   const filteredAgents = useMemo(() => {
     if (!agentMarketCenterId) return activeAgents;
-    return activeAgents.filter((a) => a.source_market_center_id === agentMarketCenterId || !a.source_market_center_id);
+    return activeAgents.filter((a) => a.market_center_id === agentMarketCenterId || !a.market_center_id);
   }, [activeAgents, agentMarketCenterId]);
 
   const filteredCities = useMemo(() => {
@@ -1083,17 +1084,6 @@ export default function Listings() {
     return form.features.filter((f) => f.feature_category === category).map((f) => f.feature_value);
   }
 
-  function cycleImage(listingId: string, images: string[], direction: -1 | 1): void {
-    if (images.length <= 1) return;
-    setImageIndexes((prev) => {
-      const current = prev[listingId] ?? 0;
-      const next = (current + direction + images.length) % images.length;
-      preloadImage(images[next] ?? '');
-      preloadImage(images[(next + 1) % images.length] ?? '');
-      return { ...prev, [listingId]: next };
-    });
-  }
-
   // ---------------------------------------------------------------------------
   // Render helpers
   // ---------------------------------------------------------------------------
@@ -1143,7 +1133,7 @@ export default function Listings() {
           value={val}
           onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
         >
-          <option value="">— Select —</option>
+          <option value="">� Select �</option>
           {choices.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       </label>
@@ -1233,7 +1223,7 @@ export default function Listings() {
       <div className="space-y-3">
         <div className="flex gap-2 flex-wrap">
           <select className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white flex-1 min-w-48" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-            <option value="">— Select Agent —</option>
+            <option value="">� Select Agent �</option>
             {filteredAgents.map((a) => (
               <option key={a.id} value={a.id}>{a.full_name ?? a.id} ({a.source_market_center_id ?? ''})</option>
             ))}
@@ -1325,7 +1315,7 @@ export default function Listings() {
                   ) : (
                     <span className="text-slate-400 text-base">Number auto-generated on save</span>
                   )}
-                  {form.property_title ? ` — ${form.property_title}` : editingId ? 'Edit Listing' : 'New Listing'}
+                  {form.property_title ? ` � ${form.property_title}` : editingId ? 'Edit Listing' : 'New Listing'}
                 </h2>
                 {form.is_draft && !form.is_published && (
                   <span className="mt-0.5 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">Draft</span>
@@ -1379,7 +1369,7 @@ export default function Listings() {
                 {isLoadingDetails && <p className="text-sm text-slate-500">Loading listing details...</p>}
                 {formError && <p className="text-sm text-amber-700 rounded-lg bg-amber-50 p-3 border border-amber-200">{formError}</p>}
 
-                {/* ────────────────── LISTING INFO ────────────────── */}
+                {/* ------------------ LISTING INFO ------------------ */}
                 {activeSection === 'info' && (
                   <section className="space-y-6">
                     <h3 className="text-lg font-semibold text-slate-900">Listing Info</h3>
@@ -1444,7 +1434,7 @@ export default function Listings() {
                           value={form.property_sub_type}
                           onChange={(e) => setForm((p) => ({ ...p, property_sub_type: e.target.value }))}
                         >
-                          <option value="">— Select —</option>
+                          <option value="">� Select �</option>
                           {subTypeOptions.map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </label>
@@ -1454,7 +1444,7 @@ export default function Listings() {
                   </section>
                 )}
 
-                {/* ────────────────── ADDRESS ────────────────── */}
+                {/* ------------------ ADDRESS ------------------ */}
                 {activeSection === 'address' && (
                   <section className="space-y-6">
                     <h3 className="text-lg font-semibold text-slate-900">Address & Validation</h3>
@@ -1497,7 +1487,7 @@ export default function Listings() {
                   </section>
                 )}
 
-                {/* ────────────────── MARKETING ────────────────── */}
+                {/* ------------------ MARKETING ------------------ */}
                 {activeSection === 'marketing' && (
                   <section className="space-y-6">
                     <h3 className="text-lg font-semibold text-slate-900">Marketing</h3>
@@ -1585,7 +1575,7 @@ export default function Listings() {
                           <label className="flex flex-col gap-1">
                             <span className="text-xs text-slate-600">Type</span>
                             <select className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white" value={mu.url_type} onChange={(e) => { const u = [...form.marketing_urls]; u[i] = { ...u[i], url_type: e.target.value }; setForm((p) => ({ ...p, marketing_urls: u })); }}>
-                              <option value="">— Select —</option>
+                              <option value="">� Select �</option>
                               {(options?.marketing_url_types ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
                             </select>
                           </label>
@@ -1651,7 +1641,7 @@ export default function Listings() {
                           <label className="flex flex-col gap-1">
                             <span className="text-xs text-slate-600">Average Price</span>
                             <select className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm bg-white" value={oh.average_price} onChange={(e) => { const u = [...form.open_house]; u[i] = { ...u[i], average_price: e.target.value }; setForm((p) => ({ ...p, open_house: u })); }}>
-                              <option value="">— Select —</option>
+                              <option value="">� Select �</option>
                               {(options?.average_price_options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
                             </select>
                           </label>
@@ -1663,7 +1653,7 @@ export default function Listings() {
                   </section>
                 )}
 
-                {/* ────────────────── IMAGES ────────────────── */}
+                {/* ------------------ IMAGES ------------------ */}
                 {activeSection === 'images' && (
                   <section className="space-y-4">
                     <h3 className="text-lg font-semibold text-slate-900">Images</h3>
@@ -1683,7 +1673,7 @@ export default function Listings() {
                             <div className="aspect-video overflow-hidden rounded bg-slate-100">
                               <img src={img.file_url} alt={`Image ${idx + 1}`} loading="eager" decoding="async" className="h-full w-full object-cover" />
                             </div>
-                            <p className="text-xs text-slate-500 truncate">#{idx + 1} — {img.file_name || 'image'}</p>
+                            <p className="text-xs text-slate-500 truncate">#{idx + 1} � {img.file_name || 'image'}</p>
                             <div className="flex items-center gap-1">
                               <button type="button" className="rounded border border-slate-300 px-2 py-0.5 text-xs" onClick={() => moveImage(idx, -1)} disabled={idx === 0}>Up</button>
                               <button type="button" className="rounded border border-slate-300 px-2 py-0.5 text-xs" onClick={() => moveImage(idx, 1)} disabled={idx === form.normalized_images.length - 1}>Down</button>
@@ -1698,7 +1688,7 @@ export default function Listings() {
                   </section>
                 )}
 
-                {/* ────────────────── MANDATE ────────────────── */}
+                {/* ------------------ MANDATE ------------------ */}
                 {activeSection === 'mandate' && (
                   <section className="space-y-6">
                     <h3 className="text-lg font-semibold text-slate-900">Mandate</h3>
@@ -1756,18 +1746,18 @@ export default function Listings() {
                   </section>
                 )}
 
-                {/* ────────────────── PROPERTY DETAILS ────────────────── */}
+                {/* ------------------ PROPERTY DETAILS ------------------ */}
                 {activeSection === 'property' && (
                   <section className="space-y-6">
                     <h3 className="text-lg font-semibold text-slate-900">Property Details</h3>
 
                     <h4 className="text-base font-semibold text-slate-800">Building Info</h4>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                      {inp('Erf Size (m²)', 'erf_size')}
-                      {inp('Floor Area (m²)', 'floor_area')}
+                      {inp('Erf Size (m�)', 'erf_size')}
+                      {inp('Floor Area (m�)', 'floor_area')}
                       {inp('Construction Date', 'construction_date', { type: 'date' })}
                       {inp('Height Restriction (m)', 'height_restriction')}
-                      {inp('Out Building Size (m²)', 'out_building_size')}
+                      {inp('Out Building Size (m�)', 'out_building_size')}
                       {sel('Zoning Type', 'zoning_type', options?.zoning_types ?? [])}
                     </div>
 
@@ -1898,12 +1888,12 @@ export default function Listings() {
                           <label className="flex flex-col gap-1">
                             <span className="text-xs text-slate-600">Area Type</span>
                             <select className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm bg-white" value={pa.area_type} onChange={(e) => { const u = [...form.property_areas]; u[i] = { ...u[i], area_type: e.target.value }; setForm((p) => ({ ...p, property_areas: u })); }}>
-                              <option value="">— Select —</option>
+                              <option value="">� Select �</option>
                               {(options?.property_area_types ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
                             </select>
                           </label>
                           <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Count</span><input type="number" min={0} className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" value={pa.count} onChange={(e) => { const u = [...form.property_areas]; u[i] = { ...u[i], count: e.target.value }; setForm((p) => ({ ...p, property_areas: u })); }} /></label>
-                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Size (m²)</span><input type="number" min={0} className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" value={pa.size} onChange={(e) => { const u = [...form.property_areas]; u[i] = { ...u[i], size: e.target.value }; setForm((p) => ({ ...p, property_areas: u })); }} /></label>
+                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Size (m�)</span><input type="number" min={0} className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" value={pa.size} onChange={(e) => { const u = [...form.property_areas]; u[i] = { ...u[i], size: e.target.value }; setForm((p) => ({ ...p, property_areas: u })); }} /></label>
                           <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Description</span><input className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" value={pa.description} onChange={(e) => { const u = [...form.property_areas]; u[i] = { ...u[i], description: e.target.value }; setForm((p) => ({ ...p, property_areas: u })); }} /></label>
                           <button type="button" className="rounded-lg border border-red-300 bg-red-50 px-2 py-1.5 text-xs text-red-700 self-end" onClick={() => setForm((p) => ({ ...p, property_areas: p.property_areas.filter((_, idx) => idx !== i) }))}>Remove</button>
                           </div>
@@ -1974,6 +1964,26 @@ export default function Listings() {
                     />
                   ) : (
                     <div className="flex h-full items-center justify-center text-sm text-slate-400">No image available</div>
+                  )}
+                  {(previewItem.image_urls?.length ?? 0) > 1 && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-between px-3">
+                        <button
+                          type="button"
+                          aria-label="Previous image"
+                          onClick={() => setPreviewImageIdx((prev) => (prev - 1 + (previewItem.image_urls?.length ?? 1)) % (previewItem.image_urls?.length ?? 1))}
+                          className="pointer-events-auto z-10 flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white/80 text-slate-700 shadow-md transition-colors hover:bg-white hover:text-red-600"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5"><path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" /></svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Next image"
+                          onClick={() => setPreviewImageIdx((prev) => (prev + 1) % (previewItem.image_urls?.length ?? 1))}
+                          className="pointer-events-auto z-10 flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white/80 text-slate-700 shadow-md transition-colors hover:bg-white hover:text-red-600"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5"><path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" /></svg>
+                        </button>
+                    </div>
                   )}
                 </div>
                 {(previewItem.image_urls?.length ?? 0) > 1 && (
@@ -2060,8 +2070,8 @@ export default function Listings() {
                       )}
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold leading-5 text-slate-900">{previewItem.primary_agent_name ?? previewItem.primary_contact_name ?? 'Assigned Agent'}</p>
-                        <p className="truncate text-xs leading-5 text-slate-600">{previewItem.primary_contact_phone ?? '-'}</p>
-                        <p className="truncate text-xs leading-5 text-slate-600">{previewItem.primary_contact_email ?? '-'}</p>
+                        <p className="truncate text-xs leading-5 text-slate-600">{previewItem.primary_agent_phone ?? previewItem.primary_contact_phone ?? '-'}</p>
+                        <p className="truncate text-xs leading-5 text-slate-600">{previewItem.primary_agent_email ?? previewItem.primary_contact_email ?? '-'}</p>
                       </div>
                     </div>
                   </div>
@@ -2300,8 +2310,8 @@ export default function Listings() {
                         )}
                         <p className="mt-3 text-center text-sm font-semibold text-slate-900">{agentDisplayName}</p>
                         <div className="mt-2 space-y-1 text-[13px] text-slate-700">
-                          <p className="text-center">{item.primary_contact_phone || '-'}</p>
-                          <p className="break-all text-center">{item.primary_contact_email || '-'}</p>
+                          <p className="text-center">{item.primary_agent_phone || item.primary_contact_phone || '-'}</p>
+                          <p className="break-all text-center">{item.primary_agent_email || item.primary_contact_email || '-'}</p>
                         </div>
                         <div className="mt-4">
                           <button

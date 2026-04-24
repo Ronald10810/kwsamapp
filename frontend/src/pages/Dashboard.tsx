@@ -30,6 +30,12 @@ type OpsSummary = {
     listings: number;
   };
   rejections: number;
+  reportingWindow?: {
+    start_date: string;
+    end_date: string;
+    basis: 'registered' | 'allStatuses';
+  };
+  performanceBasis?: 'registered' | 'allStatuses';
   marketCenterPerformance: Array<{
     marketCenter: string;
     totalTransactions: number;
@@ -81,9 +87,18 @@ export default function Dashboard() {
       })
     : '--';
 
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const periodLabel = `${monthStart.toLocaleDateString()} - ${now.toLocaleDateString()}`;
+  const periodLabel = data?.reportingWindow
+    ? `${new Date(data.reportingWindow.start_date).toLocaleDateString()} - ${new Date(data.reportingWindow.end_date).toLocaleDateString()}`
+    : (() => {
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        return `${monthStart.toLocaleDateString()} - ${now.toLocaleDateString()}`;
+      })();
+  const performanceBasis = data?.performanceBasis ?? data?.reportingWindow?.basis ?? 'registered';
+  const performanceLabel =
+    performanceBasis === 'allStatuses'
+      ? 'All Statuses This Month by Total GCI'
+      : 'Registered MTD by Total GCI';
 
   const metrics = [
     {
@@ -156,7 +171,7 @@ export default function Dashboard() {
       <section className="surface-card p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-slate-800">Market Centre Performance Pulse</h2>
-          <span className="status-chip info">Registered MTD by Total GCI</span>
+          <span className="status-chip info">{performanceLabel}</span>
         </div>
         <p className="mt-2 text-xs text-slate-500">Window: {periodLabel}</p>
 
@@ -210,7 +225,7 @@ export default function Dashboard() {
       <section className="surface-card p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-slate-800">Top 15 Associates This Month</h2>
-          <span className="status-chip info">Registered MTD by Total GCI</span>
+          <span className="status-chip info">{performanceLabel}</span>
         </div>
         <p className="mt-2 text-xs text-slate-500">Window: {periodLabel}</p>
 
