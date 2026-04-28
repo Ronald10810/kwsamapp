@@ -403,108 +403,67 @@ async function insertCalculatedRows(db: Queryable, rows: CalculatedRow[]): Promi
 
     for (let i = 0; i < chunk.length; i += 1) {
       const row = chunk[i];
-      const base = i * 29;
+      const base = i * 24;
       placeholders.push(
-        `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},$${base + 13},$${base + 14},$${base + 15},$${base + 16},$${base + 17},$${base + 18},$${base + 19},$${base + 20},$${base + 21},$${base + 22},$${base + 23},$${base + 24},$${base + 25},$${base + 26},$${base + 27},$${base + 28},$${base + 29})`
+        `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},$${base + 13},$${base + 14},$${base + 15},$${base + 16},$${base + 17},$${base + 18},$${base + 19},$${base + 20},$${base + 21},$${base + 22},$${base + 23},$${base + 24})`
       );
       values.push(
-        row.transaction_agent_id,
         row.transaction_id,
+        row.transaction_agent_id,
         row.associate_id,
-        row.source_associate_id,
-        row.is_outside_agent,
         row.agent_name,
         row.office_name,
         row.transaction_side,
+        row.effective_reporting_date,
+        row.is_registered,
         row.split_percentage,
         row.variance_sale_list_pct,
-        row.sales_value_component,
         row.transaction_gci_before_fees,
         row.average_commission_pct,
         row.production_royalties,
         row.growth_share,
         row.total_pr_and_gs,
         row.gci_after_fees_excl_vat,
-        row.associate_split_pct,
-        row.market_center_split_pct,
         row.associate_dollar,
         row.cap_amount,
-        row.cap_contribution,
         row.cap_remaining,
         row.team_dollar,
         row.market_center_dollar,
-        row.cap_cycle_start_date,
-        row.cap_cycle_end_date,
-        row.effective_reporting_date,
-        row.is_registered
+        row.is_outside_agent,
+        new Date().toISOString(),
+        new Date().toISOString()
       );
     }
 
     await db.query(
       `
       INSERT INTO migration.transaction_agent_calculations (
-        transaction_agent_id,
         transaction_id,
+        transaction_agent_id,
         associate_id,
-        source_associate_id,
-        is_outside_agent,
         agent_name,
         office_name,
         transaction_side,
+        effective_reporting_date,
+        is_registered,
         split_percentage,
         variance_sale_list_pct,
-        sales_value_component,
         transaction_gci_before_fees,
         average_commission_pct,
         production_royalties,
         growth_share,
         total_pr_and_gs,
         gci_after_fees_excl_vat,
-        associate_split_pct,
-        market_center_split_pct,
         associate_dollar,
         cap_amount,
-        cap_contribution,
         cap_remaining,
         team_dollar,
         market_center_dollar,
-        cap_cycle_start_date,
-        cap_cycle_end_date,
-        effective_reporting_date,
-        is_registered
+        is_outside_agent,
+        created_at,
+        updated_at
       )
       VALUES ${placeholders.join(', ')}
-      ON CONFLICT (transaction_agent_id)
-      DO UPDATE SET
-        transaction_id = EXCLUDED.transaction_id,
-        associate_id = EXCLUDED.associate_id,
-        source_associate_id = EXCLUDED.source_associate_id,
-        is_outside_agent = EXCLUDED.is_outside_agent,
-        agent_name = EXCLUDED.agent_name,
-        office_name = EXCLUDED.office_name,
-        transaction_side = EXCLUDED.transaction_side,
-        split_percentage = EXCLUDED.split_percentage,
-        variance_sale_list_pct = EXCLUDED.variance_sale_list_pct,
-        sales_value_component = EXCLUDED.sales_value_component,
-        transaction_gci_before_fees = EXCLUDED.transaction_gci_before_fees,
-        average_commission_pct = EXCLUDED.average_commission_pct,
-        production_royalties = EXCLUDED.production_royalties,
-        growth_share = EXCLUDED.growth_share,
-        total_pr_and_gs = EXCLUDED.total_pr_and_gs,
-        gci_after_fees_excl_vat = EXCLUDED.gci_after_fees_excl_vat,
-        associate_split_pct = EXCLUDED.associate_split_pct,
-        market_center_split_pct = EXCLUDED.market_center_split_pct,
-        associate_dollar = EXCLUDED.associate_dollar,
-        cap_amount = EXCLUDED.cap_amount,
-        cap_contribution = EXCLUDED.cap_contribution,
-        cap_remaining = EXCLUDED.cap_remaining,
-        team_dollar = EXCLUDED.team_dollar,
-        market_center_dollar = EXCLUDED.market_center_dollar,
-        cap_cycle_start_date = EXCLUDED.cap_cycle_start_date,
-        cap_cycle_end_date = EXCLUDED.cap_cycle_end_date,
-        effective_reporting_date = EXCLUDED.effective_reporting_date,
-        is_registered = EXCLUDED.is_registered,
-        updated_at = NOW()
       `,
       values
     );

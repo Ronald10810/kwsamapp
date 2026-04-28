@@ -1,0 +1,27 @@
+LOAD DATABASE
+    FROM mssql://kwsaReadOnly:AZURE_PASSWORD@kwsa.database.windows.net:1433/dbMappProd
+    INTO postgresql://kwsa_user:GCP_PASSWORD@34.35.113.173:5432/kwsa_db?sslmode=disable
+
+ WITH include drop,
+      create tables,
+      create indexes,
+      reset sequences,
+      batch rows = 5000,
+      prefetch rows = 5000,
+      workers = 4,
+      concurrency = 1,
+      on error stop
+
+ SET work_mem to '64MB',
+     maintenance_work_mem to '256MB',
+     search_path to 'public'
+
+ CAST type datetime to timestamptz,
+      type datetime2 to timestamptz,
+      type smalldatetime to timestamptz,
+      type date to date,
+      type time to time,
+      type uniqueidentifier to uuid,
+      type bit to boolean,
+      type money to numeric,
+      type smallmoney to numeric;

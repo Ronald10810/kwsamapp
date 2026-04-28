@@ -13,6 +13,7 @@ interface AuthContextValue {
   token: string | null;
   isLoading: boolean;
   login: (googleCredential: string) => Promise<void>;
+  loginAsDev: (input?: { email?: string; name?: string; role?: string }) => Promise<void>;
   logout: () => void;
 }
 
@@ -66,6 +67,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(newUser);
   }, []);
 
+  const loginAsDev = useCallback(async (input?: { email?: string; name?: string; role?: string }) => {
+    const res = await fetch('/api/auth/dev-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input ?? {}),
+    });
+
+    if (!res.ok) {
+      const body = (await res.json()) as { error?: string };
+      throw new Error(body.error ?? 'Dev login failed');
+    }
+
+    const { token: newToken, user: newUser } = (await res.json()) as { token: string; user: AuthUser };
+    localStorage.setItem(TOKEN_STORAGE_KEY, newToken);
+    setToken(newToken);
+    setUser(newUser);
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     setToken(null);
@@ -75,7 +94,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     fetch('/api/auth/logout', { method: 'POST' }).catch(() => {/* best effort */});
   }, []);
 
-  const value = useMemo(() => ({ user, token, isLoading, login, logout }), [user, token, isLoading, login, logout]);
+  const value = useMemo(
+    () => ({ user, token, isLoading, login, loginAsDev, logout }),
+    [user, token, isLoading, login, loginAsDev, logout]
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

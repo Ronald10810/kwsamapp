@@ -8,8 +8,10 @@ import { requireAuth, type AuthPayload } from '../middleware/requireAuth.js';
 
 const router = Router();
 
+const USERS_TABLE = 'public.app_users';
+
 const ENSURE_USERS_TABLE = `
-  CREATE TABLE IF NOT EXISTS migration.app_users (
+  CREATE TABLE IF NOT EXISTS ${USERS_TABLE} (
     id          SERIAL PRIMARY KEY,
     google_id   TEXT UNIQUE NOT NULL,
     email       TEXT UNIQUE NOT NULL,
@@ -90,7 +92,7 @@ router.post('/google', async (req, res) => {
     role: string;
     is_active: boolean;
   }>(
-    `INSERT INTO migration.app_users (google_id, email, name, picture)
+    `INSERT INTO ${USERS_TABLE} (google_id, email, name, picture)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (google_id) DO UPDATE
        SET email      = EXCLUDED.email,
@@ -99,6 +101,71 @@ router.post('/google', async (req, res) => {
            updated_at = NOW()
      RETURNING id, email, name, picture, role, is_active`,
     [googlePayload.sub, googlePayload.email, googlePayload.name ?? googlePayload.email, googlePayload.picture ?? null]
+  );
+
+  const user = upsertResult.rows[0];
+  if (!user.is_active) {
+    res.status(403).json({ error: 'Account is disabled' });
+    return;
+  }
+
+  const authPayload: AuthPayload = {
+    userId: user.id,
+    email: user.email,
+    name: user.name,
+    picture: user.picture,
+    role: user.role,
+  };
+
+  res.json({ token: issueJwt(authPayload), user: authPayload });
+});
+
+/**
+ * POST /api/auth/dev-login
+ * Dev-only fallback login for local environments where Google OAuth is not configured.
+ */
+router.post('/dev-login', async (req, res) => {
+  if (!env.allowDevLogin) {
+    res.status(403).json({ error: 'Dev login is disabled' });
+    return;
+  }
+
+  const body = (req.body ?? {}) as {
+    email?: string;
+    name?: string;
+    role?: string;
+    googleId?: string;
+  };
+
+  const email = (body.email ?? 'local.dev@kwsa.local').trim().toLowerCase();
+  const name = (body.name ?? 'Local Dev User').trim();
+  const role = (body.role ?? 'admin').trim() || 'admin';
+  const googleId = (body.googleId ?? `dev-${email}`).trim();
+
+  if (!email) {
+    res.status(400).json({ error: 'email is required' });
+    return;
+  }
+
+  await ensureTable();
+  const pool = getRequiredPgPool();
+
+  const upsertResult = await pool.query<{
+    id: number;
+    email: string;
+    name: string;
+    picture: string | null;
+    role: string;
+    is_active: boolean;
+  }>(
+    `INSERT INTO ${USERS_TABLE} (google_id, email, name, role)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (email) DO UPDATE
+       SET name = EXCLUDED.name,
+           role = EXCLUDED.role,
+           updated_at = NOW()
+     RETURNING id, email, name, picture, role, is_active`,
+    [googleId, email, name, role]
   );
 
   const user = upsertResult.rows[0];

@@ -1,0 +1,26 @@
+# Exclude local-only artifacts from Cloud Run source uploads
+.gcloudignore
+.git
+.gitignore
+node_modules/
+dist/
+uploads/
+coverage/
+*.log
+*.tmp
+*.temp
+
+# Local data and snapshots
+/data/
+/tmp/
+
+# Env and editor files
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+
+# OS noise
+.DS_Store
+Thumbs.db

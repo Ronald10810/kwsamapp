@@ -126,6 +126,7 @@ type MarketingUrlEntry = { url: string; url_type: string; display_name: string }
 type FeatureEntry = { feature_category: string; feature_value: string };
 type PropertyAreaEntry = { area_type: string; count: string; size: string; description: string; sub_features?: string[] };
 type NormalizedImageEntry = { file_url: string; file_name: string; media_type: string; uploaded_by: string; sort_order: number };
+type MandateDocumentEntry = { file_name: string; file_url: string; file_type?: string; uploaded_by?: string; uploaded_at?: string; sort_order?: number };
 
 type ListingFormState = {
   // Listing Info
@@ -270,6 +271,7 @@ type ListingFormState = {
   marketing_urls: MarketingUrlEntry[];
   features: FeatureEntry[];
   property_areas: PropertyAreaEntry[];
+  mandate_documents: MandateDocumentEntry[];
   normalized_images: NormalizedImageEntry[];
   image_urls: string[];
 };
@@ -338,18 +340,88 @@ function toMoney(value: string | null): string {
 function buildProperty24Url(referenceId: string | null | undefined): string | null {
   const reference = referenceId?.trim();
   if (!reference) return null;
-  return `https://www.property24.com/for-sale/modimolle/modimolle/limpopo/11294/${encodeURIComponent(reference)}`;
+  return `https://www.property24.com/search?query=${encodeURIComponent(reference)}`;
 }
 
 function buildPrivatePropertyUrl(referenceId: string | null | undefined): string | null {
   const reference = referenceId?.trim();
   if (!reference) return null;
-  return `https://www.privateproperty.co.za/for-sale/limpopo/bela-bela-and-bushveld/mookgophong-naboomspruit/mookgophong-naboomspruit/${encodeURIComponent(reference)}`;
+  return `https://www.privateproperty.co.za/search?searchTerms=${encodeURIComponent(reference)}`;
+}
+
+function normalizeReference(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '-') return null;
+  return trimmed;
+}
+
+function firstReference(...values: unknown[]): string | null {
+  for (const value of values) {
+    const normalized = normalizeReference(value);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function parseBooleanLike(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y', 'on', 't'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'n', 'off', 'f', ''].includes(normalized)) return false;
+  }
+  return false;
+}
+
+function deriveListingStatusTag(statusTag: string | null | undefined, saleOrRent: string | null | undefined): string {
+  const rawStatusTag = (statusTag ?? '').trim();
+  const rawSaleOrRent = (saleOrRent ?? '').trim();
+  if (!rawStatusTag && !rawSaleOrRent) return '';
+
+  const normalizedStatusTag = rawStatusTag.toLowerCase();
+  const normalizedSaleOrRent = rawSaleOrRent.toLowerCase();
+  const isRental = normalizedSaleOrRent.includes('rental') || normalizedSaleOrRent.includes('rent');
+
+  if (isRental && (!rawStatusTag || normalizedStatusTag === 'for sale')) {
+    return 'To Rent';
+  }
+
+  if (rawStatusTag) return rawStatusTag;
+  return rawSaleOrRent;
 }
 
 function normalizeImageUrls(input: string[]): string[] {
   const cleaned = input.map((v) => v.trim()).filter((v) => /^https?:\/\//i.test(v) || v.startsWith('/uploads/'));
   return [...new Set(cleaned)];
+}
+
+function canonicalFeatureCategory(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'property descriptives') return 'property descriptive';
+  if (normalized === 'lifestyle tags') return 'lifestyle';
+  return normalized;
+}
+
+function parseSubFeatures(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry).trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map((entry) => String(entry).trim()).filter(Boolean);
+      }
+    } catch {
+      // Fall back to splitting below.
+    }
+    return trimmed.split(',').map((entry) => entry.trim()).filter(Boolean);
+  }
+  return [];
 }
 
 async function fileToBase64(file: File): Promise<string> {
@@ -442,7 +514,7 @@ const emptyForm: ListingFormState = {
   commercial_boardrooms_furniture_included: false, commercial_boardrooms_internet_port: false,
   commercial_boardrooms_tv_port: false, commercial_boardrooms_wifi: false,
   agents: [], contacts: [], show_times: [], open_house: [], marketing_urls: [],
-  features: [], property_areas: [], normalized_images: [], image_urls: [],
+  features: [], property_areas: [], mandate_documents: [], normalized_images: [], image_urls: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -453,7 +525,7 @@ export default function Listings() {
   const [view, setView] = useState<ViewMode>('card');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('Active');
   const [saleOrRentFilter, setSaleOrRentFilter] = useState('');
   const [propertyTypeFilter, setPropertyTypeFilter] = useState('');
   const [minPriceFilter, setMinPriceFilter] = useState('');
@@ -471,6 +543,7 @@ export default function Listings() {
   const [repossessedFilter, setRepossessedFilter] = useState(false);
   const [showOptionalFilters, setShowOptionalFilters] = useState(false);
   const [previewItem, setPreviewItem] = useState<ListingRow | null>(null);
+  const [previewDetail, setPreviewDetail] = useState<Record<string, unknown> | null>(null);
   const [previewImageIdx, setPreviewImageIdx] = useState(0);
   const [previewExpandedDescription, setPreviewExpandedDescription] = useState(false);
 
@@ -549,12 +622,26 @@ export default function Listings() {
 
   const openPreview = (item: ListingRow): void => {
     setPreviewItem(item);
+    setPreviewDetail(null);
     setPreviewImageIdx(0);
     setPreviewExpandedDescription(false);
+
+    void fetch(`/api/listings/${item.id}`)
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json()) as Record<string, unknown>;
+      })
+      .then((details) => {
+        if (details) setPreviewDetail(details);
+      })
+      .catch(() => {
+        // Preview should still open even if detail enrichment fails.
+      });
   };
 
   const closePreview = (): void => {
     setPreviewItem(null);
+    setPreviewDetail(null);
     setPreviewImageIdx(0);
     setPreviewExpandedDescription(false);
   };
@@ -650,10 +737,11 @@ export default function Listings() {
       const listing = detailsRes.ok ? ((await detailsRes.json()) as Record<string, unknown>) : (item as unknown as Record<string, unknown>);
 
       const s = (key: string) => String(listing[key] ?? '');
-      const b = (key: string) => Boolean(listing[key]);
+      const b = (key: string) => parseBooleanLike(listing[key]);
       const payload = typeof listing.listing_payload === 'object' && listing.listing_payload !== null
         ? (listing.listing_payload as Record<string, unknown>)
         : {};
+      const payloadBool = (...keys: string[]): boolean => keys.some((key) => parseBooleanLike(payload[key]));
       const ci = typeof payload.commercial_industrial === 'object' && payload.commercial_industrial !== null
         ? (payload.commercial_industrial as Record<string, unknown>)
         : {};
@@ -669,68 +757,113 @@ export default function Listings() {
 
       const privatePropertyRef = firstNonEmpty(
         listing.private_property_ref1,
+        listing.private_property_ref2,
         listing.private_property_reference_id,
         payload.PrivatePropertyReference,
         payload.PrivatePropertyId,
         payload.private_property_reference,
-        payload.privatePropertyReference
+        payload.privatePropertyReference,
+        payload.private_property_ref1,
+        payload.private_property_ref2
       );
       const property24Ref = firstNonEmpty(
         listing.property24_ref1,
+        listing.property24_ref2,
         listing.property24_reference_id,
         payload.Property24Reference,
         payload.Property24Id,
         payload.property24_reference,
-        payload.property24_id
+        payload.property24_id,
+        payload.property24_ref1,
+        payload.property24_ref2
       );
       const kwwRef = firstNonEmpty(
         listing.kww_property_reference,
+        listing.kww_ref1,
+        listing.kww_ref2,
         listing.kww_reference_id,
         payload.KWWReference,
         payload.KWWId,
         payload.kww_reference,
-        payload.kww_id
+        payload.kww_id,
+        payload.kww_ref1,
+        payload.kww_ref2
       );
       const entegralRef = firstNonEmpty(
         listing.entegral_reference_id,
         payload.EntegralReference,
         payload.EntegralId,
         payload.entegral_reference,
-        payload.entegral_id
+        payload.entegral_id,
+        payload.entegral_ref,
+        payload.entegral_reference_id
+      );
+
+      const resolvedSaleOrRent = firstNonEmpty(
+        listing.sale_or_rent,
+        payload.sale_or_rent,
+        payload.SaleOrRent
+      );
+      const resolvedListingStatusTag = firstNonEmpty(
+        listing.listing_status_tag,
+        payload.listing_status_tag,
+        payload.ListingStatusTag,
+        payload.status_tag,
+        payload.StatusTag
       );
 
       const privatePropertySyncStatus = firstNonEmpty(
         listing.private_property_sync_status,
+        listing.private_property_status,
         payload.PrivatePropertySyncStatus,
         payload.PrivatePropertySyncMessage,
+        payload.PrivatePropertyStatus,
         payload.private_property_sync_status,
-        payload.private_property_sync_message
+        payload.private_property_sync_message,
+        payload.private_property_status
       );
       const kwwSyncStatus = firstNonEmpty(
         listing.kww_sync_status,
+        listing.kww_status,
         payload.KwwSyncMessage,
         payload.KWWSyncMessage,
+        payload.KWWStatus,
         payload.kww_sync_status,
-        payload.kww_sync_message
+        payload.kww_sync_message,
+        payload.kww_status
       );
       const entegralSyncStatus = firstNonEmpty(
         listing.entegral_sync_status,
+        listing.entegral_status,
         payload.EntegralSyncMessage,
+        payload.EntegralStatus,
         payload.entegral_sync_status,
-        payload.entegral_sync_message
+        payload.entegral_sync_message,
+        payload.entegral_status
       );
       const property24SyncStatus = firstNonEmpty(
         listing.property24_sync_status,
+        listing.property24_status,
         payload.P24SyncMessage,
         payload.Property24SyncMessage,
+        payload.Property24Status,
         payload.property24_sync_status,
-        payload.property24_sync_message
+        payload.property24_sync_message,
+        payload.property24_status
       );
 
-      const feedToPrivateProperty = b('feed_to_private_property') || Boolean(privatePropertyRef);
-      const feedToKww = b('feed_to_kww') || Boolean(kwwRef);
-      const feedToEntegral = b('feed_to_entegral') || Boolean(entegralRef);
-      const feedToProperty24 = b('feed_to_property24') || Boolean(property24Ref);
+      const feedToPrivateProperty = b('feed_to_private_property')
+        || payloadBool('feed_to_private_property', 'FeedToPrivateProperty', 'private_property_opt_in', 'PrivatePropertyOptIn')
+        || Boolean(privatePropertyRef);
+      const feedToKww = b('feed_to_kww')
+        || payloadBool('feed_to_kww', 'FeedToKWW', 'kww_opt_in', 'KWWOptIn')
+        || Boolean(kwwRef);
+      const feedToEntegral = b('feed_to_entegral')
+        || payloadBool('feed_to_entegral', 'FeedToEntegral', 'entegral_opt_in', 'EntegralOptIn')
+        || Boolean(entegralRef);
+      const feedToProperty24 = b('feed_to_property24')
+        || payloadBool('feed_to_property24', 'FeedToProperty24', 'property24_opt_in', 'Property24OptIn')
+        || Boolean(property24Ref);
 
       const imageUrls = Array.isArray(listing.image_urls) ? (listing.image_urls as string[]) : [];
       const normalizedImages = Array.isArray(listing.normalized_images) ? (listing.normalized_images as NormalizedImageEntry[]) : [];
@@ -749,9 +882,9 @@ export default function Listings() {
         source_market_center_id: s('source_market_center_id'),
         listing_number: s('listing_number'),
         status_name: s('status_name') || 'Active',
-        listing_status_tag: s('listing_status_tag') || 'For Sale',
+        listing_status_tag: deriveListingStatusTag(resolvedListingStatusTag, resolvedSaleOrRent),
         ownership_type: s('ownership_type') || 'Full Title',
-        sale_or_rent: s('sale_or_rent') || 'For Sale',
+        sale_or_rent: resolvedSaleOrRent || 'For Sale',
         is_draft: Boolean(listing.is_draft ?? true),
         is_published: b('is_published'),
         expiry_date: toInputDate(s('expiry_date')),
@@ -819,28 +952,28 @@ export default function Listings() {
         height_restriction: s('height_restriction'),
         out_building_size: s('out_building_size'),
         zoning_type: s('zoning_type'),
-        is_furnished: b('is_furnished'),
-        pet_friendly: b('pet_friendly'),
-        has_standalone_building: b('has_standalone_building'),
-        has_flatlet: b('has_flatlet'),
-        has_backup_water: b('has_backup_water'),
-        wheelchair_accessible: b('wheelchair_accessible'),
-        has_generator: b('has_generator'),
-        has_borehole: b('has_borehole'),
-        has_gas_geyser: b('has_gas_geyser'),
-        has_solar_panels: b('has_solar_panels'),
-        has_backup_battery_or_inverter: b('has_backup_battery_or_inverter'),
-        has_solar_geyser: b('has_solar_geyser'),
-        has_water_tank: b('has_water_tank'),
-        adsl: b('adsl'),
-        fibre: b('fibre'),
-        isdn: b('isdn'),
-        dialup: b('dialup'),
-        fixed_wimax: b('fixed_wimax'),
-        satellite: b('satellite'),
-        nearby_bus_service: b('nearby_bus_service'),
-        nearby_minibus_taxi_service: b('nearby_minibus_taxi_service'),
-        nearby_train_service: b('nearby_train_service'),
+        is_furnished: b('is_furnished') || payloadBool('is_furnished', 'IsFurnished'),
+        pet_friendly: b('pet_friendly') || payloadBool('pet_friendly', 'PetFriendly'),
+        has_standalone_building: b('has_standalone_building') || payloadBool('has_standalone_building', 'HasStandaloneBuilding'),
+        has_flatlet: b('has_flatlet') || payloadBool('has_flatlet', 'HasFlatlet'),
+        has_backup_water: b('has_backup_water') || payloadBool('has_backup_water', 'HasBackupWater'),
+        wheelchair_accessible: b('wheelchair_accessible') || payloadBool('wheelchair_accessible', 'WheelchairAccessible'),
+        has_generator: b('has_generator') || payloadBool('has_generator', 'HasGenerator'),
+        has_borehole: b('has_borehole') || payloadBool('has_borehole', 'HasBorehole'),
+        has_gas_geyser: b('has_gas_geyser') || payloadBool('has_gas_geyser', 'HasGasGeyser'),
+        has_solar_panels: b('has_solar_panels') || payloadBool('has_solar_panels', 'HasSolarPanels'),
+        has_backup_battery_or_inverter: b('has_backup_battery_or_inverter') || payloadBool('has_backup_battery_or_inverter', 'HasBackupBatteryOrInverter'),
+        has_solar_geyser: b('has_solar_geyser') || payloadBool('has_solar_geyser', 'HasSolarGeyser'),
+        has_water_tank: b('has_water_tank') || payloadBool('has_water_tank', 'HasWaterTank'),
+        adsl: b('adsl') || payloadBool('adsl', 'ADSL'),
+        fibre: b('fibre') || payloadBool('fibre', 'Fibre'),
+        isdn: b('isdn') || payloadBool('isdn', 'ISDN'),
+        dialup: b('dialup') || payloadBool('dialup', 'Dialup'),
+        fixed_wimax: b('fixed_wimax') || payloadBool('fixed_wimax', 'FixedWiMax', 'fixed_wimax'),
+        satellite: b('satellite') || payloadBool('satellite', 'Satellite'),
+        nearby_bus_service: b('nearby_bus_service') || payloadBool('nearby_bus_service', 'NearbyBusService'),
+        nearby_minibus_taxi_service: b('nearby_minibus_taxi_service') || payloadBool('nearby_minibus_taxi_service', 'NearbyMinibusTaxiService'),
+        nearby_train_service: b('nearby_train_service') || payloadBool('nearby_train_service', 'NearbyTrainService'),
         commercial_building_name: String(ci.building_name ?? ''),
         commercial_gross_lettable_area_sqm: String(ci.gross_lettable_area_sqm ?? ''),
         commercial_green_building: Boolean(ci.green_building),
@@ -879,11 +1012,10 @@ export default function Listings() {
         property_areas: Array.isArray(listing.property_areas)
           ? (listing.property_areas as Array<PropertyAreaEntry & { sub_features?: unknown }>).map((pa) => ({
               ...pa,
-              sub_features: Array.isArray(pa.sub_features)
-                ? pa.sub_features.map((entry) => String(entry))
-                : [],
+              sub_features: parseSubFeatures(pa.sub_features),
             }))
           : [],
+        mandate_documents: Array.isArray(listing.mandate_documents) ? (listing.mandate_documents as MandateDocumentEntry[]) : [],
         normalized_images: normalizedImagesWithFallback,
         image_urls: imageUrls,
       });
@@ -1072,16 +1204,19 @@ export default function Listings() {
 
   // Feature helpers
   function addFeature(category: string, value: string): void {
-    if (!value || form.features.some((f) => f.feature_category === category && f.feature_value === value)) return;
+    const targetCategory = canonicalFeatureCategory(category);
+    if (!value || form.features.some((f) => canonicalFeatureCategory(f.feature_category) === targetCategory && f.feature_value === value)) return;
     setForm((p) => ({ ...p, features: [...p.features, { feature_category: category, feature_value: value }] }));
   }
 
   function removeFeature(category: string, value: string): void {
-    setForm((p) => ({ ...p, features: p.features.filter((f) => !(f.feature_category === category && f.feature_value === value)) }));
+    const targetCategory = canonicalFeatureCategory(category);
+    setForm((p) => ({ ...p, features: p.features.filter((f) => !(canonicalFeatureCategory(f.feature_category) === targetCategory && f.feature_value === value)) }));
   }
 
   function featuresFor(category: string): string[] {
-    return form.features.filter((f) => f.feature_category === category).map((f) => f.feature_value);
+    const targetCategory = canonicalFeatureCategory(category);
+    return form.features.filter((f) => canonicalFeatureCategory(f.feature_category) === targetCategory).map((f) => f.feature_value);
   }
 
   // ---------------------------------------------------------------------------
@@ -1133,7 +1268,7 @@ export default function Listings() {
           value={val}
           onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
         >
-          <option value="">� Select �</option>
+          <option value="">-- Select --</option>
           {choices.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       </label>
@@ -1223,7 +1358,7 @@ export default function Listings() {
       <div className="space-y-3">
         <div className="flex gap-2 flex-wrap">
           <select className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white flex-1 min-w-48" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-            <option value="">� Select Agent �</option>
+            <option value="">-- Select Agent --</option>
             {filteredAgents.map((a) => (
               <option key={a.id} value={a.id}>{a.full_name ?? a.id} ({a.source_market_center_id ?? ''})</option>
             ))}
@@ -1315,7 +1450,7 @@ export default function Listings() {
                   ) : (
                     <span className="text-slate-400 text-base">Number auto-generated on save</span>
                   )}
-                  {form.property_title ? ` � ${form.property_title}` : editingId ? 'Edit Listing' : 'New Listing'}
+                  {form.property_title ? ` - ${form.property_title}` : editingId ? 'Edit Listing' : 'New Listing'}
                 </h2>
                 {form.is_draft && !form.is_published && (
                   <span className="mt-0.5 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">Draft</span>
@@ -1434,7 +1569,7 @@ export default function Listings() {
                           value={form.property_sub_type}
                           onChange={(e) => setForm((p) => ({ ...p, property_sub_type: e.target.value }))}
                         >
-                          <option value="">� Select �</option>
+                          <option value="">-- Select --</option>
                           {subTypeOptions.map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </label>
@@ -1506,7 +1641,7 @@ export default function Listings() {
                         <div className="flex items-center gap-3">
                           {chk('Feed to Private Property', 'feed_to_private_property')}
                         </div>
-                        {form.feed_to_private_property && (
+                        {(form.feed_to_private_property || Boolean(firstReference(form.private_property_ref1, form.private_property_ref2, form.private_property_sync_status))) && (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                             {inp('Private Property Reference 1', 'private_property_ref1')}
                             {inp('Private Property Reference 2', 'private_property_ref2')}
@@ -1520,7 +1655,7 @@ export default function Listings() {
                         <div className="flex items-center gap-3">
                           {chk('Feed to KWW', 'feed_to_kww')}
                         </div>
-                        {form.feed_to_kww && (
+                        {(form.feed_to_kww || Boolean(firstReference(form.kww_property_reference, form.kww_ref1, form.kww_ref2, form.kww_sync_status))) && (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                             {inp('KWW Property Reference', 'kww_property_reference')}
                             {inp('KWW Reference 1', 'kww_ref1')}
@@ -1535,7 +1670,7 @@ export default function Listings() {
                         <div className="flex items-center gap-3">
                           {chk('Feed to Entegral', 'feed_to_entegral')}
                         </div>
-                        {form.feed_to_entegral && (
+                        {(form.feed_to_entegral || Boolean(firstReference(form.entegral_sync_status))) && (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                             {inp('Sync Status', 'entegral_sync_status')}
                           </div>
@@ -1547,7 +1682,7 @@ export default function Listings() {
                         <div className="flex items-center gap-3">
                           {chk('Feed to Property24', 'feed_to_property24')}
                         </div>
-                        {form.feed_to_property24 && (
+                        {(form.feed_to_property24 || Boolean(firstReference(form.property24_ref1, form.property24_ref2, form.property24_sync_status))) && (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                             {inp('Property24 Reference 1', 'property24_ref1')}
                             {inp('Property24 Reference 2', 'property24_ref2')}
@@ -1575,7 +1710,7 @@ export default function Listings() {
                           <label className="flex flex-col gap-1">
                             <span className="text-xs text-slate-600">Type</span>
                             <select className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white" value={mu.url_type} onChange={(e) => { const u = [...form.marketing_urls]; u[i] = { ...u[i], url_type: e.target.value }; setForm((p) => ({ ...p, marketing_urls: u })); }}>
-                              <option value="">� Select �</option>
+                              <option value="">-- Select --</option>
                               {(options?.marketing_url_types ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
                             </select>
                           </label>
@@ -1641,7 +1776,7 @@ export default function Listings() {
                           <label className="flex flex-col gap-1">
                             <span className="text-xs text-slate-600">Average Price</span>
                             <select className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm bg-white" value={oh.average_price} onChange={(e) => { const u = [...form.open_house]; u[i] = { ...u[i], average_price: e.target.value }; setForm((p) => ({ ...p, open_house: u })); }}>
-                              <option value="">� Select �</option>
+                              <option value="">-- Select --</option>
                               {(options?.average_price_options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
                             </select>
                           </label>
@@ -1673,7 +1808,7 @@ export default function Listings() {
                             <div className="aspect-video overflow-hidden rounded bg-slate-100">
                               <img src={img.file_url} alt={`Image ${idx + 1}`} loading="eager" decoding="async" className="h-full w-full object-cover" />
                             </div>
-                            <p className="text-xs text-slate-500 truncate">#{idx + 1} � {img.file_name || 'image'}</p>
+                            <p className="text-xs text-slate-500 truncate">#{idx + 1} - {img.file_name || 'image'}</p>
                             <div className="flex items-center gap-1">
                               <button type="button" className="rounded border border-slate-300 px-2 py-0.5 text-xs" onClick={() => moveImage(idx, -1)} disabled={idx === 0}>Up</button>
                               <button type="button" className="rounded border border-slate-300 px-2 py-0.5 text-xs" onClick={() => moveImage(idx, 1)} disabled={idx === form.normalized_images.length - 1}>Down</button>
@@ -1753,11 +1888,11 @@ export default function Listings() {
 
                     <h4 className="text-base font-semibold text-slate-800">Building Info</h4>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                      {inp('Erf Size (m�)', 'erf_size')}
-                      {inp('Floor Area (m�)', 'floor_area')}
+                      {inp('Erf Size (m2)', 'erf_size')}
+                      {inp('Floor Area (m2)', 'floor_area')}
                       {inp('Construction Date', 'construction_date', { type: 'date' })}
                       {inp('Height Restriction (m)', 'height_restriction')}
-                      {inp('Out Building Size (m�)', 'out_building_size')}
+                      {inp('Out Building Size (m2)', 'out_building_size')}
                       {sel('Zoning Type', 'zoning_type', options?.zoning_types ?? [])}
                     </div>
 
@@ -1802,6 +1937,25 @@ export default function Listings() {
                     {isCommercialOrIndustrial && (
                       <div className="border-t pt-4 space-y-4">
                         <h4 className="text-base font-semibold text-slate-800">Commercial / Industrial Details</h4>
+                        {form.mandate_documents.length > 0 && (
+                          <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+                            {form.mandate_documents
+                              .slice()
+                              .sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0))
+                              .map((doc, index) => (
+                                <a
+                                  key={`${doc.file_url}-${index}`}
+                                  href={doc.file_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+                                >
+                                  <span className="truncate text-slate-800">{doc.file_name || `Document ${index + 1}`}</span>
+                                  <span className="shrink-0 text-xs text-slate-500">Open</span>
+                                </a>
+                              ))}
+                          </div>
+                        )}
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                           {inp('Building Name', 'commercial_building_name')}
                           {inp('Gross Lettable Area (sqm)', 'commercial_gross_lettable_area_sqm', { type: 'number' })}
@@ -1888,12 +2042,12 @@ export default function Listings() {
                           <label className="flex flex-col gap-1">
                             <span className="text-xs text-slate-600">Area Type</span>
                             <select className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm bg-white" value={pa.area_type} onChange={(e) => { const u = [...form.property_areas]; u[i] = { ...u[i], area_type: e.target.value }; setForm((p) => ({ ...p, property_areas: u })); }}>
-                              <option value="">� Select �</option>
+                              <option value="">-- Select --</option>
                               {(options?.property_area_types ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
                             </select>
                           </label>
                           <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Count</span><input type="number" min={0} className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" value={pa.count} onChange={(e) => { const u = [...form.property_areas]; u[i] = { ...u[i], count: e.target.value }; setForm((p) => ({ ...p, property_areas: u })); }} /></label>
-                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Size (m�)</span><input type="number" min={0} className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" value={pa.size} onChange={(e) => { const u = [...form.property_areas]; u[i] = { ...u[i], size: e.target.value }; setForm((p) => ({ ...p, property_areas: u })); }} /></label>
+                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Size (m2)</span><input type="number" min={0} className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" value={pa.size} onChange={(e) => { const u = [...form.property_areas]; u[i] = { ...u[i], size: e.target.value }; setForm((p) => ({ ...p, property_areas: u })); }} /></label>
                           <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Description</span><input className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" value={pa.description} onChange={(e) => { const u = [...form.property_areas]; u[i] = { ...u[i], description: e.target.value }; setForm((p) => ({ ...p, property_areas: u })); }} /></label>
                           <button type="button" className="rounded-lg border border-red-300 bg-red-50 px-2 py-1.5 text-xs text-red-700 self-end" onClick={() => setForm((p) => ({ ...p, property_areas: p.property_areas.filter((_, idx) => idx !== i) }))}>Remove</button>
                           </div>
@@ -1947,11 +2101,11 @@ export default function Listings() {
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-500">Listing Preview</p>
-                <h3 className="text-lg font-semibold text-slate-900">{previewItem.short_title ?? previewItem.property_title ?? previewItem.listing_number ?? 'Listing'}</h3>
+                <h3 className="text-lg font-semibold text-slate-900">{previewItem.property_title ?? previewItem.listing_number ?? 'Listing'}</h3>
               </div>
               <button type="button" className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50" onClick={closePreview}>Close</button>
             </div>
-            <div className={`grid h-[calc(100%-65px)] grid-cols-1 gap-4 p-5 lg:grid-cols-3 ${previewExpandedDescription ? 'overflow-auto' : 'overflow-hidden'}`}>
+            <div className="grid h-[calc(100%-65px)] grid-cols-1 gap-4 overflow-y-auto overflow-x-hidden p-5 lg:grid-cols-3">
               <section className="lg:col-span-2 space-y-3">
                 <div className="relative h-64 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 md:h-96 lg:h-[32rem]">
                   {(previewItem.image_urls?.[previewImageIdx] ?? previewItem.image_urls?.[0]) ? (
@@ -2007,7 +2161,7 @@ export default function Listings() {
                   <div className="flex items-start justify-between gap-3">
                     <p className="text-2xl font-bold text-slate-900">{toMoney(previewItem.price ?? null)}</p>
                     <div className="flex max-w-[48%] flex-wrap justify-end gap-2 text-xs">
-                      {previewItem.listing_status_tag && <span className="rounded-full bg-blue-100 px-2 py-0.5 font-semibold text-blue-700">{previewItem.listing_status_tag}</span>}
+                      {deriveListingStatusTag(previewItem.listing_status_tag, previewItem.sale_or_rent) && <span className="rounded-full bg-blue-100 px-2 py-0.5 font-semibold text-blue-700">{deriveListingStatusTag(previewItem.listing_status_tag, previewItem.sale_or_rent)}</span>}
                       {previewItem.status_name && <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-700">{previewItem.status_name}</span>}
                     </div>
                   </div>
@@ -2094,38 +2248,67 @@ export default function Listings() {
 
                 <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
                   <h4 className="text-sm font-semibold text-slate-900">Listing IDs</h4>
-                  <p className="mt-2">
-                    P24:{' '}
-                    {buildProperty24Url(previewItem.property24_reference_id) ? (
-                      <a
-                        href={buildProperty24Url(previewItem.property24_reference_id) ?? '#'}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-medium text-red-700 hover:underline"
-                      >
-                        {previewItem.property24_reference_id}
-                      </a>
-                    ) : (
-                      '-'
-                    )}
-                  </p>
-                  <p>
-                    Private Property:{' '}
-                    {buildPrivatePropertyUrl(previewItem.private_property_reference_id) ? (
-                      <a
-                        href={buildPrivatePropertyUrl(previewItem.private_property_reference_id) ?? '#'}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-medium text-red-700 hover:underline"
-                      >
-                        {previewItem.private_property_reference_id}
-                      </a>
-                    ) : (
-                      '-'
-                    )}
-                  </p>
-                  <p>KWW: {previewItem.kww_reference_id ?? '-'}</p>
-                  <p>Entegral: {previewItem.entegral_reference_id ?? '-'}</p>
+                  {(() => {
+                    const p24Reference = firstReference(
+                      previewDetail?.property24_ref1,
+                      previewDetail?.property24_ref2,
+                      previewDetail?.property24_reference_id,
+                      previewItem.property24_reference_id
+                    );
+                    const privatePropertyReference = firstReference(
+                      previewDetail?.private_property_ref1,
+                      previewDetail?.private_property_ref2,
+                      previewDetail?.private_property_reference_id,
+                      previewItem.private_property_reference_id
+                    );
+                    const kwwReference = firstReference(
+                      previewDetail?.kww_property_reference,
+                      previewDetail?.kww_ref1,
+                      previewDetail?.kww_ref2,
+                      previewItem.kww_reference_id
+                    );
+                    const entegralReference = firstReference(
+                      previewDetail?.entegral_reference_id,
+                      previewItem.entegral_reference_id
+                    );
+
+                    return (
+                      <>
+                        <p className="mt-2">
+                          P24:{' '}
+                          {buildProperty24Url(p24Reference) ? (
+                            <a
+                              href={buildProperty24Url(p24Reference) ?? '#'}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-red-700 hover:underline"
+                            >
+                              {p24Reference}
+                            </a>
+                          ) : (
+                            '-'
+                          )}
+                        </p>
+                        <p>
+                          Private Property:{' '}
+                          {buildPrivatePropertyUrl(privatePropertyReference) ? (
+                            <a
+                              href={buildPrivatePropertyUrl(privatePropertyReference) ?? '#'}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-red-700 hover:underline"
+                            >
+                              {privatePropertyReference}
+                            </a>
+                          ) : (
+                            '-'
+                          )}
+                        </p>
+                        <p>KWW: {kwwReference ?? '-'}</p>
+                        <p>Entegral: {entegralReference ?? '-'}</p>
+                      </>
+                    );
+                  })()}
                 </div>
               </section>
             </div>
@@ -2201,7 +2384,7 @@ export default function Listings() {
               type="button"
               onClick={() => {
                 setSearch('');
-                setStatusFilter('');
+                setStatusFilter('Active');
                 setSaleOrRentFilter('');
                 setPropertyTypeFilter('');
                 setMinPriceFilter('');
@@ -2263,7 +2446,7 @@ export default function Listings() {
             {visibleItems.map((item) => {
               const images = item.image_urls ?? [];
               const activeImage = images[0] ?? null;
-              const statusTag = (item.listing_status_tag ?? '').trim() || (item.sale_or_rent ?? '').trim();
+              const statusTag = deriveListingStatusTag(item.listing_status_tag, item.sale_or_rent);
               const listingStatus = (item.status_name ?? '').trim();
               const agentDisplayName = item.primary_agent_name || item.primary_contact_name || 'Assigned Agent';
               const agentImageUrl = (item.primary_agent_image_url ?? '').trim();
@@ -2331,7 +2514,7 @@ export default function Listings() {
 
                   <div className="space-y-2.5 p-4 pt-3 md:p-5 md:pt-4">
                     <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-xl font-semibold leading-tight text-slate-900">{item.short_title ?? item.property_title ?? item.listing_number ?? 'Untitled'}</p>
+                      <p className="truncate text-xl font-semibold leading-tight text-slate-900">{item.property_title ?? item.short_title ?? item.listing_number ?? 'Untitled'}</p>
                       <button className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-600 hover:bg-slate-50" type="button" onClick={(e) => { e.stopPropagation(); void openEditForm(item); }}>Edit</button>
                     </div>
                     <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 items-start">
@@ -2428,7 +2611,7 @@ export default function Listings() {
                   return (
                     <tr key={item.id} className="cursor-pointer hover:bg-slate-50" onClick={() => openPreview(item)}>
                       <td className="px-3 py-2">
-                        <div className="font-medium text-slate-900">{item.short_title ?? item.property_title ?? item.listing_number ?? '-'}</div>
+                        <div className="font-medium text-slate-900">{item.property_title ?? item.short_title ?? item.listing_number ?? '-'}</div>
                         <div className="text-xs text-slate-500">{item.listing_number ?? item.source_listing_id}</div>
                       </td>
                       <td className="px-3 py-2">
@@ -2436,7 +2619,7 @@ export default function Listings() {
                       </td>
                       <td className="px-3 py-2">
                         {item.sale_or_rent && <span className="mr-1">{item.sale_or_rent}</span>}
-                        {item.listing_status_tag && <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-xs text-blue-700">{item.listing_status_tag}</span>}
+                        {deriveListingStatusTag(item.listing_status_tag, item.sale_or_rent) && <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-xs text-blue-700">{deriveListingStatusTag(item.listing_status_tag, item.sale_or_rent)}</span>}
                       </td>
                       <td className="px-3 py-2">{item.status_name ?? '-'}</td>
                       <td className="px-3 py-2">{[[item.street_number, item.street_name].filter(Boolean).join(' '), item.suburb, item.city].filter(Boolean).join(', ') || item.address_line || '-'}</td>

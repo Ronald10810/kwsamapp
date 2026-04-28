@@ -3,12 +3,20 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import { REPORTS } from '../../pages/reportsConfig';
 
-type NavIconName = 'dashboard' | 'associates' | 'marketCentres' | 'listings' | 'transactions' | 'reports';
+type NavIconName = 'home' | 'dashboard' | 'associates' | 'marketCentres' | 'listings' | 'transactions' | 'reports';
 
 function NavIcon({ name }: { name: NavIconName }) {
   const base = 'h-4 w-4 text-white/90';
 
   switch (name) {
+    case 'home':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
+          <path d="M3 10.5 12 4l9 6.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M5.5 9.5V21h13V9.5" stroke="currentColor" strokeWidth="1.7" />
+          <path d="M9.5 21v-5h5V21" stroke="currentColor" strokeWidth="1.7" />
+        </svg>
+      );
     case 'dashboard':
       return (
         <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
@@ -84,7 +92,8 @@ export default function Sidebar() {
   }
 
   const links = [
-    { path: '/', label: 'Dashboard', icon: 'dashboard' as NavIconName },
+    { path: '/home', label: 'Home', icon: 'home' as NavIconName },
+    { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' as NavIconName },
     { path: '/agents', label: 'Associates', icon: 'associates' as NavIconName },
     { path: '/market-centres', label: 'Market centres', icon: 'marketCentres' as NavIconName },
     { path: '/listings', label: 'Listings', icon: 'listings' as NavIconName },

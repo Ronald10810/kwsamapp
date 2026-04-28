@@ -170,7 +170,6 @@ model MarketCenter {
   
   @@index([addressId])
   @@index([statusId])
-  @@softDelete
   @@map("market_centers")
 }
 
@@ -198,7 +197,6 @@ model Team {
   
   @@index([marketCenterId])
   @@index([statusId])
-  @@softDelete
   @@map("teams")
 }
 
@@ -217,8 +215,11 @@ model TeamStatus {
 
 model Associate {
   id                    Int     @id @default(autoincrement())
+  userId                String? @unique
   firstName             String
   lastName              String
+  nationalId            String?   // legacy: [Required] NationalId
+  ffcNumber             String?   // legacy: FFCNumber
   statusId              Int
   marketCenterId        Int
   teamId                Int?
@@ -226,22 +227,22 @@ model Associate {
   updatedAt             DateTime @updatedAt
   deletedAt             DateTime?
   
-  user                  User?
+  user                  User? @relation(fields: [userId], references: [id], onDelete: SetNull)
   status                AssociateStatus @relation(fields: [statusId], references: [id])
   marketCenter          MarketCenter @relation(fields: [marketCenterId], references: [id])
   team                  Team? @relation(fields: [teamId], references: [id])
   
-  businessDetail        AssociateBusinessDetail?
-  thirdPartyIntegration AssociateThirdPartyIntegration?
-  contactDetail         AssociateContactDetail?
-  listings              ListingAssociate[]
-  transactionAssociates TransactionAssociate[]
-  transfers             AssociateTransfer[]
+  businessDetail                AssociateBusinessDetail?
+  thirdPartyIntegration         AssociateThirdPartyIntegration?
+  contactDetail                 AssociateContactDetail?
+  listings                      ListingAssociate[]
+  transactionAssociates         TransactionAssociate[]
+  transfers                     AssociateTransfer[]
+  sponsoredAssociates           AssociateBusinessDetail[] @relation("GrowthShareSponsor")
   
   @@index([statusId])
   @@index([marketCenterId])
   @@index([teamId])
-  @@softDelete
   @@map("associates")
 }
 
@@ -255,20 +256,28 @@ model AssociateStatus {
 }
 
 model AssociateBusinessDetail {
-  id                      Int     @id @default(cuid())
-  associateId             Int     @unique
-  kwuid                   String?
-  breeNumber              String?
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  id                            Int      @id @default(autoincrement())
+  associateId                   Int      @unique
+  kwuid                         String?
+  breeNumber                    String?
+  proposedGrowthShareSponsor    String?
+  growthShareSponsorId          Int?
+  temporaryGrowthShareSponsor   Boolean  @default(false)
+  listingApprovalRequired       Boolean  @default(false)
+  excludeFromIndividualReports  Boolean  @default(false)
+  vested                        Boolean  @default(false)
+  vestingStartPeriod            DateTime?
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
   
   associate               Associate @relation(fields: [associateId], references: [id], onDelete: Cascade)
+  growthShareSponsor      Associate? @relation("GrowthShareSponsor", fields: [growthShareSponsorId], references: [id])
   
   @@map("associate_business_details")
 }
 
 model AssociateThirdPartyIntegration {
-  id                Int     @id @default(cuid())
+  id                Int     @id @default(autoincrement())
   associateId       Int     @unique
   p24AgentId        Int?
   createdAt         DateTime @default(now())
@@ -280,9 +289,10 @@ model AssociateThirdPartyIntegration {
 }
 
 model AssociateContactDetail {
-  id                Int     @id @default(cuid())
+  id                Int     @id @default(autoincrement())
   associateId       Int     @unique
   email             String?
+  privateEmail      String?  // legacy: PrivateEmail
   phone             String?
   fax               String?
   createdAt         DateTime @default(now())
@@ -339,7 +349,11 @@ model Listing {
   saleOrRentTypeId          Int
   mandateTypeId             Int
   listingTypeId             Int?
+  listingDate               DateTime?   // legacy: [Required] ListingDate
   expiryDate                DateTime?
+  reducedDate               DateTime?   // legacy: ReducedDate
+  pendingDate               DateTime?   // legacy: PendingDate
+  withdrawnDate             DateTime?   // legacy: WithdrawnDate
   occupationDate            DateTime?
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
@@ -368,7 +382,6 @@ model Listing {
   @@index([addressId])
   @@index([marketCenterId])
   @@index([statusId])
-  @@softDelete
   @@map("listings")
 }
 
@@ -400,7 +413,7 @@ model ListingSaleOrRentType {
 }
 
 model ListingDescription {
-  id                Int     @id @default(cuid())
+  id                Int     @id @default(autoincrement())
   listingId         Int     @unique
   propertyTitle     String?
   propertyDescription String?
@@ -425,15 +438,16 @@ model ListingType {
 }
 
 model ListingPriceDetail {
-  id                    Int     @id @default(cuid())
-  listingId             Int     @unique
-  price                 Decimal
-  poa                   Boolean @default(false)
-  noTransferDuty        Boolean @default(false)
+  id                          Int     @id @default(autoincrement())
+  listingId                   Int     @unique
+  price                       Decimal
+  poa                         Boolean @default(false)
+  noTransferDuty              Boolean @default(false)
   ignoreForPriceReducedAlerts Boolean @default(false)
-  repossessed           Boolean @default(false)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  repossessed                 Boolean @default(false)
+  agentPropertyValuation      Decimal?  // legacy: AgentPropertyValuation
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
   
   listing               Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
   
@@ -441,7 +455,7 @@ model ListingPriceDetail {
 }
 
 model ListingBuildingInfo {
-  id                Int     @id @default(cuid())
+  id                Int     @id @default(autoincrement())
   listingId         Int     @unique
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -454,7 +468,7 @@ model ListingBuildingInfo {
 
 model ListingBuildingAreaFeature {
   id                    Int     @id @default(autoincrement())
-  buildingInfoId        String
+  buildingInfoId        Int
   featureId             Int
   createdAt             DateTime @default(now())
   
@@ -475,7 +489,7 @@ model ListingBuildingAreaFeatureType {
 }
 
 model ListingLightStoneValidation {
-  id                    Int     @id @default(cuid())
+  id                    Int     @id @default(autoincrement())
   listingId             Int     @unique
   lightStonePropertyId  Int?
   validationStatus      String?
@@ -488,7 +502,7 @@ model ListingLightStoneValidation {
 }
 
 model ListingThirdPartyIntegration {
-  id                    Int     @id @default(cuid())
+  id                    Int     @id @default(autoincrement())
   listingId             Int     @unique
   property24Reference   Int?
   privatePropertyReference String?
@@ -504,9 +518,13 @@ model ListingThirdPartyIntegration {
 }
 
 model ListingMandateInfo {
-  id                    Int     @id @default(cuid())
-  listingId             Int     @unique
+  id                    Int      @id @default(autoincrement())
+  listingId             Int      @unique
   mandateTypeId         Int
+  signedDate            DateTime?  // legacy: SignedDate
+  onMarketSince         DateTime?  // legacy: OnMarketSince
+  ratesTaxes            Decimal?   // legacy: RatesTaxes
+  monthlyLevy           Decimal?   // legacy: MonthlyLevy
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   
@@ -650,7 +668,6 @@ model Transaction {
   
   @@index([listingId])
   @@index([statusId])
-  @@softDelete
   @@map("transactions")
 }
 
@@ -664,13 +681,19 @@ model TransactionStatus {
 }
 
 model TransactionDescription {
-  id                      Int     @id @default(cuid())
-  transactionId           Int     @unique
-  soldPrice               Decimal
-  contractGCIExclVAT      Decimal
-  transactionDate         DateTime?
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  id                        Int      @id @default(autoincrement())
+  transactionId             Int      @unique
+  soldPrice                 Decimal
+  contractGCIExclVAT        Decimal
+  transactionDate           DateTime?
+  varianceSaleListPricePerc Decimal?   // legacy: VarianceSaleListPricePerc
+  avgCommsPerc              Decimal?   // legacy: AvgCommsPerc
+  soldDate                  DateTime?  // legacy: SoldDate
+  expectedDate              DateTime?  // legacy: ExpectedDate
+  paymentNotes              String?    // legacy: PaymentNotes
+  returnNotes               String?    // legacy: ReturnNotes
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
   
   transaction             Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
   
@@ -739,6 +762,8 @@ model TransactionAssociate {
   managementMarketCenterId          Int?
   transactionAssociateTypeId        Int
   contactId                         Int?
+  splitPercentage                   Decimal @default(0)   // legacy: SplitPercentage - used in financial calculations
+  outsideAgency                     String?               // legacy: OutsideAgency
   softDelete                        Boolean @default(false)
   createdAt                         DateTime @default(now())
   updatedAt                         DateTime @updatedAt
@@ -764,11 +789,19 @@ model TransactionAssociateType {
 }
 
 model TransactionAssociatePaymentDetail {
-  id                              Int     @id @default(autoincrement())
-  transactionAssociateId          Int     @unique
+  id                              Int      @id @default(autoincrement())
+  transactionAssociateId          Int      @unique
   paymentAmount                   Decimal?
   commissionPercentage            Decimal?
   paymentStatus                   String?
+  transactionGCIBeforeFees        Decimal?  // legacy: TransactionGCIBeforeFees
+  productionRoyalties             Decimal?  // legacy: ProductionRoyalties
+  growthShare                     Decimal?  // legacy: GrowthShare
+  gciAfterFeesExclVAT             Decimal?  // legacy: GCIAfterFeesExclVAT
+  capRemaining                    Decimal?  // legacy: CapRemaining
+  associateDollar                 Decimal?  // legacy: AssociateDollar
+  teamDollar                      Decimal?  // legacy: TeamDollar
+  mcDollar                        Decimal?  // legacy: MCDollar
   createdAt                       DateTime @default(now())
   updatedAt                       DateTime @updatedAt
   
@@ -841,7 +874,6 @@ model Contact {
   transactionAssociates TransactionAssociate[]
   transactionContacts   TransactionContact[]
   
-  @@softDelete
   @@map("contacts")
 }
 
@@ -857,6 +889,101 @@ model Document {
   transactionDocs TransactionDocument[]
   
   @@map("documents")
+}
+
+model EmailType {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("email_types")
+}
+
+model IconType {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("icon_types")
+}
+
+model ListingAssociateType {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("listing_associate_types")
+}
+
+model ListingBuildingZoningType {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("listing_building_zoning_types")
+}
+
+model ListingDocumentType {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("listing_document_types")
+}
+
+model ListingLightstoneValidationStatus {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("listing_lightstone_validation_statuses")
+}
+
+model ListingLoomValidationStatus {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("listing_loom_validation_statuses")
+}
+
+model ListingOwnershipType {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("listing_ownership_types")
+}
+
+model ListingPropertyFeatureListingSubType {
+  listingPropertyFeaturesId Int
+  listingSubTypesId         Int
+
+  @@id([listingPropertyFeaturesId, listingSubTypesId])
+
+  @@map("listing_property_feature_listing_sub_types")
+}
+
+model ListingPropertyFeatureListingType {
+  listingPropertyFeaturesId Int
+  listingTypesId            Int
+
+  @@id([listingPropertyFeaturesId, listingTypesId])
+
+  @@map("listing_property_feature_listing_types")
+}
+
+model ListingSubType {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("listing_sub_types")
+}
+
+model ReferralStatus {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("referral_statuses")
+}
+
+model ReferralType {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  @@map("referral_types")
 }
 
 // ============================================================================

@@ -74,25 +74,31 @@ try {
     }
 
     Write-Step "Deploying $ServiceName to Cloud Run"
-    $envVars = @(
-        "NODE_ENV=production",
-        "LOG_LEVEL=$LogLevel",
-        "CORS_ORIGIN=$CorsOrigin",
-        "TRUST_PROXY=true",
-        "DB_CLIENT=$DbClient",
-        "STORAGE_BACKEND=$StorageBackend",
-        "GOOGLE_CLOUD_PROJECT=$GoogleCloudProject"
-    ) -join ","
+    $envFilePath = Join-Path $backendDir ".cloudrun-env.generated.yaml"
+    @(
+        'NODE_ENV: "production"',
+        "LOG_LEVEL: `"$LogLevel`"",
+        "CORS_ORIGIN: `"$CorsOrigin`"",
+        'TRUST_PROXY: "true"',
+        "DB_CLIENT: `"$DbClient`"",
+        "STORAGE_BACKEND: `"$StorageBackend`"",
+        "GOOGLE_CLOUD_PROJECT: `"$GoogleCloudProject`""
+    ) | Set-Content -Path $envFilePath -Encoding UTF8
 
-    & $gcloudCmd run deploy $ServiceName `
-        --source . `
-        --project $ProjectId `
-        --region $Region `
-        --allow-unauthenticated `
-        --add-cloudsql-instances $CloudSqlConnectionName `
-        --set-env-vars $envVars `
-        --set-secrets "DATABASE_URL=${DatabaseUrlSecretName}:latest" `
-        --quiet
+    try {
+        & $gcloudCmd run deploy $ServiceName `
+            --source . `
+            --project $ProjectId `
+            --region $Region `
+            --allow-unauthenticated `
+            --add-cloudsql-instances $CloudSqlConnectionName `
+            --env-vars-file $envFilePath `
+            --set-secrets "DATABASE_URL=${DatabaseUrlSecretName}:latest" `
+            --quiet
+    }
+    finally {
+        Remove-Item -Path $envFilePath -Force -ErrorAction SilentlyContinue
+    }
 
     Write-Step "Fetching service URL"
     $serviceUrl = & $gcloudCmd run services describe $ServiceName `

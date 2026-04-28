@@ -230,19 +230,30 @@ router.get('/summary', async (_req, res) => {
         average_split_percentage: string;
       }>(
         `
+        WITH filtered_tac AS (
+          SELECT tac.transaction_id, tac.gci_after_fees_excl_vat, tac.split_percentage
+          FROM migration.transaction_agent_calculations tac
+          LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+          LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+          WHERE ($3::text = 'allStatuses' OR tac.is_registered = true)
+            AND tac.effective_reporting_date >= $1::date
+            AND tac.effective_reporting_date < $2::date
+            AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
+            AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+        ),
+        grouped_tx AS (
+          SELECT
+            ft.transaction_id,
+            MAX(ct.sales_price) AS sales_price
+          FROM filtered_tac ft
+          LEFT JOIN migration.core_transactions ct ON ct.id = ft.transaction_id
+          GROUP BY ft.transaction_id
+        )
         SELECT
-          COUNT(DISTINCT tac.transaction_id)::text AS total_transactions,
-          COALESCE(SUM(tac.sales_value_component), 0)::text AS total_sales_value,
-          COALESCE(SUM(tac.gci_after_fees_excl_vat), 0)::text AS total_net_commission,
-          COALESCE(AVG(COALESCE(tac.split_percentage, 0)), 0)::text AS average_split_percentage
-        FROM migration.transaction_agent_calculations tac
-        LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
-        LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
-        WHERE ($3::text = 'allStatuses' OR tac.is_registered = true)
-          AND tac.effective_reporting_date >= $1::date
-          AND tac.effective_reporting_date < $2::date
-          AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
-          AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+          COALESCE((SELECT COUNT(*) FROM grouped_tx), 0)::text AS total_transactions,
+          COALESCE((SELECT SUM(sales_price) FROM grouped_tx), 0)::text AS total_sales_value,
+          COALESCE((SELECT SUM(gci_after_fees_excl_vat) FROM filtered_tac), 0)::text AS total_net_commission,
+          COALESCE((SELECT AVG(COALESCE(split_percentage, 0)) FROM filtered_tac), 0)::text AS average_split_percentage
         `,
         reportingWindowParams
       ),
@@ -272,10 +283,11 @@ router.get('/summary', async (_req, res) => {
           SELECT
             COALESCE(tac.office_name, mc.name, 'Unassigned / Unknown') AS market_center,
             tac.transaction_id,
-            tac.sales_value_component,
             tac.gci_after_fees_excl_vat,
-            tac.transaction_gci_before_fees
+            tac.transaction_gci_before_fees,
+            ct.sales_price
           FROM migration.transaction_agent_calculations tac
+          LEFT JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
           LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
           LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
           WHERE ($3::text = 'allStatuses' OR tac.is_registered = true)
@@ -284,14 +296,24 @@ router.get('/summary', async (_req, res) => {
             AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
             AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
         ),
+        per_transaction AS (
+          SELECT
+            market_center,
+            transaction_id,
+            MAX(sales_price) AS sales_price,
+            COALESCE(SUM(transaction_gci_before_fees), 0) AS total_gci,
+            COALESCE(SUM(gci_after_fees_excl_vat), 0) AS total_net_commission
+          FROM mtd
+          GROUP BY market_center, transaction_id
+        ),
         grouped AS (
           SELECT
             market_center,
-            COUNT(DISTINCT transaction_id)::text AS total_transactions,
-            COALESCE(SUM(transaction_gci_before_fees), 0)::text AS total_gci,
-            COALESCE(SUM(gci_after_fees_excl_vat), 0)::text AS total_net_commission,
-            COALESCE(SUM(sales_value_component), 0)::text AS total_sales_value
-          FROM mtd
+            COUNT(*)::text AS total_transactions,
+            COALESCE(SUM(total_gci), 0)::text AS total_gci,
+            COALESCE(SUM(total_net_commission), 0)::text AS total_net_commission,
+            COALESCE(SUM(sales_price), 0)::text AS total_sales_value
+          FROM per_transaction
           GROUP BY market_center
         )
         SELECT
@@ -308,25 +330,43 @@ router.get('/summary', async (_req, res) => {
       ),
       pool.query<{ associate_name: string; market_center: string; total_transactions: string; total_sales_value: string; total_gci: string }>(
         `
+        WITH mtd AS (
+          SELECT
+            COALESCE(tac.agent_name, ca.full_name, ca.source_associate_id, 'Unknown Associate') AS associate_name,
+            COALESCE(tac.office_name, mc.name, 'Unassigned / Unknown') AS market_center,
+            tac.transaction_id,
+            tac.transaction_gci_before_fees,
+            ct.sales_price
+          FROM migration.transaction_agent_calculations tac
+          LEFT JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
+          LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+          LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+          WHERE ($3::text = 'allStatuses' OR tac.is_registered = true)
+            AND tac.is_outside_agent = false
+            AND tac.effective_reporting_date >= $1::date
+            AND tac.effective_reporting_date < $2::date
+            AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
+            AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+        ),
+        per_transaction AS (
+          SELECT
+            associate_name,
+            market_center,
+            transaction_id,
+            MAX(sales_price) AS sales_price,
+            COALESCE(SUM(transaction_gci_before_fees), 0) AS total_gci
+          FROM mtd
+          GROUP BY associate_name, market_center, transaction_id
+        )
         SELECT
-          COALESCE(tac.agent_name, ca.full_name, ca.source_associate_id, 'Unknown Associate') AS associate_name,
-          COALESCE(tac.office_name, mc.name, 'Unassigned / Unknown') AS market_center,
-          COUNT(DISTINCT tac.transaction_id)::text AS total_transactions,
-          COALESCE(SUM(tac.sales_value_component), 0)::text AS total_sales_value,
-          COALESCE(SUM(tac.transaction_gci_before_fees), 0)::text AS total_gci
-        FROM migration.transaction_agent_calculations tac
-        LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
-        LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
-        WHERE ($3::text = 'allStatuses' OR tac.is_registered = true)
-          AND tac.is_outside_agent = false
-          AND tac.effective_reporting_date >= $1::date
-          AND tac.effective_reporting_date < $2::date
-          AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
-          AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
-        GROUP BY
-          COALESCE(tac.agent_name, ca.full_name, ca.source_associate_id, 'Unknown Associate'),
-          COALESCE(tac.office_name, mc.name, 'Unassigned / Unknown')
-        ORDER BY COALESCE(SUM(tac.transaction_gci_before_fees), 0) DESC, COUNT(DISTINCT tac.transaction_id) DESC
+          associate_name,
+          market_center,
+          COUNT(*)::text AS total_transactions,
+          COALESCE(SUM(sales_price), 0)::text AS total_sales_value,
+          COALESCE(SUM(total_gci), 0)::text AS total_gci
+        FROM per_transaction
+        GROUP BY associate_name, market_center
+        ORDER BY COALESCE(SUM(total_gci), 0) DESC, COUNT(*) DESC
         LIMIT 10
         `,
         reportingWindowParams
@@ -995,7 +1035,7 @@ router.get('/:id/calculated-summary', async (req, res) => {
         tac.transaction_side,
         tac.split_percentage::text,
         tac.variance_sale_list_pct::text,
-        tac.sales_value_component::text,
+        COALESCE(ct.sales_price, 0)::text AS sales_value_component,
         tac.transaction_gci_before_fees::text,
         tac.average_commission_pct::text,
         tac.production_royalties::text,
@@ -1015,6 +1055,7 @@ router.get('/:id/calculated-summary', async (req, res) => {
         tac.effective_reporting_date::text,
         tac.is_registered
       FROM migration.transaction_agent_calculations tac
+      LEFT JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
       WHERE tac.transaction_id = $1
       ORDER BY tac.id ASC
       `,

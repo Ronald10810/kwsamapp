@@ -1,0 +1,8 @@
+$LoadFile = "azure-to-gcp-pgloader.load"
+
+if (-not (Test-Path $LoadFile)) {
+  Write-Error "Copy azure-to-gcp-pgloader.load.example to azure-to-gcp-pgloader.load, add your real passwords, then rerun this script."
+  exit 1
+}
+
+docker run --rm -v "${PWD}:/work" dimitri/pgloader:latest pgloader "/work/$LoadFile"

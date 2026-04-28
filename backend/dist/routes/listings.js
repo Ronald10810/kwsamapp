@@ -134,7 +134,7 @@ async function generateNextListingNumber() {
 router.get('/options', async (_req, res) => {
     const base = {
         listing_statuses: ['Active', 'Inactive', 'Draft'],
-        listing_status_tags: ['For Sale', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'],
+        listing_status_tags: ['For Sale', 'To Rent', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'],
         ownership_types: ['Full Title', 'Sectional Title', 'Fractional', 'Leasehold', 'Share Block', 'Time Share'],
         sale_or_rent_types: ['For Sale', 'Procurement Rental', 'Management Rental'],
         property_types: ['Residential', 'Commercial', 'Industrial', 'Business', 'Farm'],
@@ -503,9 +503,37 @@ router.get('/', async (req, res) => {
         sale_or_rent, address_line, street_number, street_name, suburb, city, province, country,
         price::text, expiry_date::text, property_title, short_title,
         property_description, short_description, property_type, property_sub_type,
-        COALESCE(NULLIF(TRIM(property24_ref1), ''), NULLIF(TRIM(cl.listing_payload->>'Property24Id'), ''), NULLIF(TRIM(cl.listing_payload->>'Property24Reference'), '')) AS property24_reference_id,
-        COALESCE(NULLIF(TRIM(private_property_ref1), ''), NULLIF(TRIM(cl.listing_payload->>'PrivatePropertyId'), ''), NULLIF(TRIM(cl.listing_payload->>'PrivatePropertyReference'), '')) AS private_property_reference_id,
-        COALESCE(NULLIF(TRIM(kww_property_reference), ''), NULLIF(TRIM(cl.listing_payload->>'KWWId'), ''), NULLIF(TRIM(cl.listing_payload->>'KWWReference'), '')) AS kww_reference_id,
+        COALESCE(
+          NULLIF(TRIM(property24_ref1), ''),
+          NULLIF(TRIM(property24_ref2), ''),
+          NULLIF(TRIM(cl.listing_payload->>'property24_ref1'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'property24_ref2'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'property24_reference'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'property24_id'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'Property24Id'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'Property24Reference'), '')
+        ) AS property24_reference_id,
+        COALESCE(
+          NULLIF(TRIM(private_property_ref1), ''),
+          NULLIF(TRIM(private_property_ref2), ''),
+          NULLIF(TRIM(cl.listing_payload->>'private_property_ref1'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'private_property_ref2'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'private_property_reference'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'privatePropertyReference'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'PrivatePropertyId'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'PrivatePropertyReference'), '')
+        ) AS private_property_reference_id,
+        COALESCE(
+          NULLIF(TRIM(kww_property_reference), ''),
+          NULLIF(TRIM(kww_ref1), ''),
+          NULLIF(TRIM(kww_ref2), ''),
+          NULLIF(TRIM(cl.listing_payload->>'kww_ref1'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'kww_ref2'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'kww_reference'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'kww_id'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'KWWId'), ''),
+          NULLIF(TRIM(cl.listing_payload->>'KWWReference'), '')
+        ) AS kww_reference_id,
         COALESCE(NULLIF(TRIM(cl.listing_payload->>'EntegralId'), ''), NULLIF(TRIM(cl.listing_payload->>'entegral_id'), ''), NULLIF(TRIM(cl.listing_payload->>'EntegralReference'), '')) AS entegral_reference_id,
         (SELECT COALESCE(a.full_name, la.agent_name)
          FROM migration.listing_agents la

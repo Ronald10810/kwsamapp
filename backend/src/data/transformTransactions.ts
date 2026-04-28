@@ -132,10 +132,6 @@ async function main(): Promise<void> {
       JOIN migration.core_transactions ct ON deduped.source_transaction_id = ct.source_transaction_id
       LEFT JOIN migration.core_associates ca ON deduped.source_associate_id = ca.source_associate_id
       ORDER BY deduped.sort_order
-      ON CONFLICT (transaction_id, source_associate_id) DO UPDATE
-        SET agent_role = EXCLUDED.agent_role,
-            split_percentage = EXCLUDED.split_percentage,
-            updated_at = NOW()
     `);
 
     await recomputeAllTransactionAgentCalculations(client);

@@ -359,7 +359,7 @@ export default function TransactionsPage() {
           result = compareText(a.transaction_status, b.transaction_status);
           break;
         case 'created_date':
-          result = compareDate(a.created_at ?? a.transaction_date, b.created_at ?? b.transaction_date);
+          result = compareDate(a.transaction_date ?? a.created_at, b.transaction_date ?? b.created_at);
           break;
         case 'status_change_date':
           result = compareDate(a.status_change_date, b.status_change_date);
@@ -1198,7 +1198,7 @@ export default function TransactionsPage() {
                 </th>
                 <th className="px-3 py-2">
                   <button type="button" className="inline-flex items-center gap-1 hover:text-slate-900" onClick={() => toggleRegisterSort('created_date')}>
-                    Created Date <span>{sortIndicator('created_date')}</span>
+                    Transaction Date <span>{sortIndicator('created_date')}</span>
                   </button>
                 </th>
                 <th className="px-3 py-2">
@@ -1261,7 +1261,7 @@ export default function TransactionsPage() {
                   <td className="px-3 py-2">
                     <span className="status-chip info">{item.transaction_status ?? '-'}</span>
                   </td>
-                  <td className="px-3 py-2">{toShortDate(item.created_at ?? item.transaction_date)}</td>
+                  <td className="px-3 py-2">{toShortDate(item.transaction_date ?? item.created_at)}</td>
                   <td className="px-3 py-2">{toShortDate(item.status_change_date)}</td>
                   <td className="px-3 py-2">{toMoney(item.sales_price)}</td>
                   <td className="px-3 py-2">{toMoney(item.net_comm)}</td>

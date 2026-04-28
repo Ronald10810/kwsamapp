@@ -4,6 +4,23 @@ import { getOptionalPgPool } from '../config/db.js';
 const router = Router();
 const pool = getOptionalPgPool();
 
+type AssociateListRow = {
+  id: string;
+  source_associate_id: string;
+  full_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  status_name: string | null;
+  kwuid: string | null;
+  image_url: string | null;
+  source_market_center_id: string | null;
+  source_team_id: string | null;
+  market_center_name: string | null;
+  market_center_logo_url: string | null;
+  updated_at: string;
+};
+
 // TODO: Implement associate routes based on legacy AssociateService
 // GET /api/associates - List associates (with filters, search, pagination)
 // POST /api/associates - Create new associate
@@ -69,21 +86,7 @@ router.get('/', async (req, res) => {
     params.push(offset);
     const offsetParam = `$${params.length}`;
 
-    const dataResult = await pool.query<{
-      id: string;
-      source_associate_id: string;
-      full_name: string | null;
-      first_name: string | null;
-      last_name: string | null;
-      email: string | null;
-      status_name: string | null;
-      kwuid: string | null;
-      source_market_center_id: string | null;
-      source_team_id: string | null;
-      market_center_name: string | null;
-      market_center_logo_url: string | null;
-      updated_at: string;
-    }>(
+    const dataResult = await pool.query<AssociateListRow>(
       `
       SELECT
         ca.id,
@@ -94,6 +97,7 @@ router.get('/', async (req, res) => {
         ca.email,
         ca.status_name,
         ca.kwuid,
+        ca.image_url,
         ca.source_market_center_id,
         ca.source_team_id,
         COALESCE(mc.name, ca.source_market_center_id) AS market_center_name,

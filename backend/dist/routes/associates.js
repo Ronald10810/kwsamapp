@@ -58,6 +58,7 @@ router.get('/', async (req, res) => {
         ca.email,
         ca.status_name,
         ca.kwuid,
+        ca.image_url,
         ca.source_market_center_id,
         ca.source_team_id,
         COALESCE(mc.name, ca.source_market_center_id) AS market_center_name,

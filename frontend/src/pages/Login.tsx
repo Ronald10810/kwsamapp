@@ -34,11 +34,13 @@ function loadGsiScript(): Promise<void> {
 }
 
 export default function LoginPage() {
-  const { login, user } = useAuth();
+  const { login, loginAsDev, user } = useAuth();
   const navigate = useNavigate();
   const buttonRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [scriptReady, setScriptReady] = useState(false);
+  const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
+  const canUseLocalDevLogin = import.meta.env.DEV;
 
   useEffect(() => {
     if (user) {
@@ -90,6 +92,19 @@ export default function LoginPage() {
     });
   }, [scriptReady, login, navigate]);
 
+  async function handleDevLogin() {
+    setError(null);
+    setIsDevLoginLoading(true);
+    try {
+      await loginAsDev();
+      navigate('/', { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Dev login failed');
+    } finally {
+      setIsDevLoginLoading(false);
+    }
+  }
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-[#15080d]">
       <div className="absolute inset-0 bg-[radial-gradient(1300px_900px_at_10%_6%,rgba(218,30,57,0.5),transparent_56%),radial-gradient(1200px_900px_at_92%_94%,rgba(138,14,37,0.54),transparent_66%),linear-gradient(140deg,#11050b_0%,#170813_34%,#0a0a14_100%)]" />
@@ -121,6 +136,18 @@ export default function LoginPage() {
 
           <div className="rounded-2xl border border-white/18 bg-white/95 px-5 py-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
             <div ref={buttonRef} className="flex justify-center" />
+            {canUseLocalDevLogin && (
+              <div className="mt-3 flex justify-center">
+                <button
+                  type="button"
+                  className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={handleDevLogin}
+                  disabled={isDevLoginLoading}
+                >
+                  {isDevLoginLoading ? 'Signing in...' : 'Local Dev Login'}
+                </button>
+              </div>
+            )}
             {!scriptReady && !error && <p className="mt-3 text-center text-sm text-[#8a6a6d] animate-pulse">Loading sign-in...</p>}
             {error && <p className="mt-3 text-center text-sm font-medium text-[#b91c1c]">{error}</p>}
           </div>

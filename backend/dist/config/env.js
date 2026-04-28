@@ -61,6 +61,9 @@ export const env = {
     trustProxy: parseBoolean(process.env.TRUST_PROXY, nodeEnv === 'production'),
     corsOrigins: parseList(process.env.CORS_ORIGIN, ['http://localhost:5173']),
     preserveCoreEdits: parseBoolean(process.env.PRESERVE_CORE_EDITS, false),
+    allowDevLogin: parseBoolean(process.env.ALLOW_DEV_LOGIN, nodeEnv === 'development'),
+    googleClientId: normalizeString(process.env.GOOGLE_CLIENT_ID),
+    jwtSecret: normalizeString(process.env.JWT_SECRET) ?? 'dev-jwt-secret-change-in-production',
     database: {
         client: databaseClient,
         url: databaseUrl,

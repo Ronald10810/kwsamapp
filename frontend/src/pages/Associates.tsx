@@ -10,6 +10,7 @@ type AssociateRow = {
   email: string | null;
   status_name: string | null;
   kwuid: string | null;
+  image_url: string | null;
   source_market_center_id: string | null;
   source_team_id: string | null;
   market_center_name: string | null;
@@ -166,7 +167,10 @@ export default function AssociatesPage() {
 
         {!isLoading && !isError && view === 'cards' && (data?.items.length ?? 0) > 0 && (
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {data?.items.map((item) => (
+            {data?.items.map((item) => {
+              const associateImageUrl = (item.image_url ?? '').trim();
+
+              return (
               <article key={item.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm hover:shadow-md transition-shadow">
                 <div className="mb-3 flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-2">
                   <div className="flex min-w-0 items-center gap-2">
@@ -186,9 +190,19 @@ export default function AssociatesPage() {
                 </div>
 
                 <div className="flex items-start gap-3">
-                  <div className="h-11 w-11 shrink-0 rounded-full bg-red-100 text-center text-sm font-semibold leading-[2.75rem] text-red-700">
-                    {initials(associateName(item))}
-                  </div>
+                  {associateImageUrl ? (
+                    <img
+                      src={associateImageUrl}
+                      alt={associateName(item)}
+                      className="h-11 w-11 shrink-0 rounded-full border border-slate-200 object-cover"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  ) : (
+                    <div className="h-11 w-11 shrink-0 rounded-full bg-red-100 text-center text-sm font-semibold leading-[2.75rem] text-red-700">
+                      {initials(associateName(item))}
+                    </div>
+                  )}
                   <div className="min-w-0">
                     <h3 className="truncate text-xl font-semibold text-slate-900">{associateName(item)}</h3>
                     <p className="mt-0.5 text-xs text-slate-500">Source ID: {item.source_associate_id}</p>
@@ -207,7 +221,7 @@ export default function AssociatesPage() {
                   </button>
                 </div>
               </article>
-            ))}
+            );})}
           </div>
         )}
 

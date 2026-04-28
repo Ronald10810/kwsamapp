@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { recomputeAllTransactionAgentCalculations } from '../services/transactionCalculations.js';
 import { getOptionalPgPool } from '../config/db.js';
 import { ensureLocalUploadDirs, resolveLocalUploadDir, storageConfig } from '../config/storage.js';
+import { uploadToGcs } from '../services/gcsStorage.js';
 
 const router = Router();
 const pool = getOptionalPgPool();
@@ -27,27 +28,31 @@ async function ensureUploadDirs(): Promise<void> {
 // Initialize directories on module load
 await ensureUploadDirs();
 
-// Configure multer storage
-const imageStorage = multer.diskStorage({
-  destination: imagesDir,
-  filename: (_req, file, cb) => {
-    const uniqueSuffix = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
-    const ext = path.extname(file.originalname);
-    cb(null, `image-${uniqueSuffix}${ext}`);
-  },
-});
+// Configure multer storage — use memory storage when GCS is enabled
+const imageStorageEngine = storageConfig.localUploadsEnabled
+  ? multer.diskStorage({
+      destination: imagesDir,
+      filename: (_req, file, cb) => {
+        const uniqueSuffix = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
+        const ext = path.extname(file.originalname);
+        cb(null, `image-${uniqueSuffix}${ext}`);
+      },
+    })
+  : multer.memoryStorage();
 
-const documentStorage = multer.diskStorage({
-  destination: documentsDir,
-  filename: (_req, file, cb) => {
-    const uniqueSuffix = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
-    const ext = path.extname(file.originalname);
-    cb(null, `doc-${uniqueSuffix}${ext}`);
-  },
-});
+const documentStorageEngine = storageConfig.localUploadsEnabled
+  ? multer.diskStorage({
+      destination: documentsDir,
+      filename: (_req, file, cb) => {
+        const uniqueSuffix = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
+        const ext = path.extname(file.originalname);
+        cb(null, `doc-${uniqueSuffix}${ext}`);
+      },
+    })
+  : multer.memoryStorage();
 
 const uploadImage = multer({
-  storage: imageStorage,
+  storage: imageStorageEngine,
   limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
@@ -59,7 +64,7 @@ const uploadImage = multer({
 });
 
 const uploadDocument = multer({
-  storage: documentStorage,
+  storage: documentStorageEngine,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
   fileFilter: (_req, file, cb) => {
     const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png'];
@@ -172,6 +177,8 @@ function buildManualAssociateId(): string {
     .padStart(4, '0');
   return `MAN-ASSOC-${ts}-${rand}`;
 }
+
+const HOME_TRANSACTION_STATUSES = ['Start', 'Working', 'Submitted', 'Pending', 'Registered'] as const;
 
 async function saveCollections(client: PoolClient, associateId: number, body: Record<string, unknown>): Promise<void> {
   const socialMedia = toSocialMediaEntries(body.social_media);
@@ -297,6 +304,239 @@ router.get('/options', async (_req, res) => {
         source_market_center_id: row.source_market_center_id,
         market_center_name: row.market_center_name,
       })),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ error: message });
+  }
+});
+
+router.get('/me/home', async (req, res) => {
+  if (!pool) {
+    return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+  }
+
+  const userEmail = req.user?.email?.trim().toLowerCase() ?? '';
+  if (!userEmail) {
+    return res.status(401).json({ error: 'Unauthorised' });
+  }
+
+  try {
+    const associateResult = await pool.query<{
+      id: string;
+      source_associate_id: string;
+      full_name: string | null;
+      status_name: string | null;
+      kwsa_email: string | null;
+      private_email: string | null;
+      email: string | null;
+      source_market_center_id: string | null;
+      source_team_id: string | null;
+    }>(
+      `
+      SELECT
+        a.id::text,
+        a.source_associate_id,
+        a.full_name,
+        a.status_name,
+        a.kwsa_email,
+        a.private_email,
+        a.email,
+        a.source_market_center_id,
+        a.source_team_id
+      FROM migration.core_associates a
+      WHERE LOWER(TRIM(COALESCE(a.kwsa_email, ''))) = $1
+         OR LOWER(TRIM(COALESCE(a.private_email, ''))) = $1
+         OR LOWER(TRIM(COALESCE(a.email, ''))) = $1
+      ORDER BY
+        CASE
+          WHEN LOWER(TRIM(COALESCE(a.kwsa_email, ''))) = $1 THEN 0
+          WHEN LOWER(TRIM(COALESCE(a.private_email, ''))) = $1 THEN 1
+          ELSE 2
+        END,
+        a.updated_at DESC,
+        a.id DESC
+      LIMIT 1
+      `,
+      [userEmail]
+    );
+
+    const associate = associateResult.rows[0] ?? null;
+
+    const statusDefaults = HOME_TRANSACTION_STATUSES.map((status) => ({
+      status,
+      total_transactions: 0,
+      total_gci: 0,
+    }));
+
+    if (!associate) {
+      return res.json({
+        generated_at: new Date().toISOString(),
+        email: userEmail,
+        associate: null,
+        cap: {
+          period_start_date: null,
+          period_end_date: null,
+          total_cap_amount: 0,
+          cap_achieved: 0,
+          cap_remaining: 0,
+          progress_pct: 0,
+        },
+        active_listings: {
+          total: 0,
+          items: [],
+        },
+        transactions_by_status: statusDefaults,
+      });
+    }
+
+    const associateId = Number(associate.id);
+
+    const [capResult, listingCountResult, listingsResult, txStatusResult] = await Promise.all([
+      pool.query<{
+        cap_cycle_start_date: string | null;
+        cap_cycle_end_date: string | null;
+        cap_amount: string;
+        cap_remaining: string;
+      }>(
+        `
+        WITH cycle_candidates AS (
+          SELECT
+            tac.cap_cycle_start_date,
+            tac.cap_cycle_end_date,
+            MAX(tac.cap_amount) AS cap_amount,
+            MAX(tac.effective_reporting_date) AS latest_effective_date,
+            CASE
+              WHEN tac.cap_cycle_start_date IS NOT NULL
+               AND tac.cap_cycle_end_date IS NOT NULL
+               AND CURRENT_DATE BETWEEN tac.cap_cycle_start_date AND tac.cap_cycle_end_date
+                THEN 1
+              ELSE 0
+            END AS current_cycle_rank
+          FROM migration.transaction_agent_calculations tac
+          WHERE tac.associate_id = $1
+          GROUP BY tac.cap_cycle_start_date, tac.cap_cycle_end_date
+        ),
+        chosen_cycle AS (
+          SELECT *
+          FROM cycle_candidates
+          ORDER BY current_cycle_rank DESC,
+                   COALESCE(cap_cycle_end_date, latest_effective_date) DESC NULLS LAST,
+                   latest_effective_date DESC NULLS LAST
+          LIMIT 1
+        )
+        SELECT
+          tac.cap_cycle_start_date::text,
+          tac.cap_cycle_end_date::text,
+          COALESCE(tac.cap_amount, 0)::text AS cap_amount,
+          COALESCE(tac.cap_remaining, 0)::text AS cap_remaining
+        FROM migration.transaction_agent_calculations tac
+        INNER JOIN chosen_cycle c
+          ON tac.cap_cycle_start_date IS NOT DISTINCT FROM c.cap_cycle_start_date
+         AND tac.cap_cycle_end_date IS NOT DISTINCT FROM c.cap_cycle_end_date
+        WHERE tac.associate_id = $1
+        ORDER BY tac.effective_reporting_date DESC NULLS LAST,
+                 tac.updated_at DESC,
+                 tac.id DESC
+        LIMIT 1
+        `,
+        [associateId]
+      ),
+      pool.query<{ total: string }>(
+        `
+        SELECT COUNT(DISTINCT la.listing_id)::text AS total
+        FROM migration.listing_agents la
+        INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
+        WHERE la.associate_id = $1
+          AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+        `,
+        [associateId]
+      ),
+      pool.query<{
+        id: string;
+        source_listing_id: string | null;
+        listing_number: string | null;
+        status_name: string | null;
+        listing_status_tag: string | null;
+        address_line: string | null;
+        suburb: string | null;
+        city: string | null;
+        price: string | null;
+      }>(
+        `
+        SELECT
+          cl.id::text,
+          cl.source_listing_id,
+          cl.listing_number,
+          cl.status_name,
+          cl.listing_status_tag,
+          cl.address_line,
+          cl.suburb,
+          cl.city,
+          cl.price::text
+        FROM migration.listing_agents la
+        INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
+        WHERE la.associate_id = $1
+          AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+        ORDER BY cl.updated_at DESC, cl.id DESC
+        LIMIT 25
+        `,
+        [associateId]
+      ),
+      pool.query<{
+        status_key: string;
+        total_transactions: string;
+        total_gci: string;
+      }>(
+        `
+        SELECT
+          LOWER(TRIM(COALESCE(ct.transaction_status, ''))) AS status_key,
+          COUNT(DISTINCT ct.id)::text AS total_transactions,
+          COALESCE(SUM(COALESCE(tac.gci_after_fees_excl_vat, ct.total_gci, 0)), 0)::text AS total_gci
+        FROM migration.transaction_agents ta
+        INNER JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
+        LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
+        WHERE ta.associate_id = $1
+          AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) IN ('start', 'working', 'submitted', 'pending', 'registered')
+        GROUP BY LOWER(TRIM(COALESCE(ct.transaction_status, '')))
+        `,
+        [associateId]
+      ),
+    ]);
+
+    const capRow = capResult.rows[0];
+    const capAmount = Number(capRow?.cap_amount ?? 0) || 0;
+    const capRemaining = Number(capRow?.cap_remaining ?? 0) || 0;
+    const capAchieved = Math.max(capAmount - capRemaining, 0);
+    const progressPct = capAmount > 0 ? Math.min((capAchieved / capAmount) * 100, 100) : 0;
+
+    const statusMap = new Map(
+      statusDefaults.map((entry) => [entry.status.toLowerCase(), entry] as const)
+    );
+    for (const row of txStatusResult.rows) {
+      const current = statusMap.get(row.status_key);
+      if (!current) continue;
+      current.total_transactions = Number(row.total_transactions ?? 0);
+      current.total_gci = Number(row.total_gci ?? 0);
+    }
+
+    return res.json({
+      generated_at: new Date().toISOString(),
+      email: userEmail,
+      associate,
+      cap: {
+        period_start_date: capRow?.cap_cycle_start_date ?? null,
+        period_end_date: capRow?.cap_cycle_end_date ?? null,
+        total_cap_amount: capAmount,
+        cap_achieved: capAchieved,
+        cap_remaining: Math.max(capRemaining, 0),
+        progress_pct: Number(progressPct.toFixed(2)),
+      },
+      active_listings: {
+        total: Number(listingCountResult.rows[0]?.total ?? 0),
+        items: listingsResult.rows,
+      },
+      transactions_by_status: HOME_TRANSACTION_STATUSES.map((status) => statusMap.get(status.toLowerCase())!),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -892,11 +1132,7 @@ router.put('/:id', async (req, res) => {
 });
 
 router.post('/:id/upload-image', async (req, res, next) => {
-  if (!storageConfig.localUploadsEnabled) {
-    return res.status(503).json({
-      error: 'Local file uploads are disabled in this environment. Configure managed storage before using upload endpoints.'
-    });
-  }
+  const isGcs = !storageConfig.localUploadsEnabled;
 
   try {
     await runUploadMiddleware(req, res, uploadImage.single('image'));
@@ -918,7 +1154,19 @@ router.post('/:id/upload-image', async (req, res, next) => {
   }
 
   try {
-    const imageUrl = `/uploads/images/${req.file.filename}`;
+    let imageUrl: string;
+
+    if (isGcs) {
+      const { publicUrl } = await uploadToGcs(
+        req.file.buffer,
+        req.file.originalname,
+        'image',
+        req.file.mimetype
+      );
+      imageUrl = publicUrl;
+    } else {
+      imageUrl = `/uploads/images/${req.file.filename}`;
+    }
 
     // Update the image_url in the database
     const result = await pool.query(
@@ -927,26 +1175,24 @@ router.post('/:id/upload-image', async (req, res, next) => {
     );
 
     if (result.rowCount === 0) {
-      // Clean up the uploaded file if associate doesn't exist
-      await fs.unlink(req.file.path).catch(() => undefined);
+      if (!isGcs && req.file.path) {
+        await fs.unlink(req.file.path).catch(() => undefined);
+      }
       return res.status(404).json({ error: 'Associate not found.' });
     }
 
     return res.json({ image_url: imageUrl });
   } catch (error) {
-    // Clean up the uploaded file on error
-    await fs.unlink(req.file.path).catch(() => undefined);
+    if (!isGcs && req.file.path) {
+      await fs.unlink(req.file.path).catch(() => undefined);
+    }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return res.status(500).json({ error: message });
   }
 });
 
 router.post('/:id/upload-document', async (req, res, next) => {
-  if (!storageConfig.localUploadsEnabled) {
-    return res.status(503).json({
-      error: 'Local file uploads are disabled in this environment. Configure managed storage before using upload endpoints.'
-    });
-  }
+  const isGcs = !storageConfig.localUploadsEnabled;
 
   try {
     await runUploadMiddleware(req, res, uploadDocument.single('document'));
@@ -970,7 +1216,19 @@ router.post('/:id/upload-document', async (req, res, next) => {
   const documentType = req.body.document_type || 'Unknown';
 
   try {
-    const documentUrl = `/uploads/documents/${req.file.filename}`;
+    let documentUrl: string;
+
+    if (isGcs) {
+      const { publicUrl } = await uploadToGcs(
+        req.file.buffer,
+        req.file.originalname,
+        'doc',
+        req.file.mimetype
+      );
+      documentUrl = publicUrl;
+    } else {
+      documentUrl = `/uploads/documents/${req.file.filename}`;
+    }
 
     // Insert document record
     const result = await pool.query(
@@ -981,15 +1239,14 @@ router.post('/:id/upload-document', async (req, res, next) => {
     );
 
     if (result.rowCount === 0) {
-      // Clean up the uploaded file if insert failed
-      await fs.unlink(req.file.path).catch(() => undefined);
       return res.status(400).json({ error: 'Failed to save document record.' });
     }
 
     return res.json({ document_url: documentUrl });
   } catch (error) {
-    // Clean up the uploaded file on error
-    await fs.unlink(req.file.path).catch(() => undefined);
+    if (!isGcs && req.file.path) {
+      await fs.unlink(req.file.path).catch(() => undefined);
+    }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return res.status(500).json({ error: message });
   }

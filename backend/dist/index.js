@@ -9,7 +9,9 @@ import { closeSharedPgPool } from './config/db.js';
 import { storageConfig } from './config/storage.js';
 import { logger } from './config/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { requireAuth } from './middleware/requireAuth.js';
 import healthRoutes from './routes/health.js';
+import authRoutes from './routes/auth.js';
 import listingRoutes from './routes/listings.js';
 import transactionRoutes from './routes/transactions.js';
 import associateRoutes from './routes/associates.js';
@@ -53,6 +55,8 @@ app.get('/', (_req, res) => {
     });
 });
 // API Routes
+app.use('/api/auth', authRoutes);
+app.use('/api', requireAuth);
 app.use('/api/listings', listingRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/associates', associateRoutes);

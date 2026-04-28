@@ -45,6 +45,9 @@
 
 ## Phase 6: Migration & Go-Live (Week 15-16)
 - [ ] Data migration scripts
+- [ ] Azure Blob to GCS file migration
+- [ ] URL remapping for image/document fields (Azure Blob URLs -> GCS URLs)
+- [ ] Validate migrated file links in listings, transactions, and associate documents
 - [ ] Parallel testing
 - [ ] User training
 - [ ] Production deployment

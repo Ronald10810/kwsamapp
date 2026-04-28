@@ -48,7 +48,10 @@ cd c:\Users\ronal\OneDrive\Desktop\KWSA-Workspace\kwsa-cloud-console\frontend
 
 $IMAGE="africa-south1-docker.pkg.dev/kwsa-mapp/cloud-run-source-deploy/kwsa-frontend-test:live-20260423-1"
 
-docker build --build-arg VITE_API_BASE_URL=https://kwsa-backend-test-hvz5ax66zq-bq.a.run.app -t $IMAGE .
+docker build \
+  --build-arg VITE_API_BASE_URL=https://kwsa-backend-test-hvz5ax66zq-bq.a.run.app \
+  --build-arg VITE_GOOGLE_CLIENT_ID=your-google-web-client-id.apps.googleusercontent.com \
+  -t $IMAGE .
 
 # If docker-credential-gcloud is unavailable, use a temporary Docker config for login/push.
 $env:DOCKER_CONFIG = Join-Path (Get-Location) ".docker-temp"

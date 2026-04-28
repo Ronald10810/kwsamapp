@@ -9,6 +9,9 @@ export declare const env: {
     readonly trustProxy: boolean;
     readonly corsOrigins: string[];
     readonly preserveCoreEdits: boolean;
+    readonly allowDevLogin: boolean;
+    readonly googleClientId: string | null;
+    readonly jwtSecret: string;
     readonly database: {
         readonly client: DatabaseClient;
         readonly url: string | null;
