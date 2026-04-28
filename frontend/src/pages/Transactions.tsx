@@ -1261,7 +1261,7 @@ export default function TransactionsPage() {
                   <td className="px-3 py-2">
                     <span className="status-chip info">{item.transaction_status ?? '-'}</span>
                   </td>
-                  <td className="px-3 py-2">{toShortDate(item.transaction_date ?? item.created_at)}</td>
+                  <td className="px-3 py-2">{toShortDate(item.transaction_date ?? item.created_at ?? null)}</td>
                   <td className="px-3 py-2">{toShortDate(item.status_change_date)}</td>
                   <td className="px-3 py-2">{toMoney(item.sales_price)}</td>
                   <td className="px-3 py-2">{toMoney(item.net_comm)}</td>
