@@ -44,18 +44,20 @@ function toDateValue(value: unknown): string | null {
 }
 
 function parseImageUrls(value: unknown): string[] {
+  const dedupe = (entries: string[]): string[] => [...new Set(entries)];
+
   if (Array.isArray(value)) {
-    return value
+    return dedupe(value
       .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
-      .filter((entry) => /^https?:\/\//i.test(entry) || entry.startsWith('/uploads/'));
+      .filter((entry) => /^https?:\/\//i.test(entry) || entry.startsWith('/uploads/')));
   }
   if (typeof value === 'string') {
     const cleaned = value.replace(/[\[\]"]/g, ' ').replace(/\r?\n/g, '|').trim();
     if (!cleaned) return [];
-    return cleaned
+    return dedupe(cleaned
       .split(/\s*[|;,]\s*/)
       .map((e) => e.trim())
-      .filter((e) => /^https?:\/\//i.test(e) || e.startsWith('/uploads/'));
+      .filter((e) => /^https?:\/\//i.test(e) || e.startsWith('/uploads/')));
   }
   return [];
 }
@@ -533,7 +535,14 @@ router.get('/', async (req, res) => {
     const dataResult = await pool.query(
       `SELECT id::text, source_listing_id, listing_number, status_name, listing_status_tag,
         sale_or_rent, address_line, street_number, street_name, suburb, city, province, country,
-        price::text, expiry_date::text, property_title, short_title,
+        price::text,
+        COALESCE(
+          expiry_date::text,
+          NULLIF(listing_payload->>'expiry_date', ''),
+          NULLIF(listing_payload->>'ExpiryDate', ''),
+          NULLIF(listing_payload->>'ExpirationDate', '')
+        ) AS expiry_date,
+        property_title, short_title,
         property_description, short_description, property_type, property_sub_type,
         COALESCE(
           NULLIF(TRIM(property24_ref1), ''),
@@ -712,7 +721,14 @@ router.get('/:id', async (req, res) => {
         id::text, source_listing_id, source_market_center_id, market_center_id::text,
         listing_number, status_name, listing_status_tag, ownership_type,
         sale_or_rent, address_line, street_number, street_name, suburb, city, province, country,
-        price::text, expiry_date::text, reduced_date::text,
+        price::text,
+        COALESCE(
+          expiry_date::text,
+          NULLIF(listing_payload->>'expiry_date', ''),
+          NULLIF(listing_payload->>'ExpiryDate', ''),
+          NULLIF(listing_payload->>'ExpirationDate', '')
+        ) AS expiry_date,
+        reduced_date::text,
         agent_property_valuation::text,
         no_transfer_duty, property_auction, poa,
         property_title, short_title, property_description, short_description,
@@ -724,6 +740,7 @@ router.get('/:id', async (req, res) => {
         display_address_on_website, viewing_instructions, viewing_directions,
         feed_to_private_property, private_property_ref1, private_property_ref2, private_property_sync_status,
         feed_to_kww, kww_property_reference, kww_ref1, kww_ref2, kww_sync_status,
+        COALESCE(NULLIF(TRIM(listing_payload->>'EntegralId'), ''), NULLIF(TRIM(listing_payload->>'entegral_id'), ''), NULLIF(TRIM(listing_payload->>'EntegralReference'), '')) AS entegral_reference_id,
         feed_to_entegral, entegral_sync_status,
         feed_to_property24, property24_ref1, property24_ref2, property24_sync_status,
         signed_date::text, on_market_since_date::text, rates_and_taxes::text,
