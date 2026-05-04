@@ -8,8 +8,6 @@ import { recomputeAllTransactionAgentCalculations } from '../services/transactio
 import { getOptionalPgPool } from '../config/db.js';
 import { ensureLocalUploadDirs, resolveLocalUploadDir, storageConfig } from '../config/storage.js';
 import { uploadToGcs } from '../services/gcsStorage.js';
-import { resolvePermissions } from '../middleware/permissions.js';
-import { env } from '../config/env.js';
 
 const router = Router();
 const pool = getOptionalPgPool();
@@ -117,21 +115,6 @@ function toDate(value: unknown): string | null {
   return d.toISOString().slice(0, 10);
 }
 
-function addDays(date: Date, days: number): Date {
-  const copy = new Date(date.getTime());
-  copy.setUTCDate(copy.getUTCDate() + days);
-  return copy;
-}
-
-function toIsoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function toTextArray(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
-  return [];
-}
-
 function toBool(value: unknown): boolean {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
@@ -194,298 +177,6 @@ function buildManualAssociateId(): string {
     .padStart(4, '0');
   return `MAN-ASSOC-${ts}-${rand}`;
 }
-
-function buildUtcDate(year: number, monthIndex: number, dayOfMonth: number): Date {
-  const lastDayOfMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
-  const safeDay = Math.max(1, Math.min(dayOfMonth, lastDayOfMonth));
-  return new Date(Date.UTC(year, monthIndex, safeDay));
-}
-
-function computeActiveCapCycle(capDateRaw: string | null): { start: string; end: string } | null {
-  if (!capDateRaw) {
-    return null;
-  }
-
-  const capDateValue = new Date(capDateRaw);
-  if (Number.isNaN(capDateValue.getTime())) {
-    return null;
-  }
-
-  const monthIndex = capDateValue.getUTCMonth();
-  const dayOfMonth = capDateValue.getUTCDate();
-  const today = new Date();
-  const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-  const thisYearReset = buildUtcDate(todayUtc.getUTCFullYear(), monthIndex, dayOfMonth);
-
-  const periodStart = todayUtc >= thisYearReset
-    ? thisYearReset
-    : buildUtcDate(todayUtc.getUTCFullYear() - 1, monthIndex, dayOfMonth);
-  const periodEnd = addDays(buildUtcDate(periodStart.getUTCFullYear() + 1, monthIndex, dayOfMonth), -1);
-
-  return {
-    start: toIsoDate(periodStart),
-    end: toIsoDate(periodEnd),
-  };
-}
-
-// ─── Property24 Agent Sync Helpers ────────────────────────────────────────────
-
-function buildP24AuthHeaders(apiKey: string, userGroupId: string | null | undefined): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Authorization: `Basic ${Buffer.from(apiKey, 'utf8').toString('base64')}`,
-  };
-  if (userGroupId) headers['P24-UserGroupId'] = userGroupId;
-  return headers;
-}
-
-async function resolveP24AgencyIdForMC(
-  pgPool: import('pg').Pool,
-  sourceMarketCenterId: string | null,
-): Promise<number | null> {
-  if (!sourceMarketCenterId) return null;
-  try {
-    const r = await pgPool.query<{ market_center_property24_id: string | null }>(
-      `SELECT market_center_property24_id FROM migration.core_market_centers
-       WHERE source_market_center_id = $1 LIMIT 1`,
-      [sourceMarketCenterId],
-    );
-    const raw = r.rows[0]?.market_center_property24_id;
-    if (!raw) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  } catch {
-    return null;
-  }
-}
-
-interface P24AgentFields {
-  firstName: string | null;
-  lastName: string | null;
-  kwsaEmail: string | null;
-  mobileNumber: string | null;
-  officeNumber: string | null;
-  nationalId: string | null;
-  ffcNumber: string | null;
-  sourceAssociateId: string | null;
-  sourceMarketCenterId: string | null;
-  kwuid: string | null;
-  jobTitles: string[];
-  statusName: string | null;
-}
-
-function buildP24AgentBody(
-  fields: P24AgentFields,
-  agencyId: number | null,
-  p24Status: 'Active' | 'Inactive',
-): Record<string, unknown> {
-  const mc = fields.sourceMarketCenterId ?? '';
-  const uid = fields.kwuid ?? fields.sourceAssociateId ?? '';
-  return {
-    firstname: fields.firstName ?? '',
-    lastname: fields.lastName ?? '',
-    emailAddress: fields.kwsaEmail ?? '',
-    mobileNumber: (fields.mobileNumber ?? '').replace(/[()]/g, ''),
-    workNumber: (fields.officeNumber ?? '').replace(/[()]/g, ''),
-    agencyId: agencyId ?? 0,
-    sourceReference: `KW_${mc}_${uid}`.replace(/_+$/, ''),
-    fidelityFundCertificationNumber: fields.ffcNumber ?? '',
-    idNumber: fields.nationalId ?? '',
-    jobTitle: fields.jobTitles.join(', '),
-    published: true,
-    receiveStatsMail: true,
-    status: p24Status,
-  };
-}
-
-async function loadJobTitlesForAssociate(pgPool: import('pg').Pool, associateId: number): Promise<string[]> {
-  try {
-    const r = await pgPool.query<{ job_title: string }>(
-      `SELECT job_title FROM migration.associate_job_titles WHERE associate_id = $1 ORDER BY id ASC`,
-      [associateId],
-    );
-    return r.rows.map((row) => row.job_title);
-  } catch {
-    return [];
-  }
-}
-
-/** Register a new agent on Property24. Returns the numeric P24 agent ID on success, or null. */
-async function callP24CreateAgent(
-  fields: P24AgentFields,
-  agencyId: number | null,
-  apiBase: string,
-  apiKey: string,
-  userGroupId: string | null | undefined,
-): Promise<number | null> {
-  try {
-    const body = buildP24AgentBody(fields, agencyId, 'Active');
-    const resp = await fetch(`${apiBase.replace(/\/$/, '')}/agents`, {
-      method: 'POST',
-      headers: buildP24AuthHeaders(apiKey, userGroupId),
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      console.warn(`[P24] Create agent HTTP ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
-      return null;
-    }
-    const text = await resp.text();
-    // P24 returns the new agent ID as a plain integer in the response body
-    const parsed = Number(text.trim().replace(/[^0-9]/g, ''));
-    return parsed > 0 ? parsed : null;
-  } catch (err) {
-    console.warn('[P24] Create agent error:', err);
-    return null;
-  }
-}
-
-/** Update an existing agent on Property24 (MC transfer, status change, profile update). */
-async function callP24UpdateAgent(
-  p24AgentId: number,
-  fields: P24AgentFields,
-  agencyId: number | null,
-  p24Status: 'Active' | 'Inactive',
-  apiBase: string,
-  apiKey: string,
-  userGroupId: string | null | undefined,
-): Promise<boolean> {
-  try {
-    const body = buildP24AgentBody(fields, agencyId, p24Status);
-    const resp = await fetch(`${apiBase.replace(/\/$/, '')}/agents/${p24AgentId}`, {
-      method: 'PUT',
-      headers: buildP24AuthHeaders(apiKey, userGroupId),
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      console.warn(`[P24] Update agent ${p24AgentId} HTTP ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
-    }
-    return resp.ok;
-  } catch (err) {
-    console.warn('[P24] Update agent error:', err);
-    return false;
-  }
-}
-
-/**
- * Load the P24AgentFields for an associate directly from the DB.
- * sourceMarketCenterId can be overridden (e.g., after a transfer).
- */
-async function loadP24AgentFields(
-  pgPool: import('pg').Pool,
-  associateId: number,
-  sourceMarketCenterIdOverride?: string | null,
-): Promise<P24AgentFields | null> {
-  try {
-    const r = await pgPool.query<{
-      first_name: string | null; last_name: string | null; kwsa_email: string | null;
-      mobile_number: string | null; office_number: string | null; national_id: string | null;
-      ffc_number: string | null; source_associate_id: string | null;
-      source_market_center_id: string | null; kwuid: string | null; status_name: string | null;
-    }>(
-      `SELECT first_name, last_name, kwsa_email, mobile_number, office_number, national_id,
-              ffc_number, source_associate_id, source_market_center_id, kwuid, status_name
-       FROM migration.core_associates WHERE id = $1 LIMIT 1`,
-      [associateId],
-    );
-    const row = r.rows[0];
-    if (!row) return null;
-    const jobTitles = await loadJobTitlesForAssociate(pgPool, associateId);
-    return {
-      firstName: row.first_name,
-      lastName: row.last_name,
-      kwsaEmail: row.kwsa_email,
-      mobileNumber: row.mobile_number,
-      officeNumber: row.office_number,
-      nationalId: row.national_id,
-      ffcNumber: row.ffc_number,
-      sourceAssociateId: row.source_associate_id,
-      sourceMarketCenterId: sourceMarketCenterIdOverride !== undefined
-        ? sourceMarketCenterIdOverride
-        : row.source_market_center_id,
-      kwuid: row.kwuid,
-      jobTitles,
-      statusName: row.status_name,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Send a withdraw to P24 for every active P24-linked listing where the associate is primary agent.
- * Updates property24_sync_status on each listing. Non-fatal — errors are logged.
- */
-async function withdrawP24ListingsForAgent(
-  pgPool: import('pg').Pool,
-  associateId: number,
-  apiBase: string,
-  apiKey: string,
-  userGroupId: string | null | undefined,
-  defaultAgencyId: string | null | undefined,
-): Promise<void> {
-  let rows: Array<{
-    id: string; listing_number: string | null; property24_ref1: string | null;
-    sale_or_rent: string | null; market_center_property24_id: string | null;
-  }>;
-  try {
-    const r = await pgPool.query(
-      `SELECT cl.id::text, cl.listing_number, cl.property24_ref1, cl.sale_or_rent,
-              mc.market_center_property24_id
-       FROM migration.listing_agents la
-       INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
-       LEFT JOIN migration.core_market_centers mc
-         ON mc.source_market_center_id = cl.source_market_center_id
-       WHERE la.associate_id = $1
-         AND la.is_primary = true
-         AND cl.feed_to_property24 = true
-         AND NULLIF(TRIM(COALESCE(cl.property24_ref1, '')), '') IS NOT NULL
-         AND LOWER(TRIM(COALESCE(cl.listing_status_tag, cl.status_name, '')))
-               NOT IN ('withdrawn', 'inactive', 'archived')`,
-      [associateId],
-    );
-    rows = r.rows as typeof rows;
-  } catch (err) {
-    console.warn('[P24] Withdraw listings query error:', err);
-    return;
-  }
-
-  const base = apiBase.replace(/\/$/, '');
-  const authHeaders = buildP24AuthHeaders(apiKey, userGroupId);
-
-  for (const row of rows) {
-    const p24Ref = row.property24_ref1;
-    if (!p24Ref) continue;
-    const agencyId = Number(row.market_center_property24_id ?? defaultAgencyId ?? 0);
-    const listingType = (row.sale_or_rent ?? '').toLowerCase().includes('rent') ? 'Rental' : 'ResidentialSale';
-    const withdrawPayload = {
-      agencyId,
-      listingNumber: Number(p24Ref),
-      listingType,
-      status: 'Withdrawn',
-    };
-    try {
-      const resp = await fetch(`${base}/listings`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(withdrawPayload),
-      });
-      const syncMsg = resp.ok
-        ? `Withdrawn by agent deactivation ${new Date().toISOString().slice(0, 10)}`
-        : `Withdraw failed HTTP ${resp.status}`;
-      await pgPool.query(
-        `UPDATE migration.core_listings SET property24_sync_status = $1, updated_at = NOW() WHERE id = $2`,
-        [syncMsg, row.id],
-      );
-      if (!resp.ok) {
-        console.warn(`[P24] Withdraw listing ${p24Ref} HTTP ${resp.status}`);
-      }
-    } catch (err) {
-      console.warn(`[P24] Withdraw listing ${p24Ref} error:`, err);
-    }
-  }
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
 
 const HOME_TRANSACTION_STATUSES = ['Start', 'Working', 'Submitted', 'Pending', 'Registered'] as const;
 
@@ -582,43 +273,34 @@ async function saveCollections(client: PoolClient, associateId: number, body: Re
   }
 }
 
-router.get('/options', async (req, res) => {
+router.get('/options', async (_req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }
 
-  const statusInput = String(req.query.status ?? '').trim().toLowerCase();
-
   try {
     const result = await pool.query<{
-      id: string;
       source_associate_id: string;
       full_name: string | null;
-      market_center_id: string | null;
       source_market_center_id: string | null;
       market_center_name: string | null;
     }>(
       `
       SELECT
-        a.id::text AS id,
         a.source_associate_id,
         a.full_name,
-        a.market_center_id::text AS market_center_id,
         a.source_market_center_id,
         mc.name AS market_center_name
       FROM migration.core_associates a
       LEFT JOIN migration.core_market_centers mc ON mc.id = a.market_center_id
-      ${statusInput === 'active' ? "WHERE (LOWER(TRIM(COALESCE(a.status_name, ''))) = 'active' OR TRIM(COALESCE(a.status_name, '')) = '1')" : ''}
       ORDER BY a.full_name ASC NULLS LAST, a.source_associate_id ASC
       `
     );
 
     return res.json({
       items: result.rows.map((row) => ({
-        id: row.id,
         source_associate_id: row.source_associate_id,
         full_name: row.full_name,
-        market_center_id: row.market_center_id,
         source_market_center_id: row.source_market_center_id,
         market_center_name: row.market_center_name,
       })),
@@ -650,8 +332,6 @@ router.get('/me/home', async (req, res) => {
       email: string | null;
       source_market_center_id: string | null;
       source_team_id: string | null;
-      cap_date: string | null;
-      total_cap_amount: string | null;
     }>(
       `
       SELECT
@@ -663,9 +343,7 @@ router.get('/me/home', async (req, res) => {
         a.private_email,
         a.email,
         a.source_market_center_id,
-        a.source_team_id,
-        a.cap_date::text,
-        a.total_cap_amount::text
+        a.source_team_id
       FROM migration.core_associates a
       WHERE LOWER(TRIM(COALESCE(a.kwsa_email, ''))) = $1
          OR LOWER(TRIM(COALESCE(a.private_email, ''))) = $1
@@ -714,180 +392,123 @@ router.get('/me/home', async (req, res) => {
 
     const associateId = Number(associate.id);
 
-    const homeSchemaResult = await pool.query<{
-      has_listing_agents: boolean;
-      has_tac_table: boolean;
-      has_tac_cap_cycle_start_date: boolean;
-      has_tac_cap_cycle_end_date: boolean;
-      has_tac_cap_amount: boolean;
-      has_tac_cap_remaining: boolean;
-      has_tac_gci_after_fees_excl_vat: boolean;
-      has_tac_effective_reporting_date: boolean;
-    }>(
-      `
-      SELECT
-        to_regclass('migration.listing_agents') IS NOT NULL AS has_listing_agents,
-        to_regclass('migration.transaction_agent_calculations') IS NOT NULL AS has_tac_table,
-        EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'migration'
-            AND table_name = 'transaction_agent_calculations'
-            AND column_name = 'cap_cycle_start_date'
-        ) AS has_tac_cap_cycle_start_date,
-        EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'migration'
-            AND table_name = 'transaction_agent_calculations'
-            AND column_name = 'cap_cycle_end_date'
-        ) AS has_tac_cap_cycle_end_date,
-        EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'migration'
-            AND table_name = 'transaction_agent_calculations'
-            AND column_name = 'cap_amount'
-        ) AS has_tac_cap_amount,
-        EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'migration'
-            AND table_name = 'transaction_agent_calculations'
-            AND column_name = 'cap_remaining'
-        ) AS has_tac_cap_remaining,
-        EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'migration'
-            AND table_name = 'transaction_agent_calculations'
-            AND column_name = 'gci_after_fees_excl_vat'
-        ) AS has_tac_gci_after_fees_excl_vat,
-        EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'migration'
-            AND table_name = 'transaction_agent_calculations'
-            AND column_name = 'effective_reporting_date'
-        ) AS has_tac_effective_reporting_date
-      `
-    );
-
-    const homeSchema = homeSchemaResult.rows[0] ?? {
-      has_listing_agents: false,
-      has_tac_table: false,
-      has_tac_cap_cycle_start_date: false,
-      has_tac_cap_cycle_end_date: false,
-      has_tac_cap_amount: false,
-      has_tac_cap_remaining: false,
-      has_tac_gci_after_fees_excl_vat: false,
-      has_tac_effective_reporting_date: false,
-    };
-
-    const activeCapCycle = computeActiveCapCycle(associate.cap_date);
-    const totalCapAmount = Math.max(Number(associate.total_cap_amount ?? 0) || 0, 0);
-
-    const canUseTacGci = homeSchema.has_tac_table && homeSchema.has_tac_gci_after_fees_excl_vat;
-
-    const [capAchievedResult, listingCountResult, listingsResult, txStatusResult] = await Promise.all([
-      activeCapCycle && homeSchema.has_tac_table && homeSchema.has_tac_effective_reporting_date
-        ? pool.query<{
-            cap_achieved: string;
-          }>(
-            `
-            SELECT
-              COALESCE(SUM(tac.market_center_dollar), 0)::text AS cap_achieved
-            FROM migration.transaction_agent_calculations tac
-            WHERE tac.associate_id = $1
-              AND tac.is_registered = true
-              AND tac.effective_reporting_date >= $2::date
-              AND tac.effective_reporting_date <= $3::date
-              AND tac.market_center_dollar IS NOT NULL
-            `,
-            [associateId, activeCapCycle.start, activeCapCycle.end]
-          )
-        : Promise.resolve({ rows: [{ cap_achieved: '0' }] }),
-      homeSchema.has_listing_agents
-        ? pool.query<{ total: string }>(
-            `
-            SELECT COUNT(DISTINCT la.listing_id)::text AS total
-            FROM migration.listing_agents la
-            INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
-            WHERE la.associate_id = $1
-              AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
-            `,
-            [associateId]
-          )
-        : Promise.resolve({ rows: [{ total: '0' }] }),
-      homeSchema.has_listing_agents
-        ? pool.query<{
-            id: string;
-            source_listing_id: string | null;
-            listing_number: string | null;
-            status_name: string | null;
-            listing_status_tag: string | null;
-            address_line: string | null;
-            suburb: string | null;
-            city: string | null;
-            price: string | null;
-          }>(
-            `
-            SELECT
-              cl.id::text,
-              cl.source_listing_id,
-              cl.listing_number,
-              cl.status_name,
-              cl.listing_status_tag,
-              cl.address_line,
-              cl.suburb,
-              cl.city,
-              cl.price::text
-            FROM migration.listing_agents la
-            INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
-            WHERE la.associate_id = $1
-              AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
-            ORDER BY cl.updated_at DESC, cl.id DESC
-            LIMIT 25
-            `,
-            [associateId]
-          )
-        : Promise.resolve({ rows: [] }),
+    const [capResult, listingCountResult, listingsResult, txStatusResult] = await Promise.all([
+      pool.query<{
+        cap_cycle_start_date: string | null;
+        cap_cycle_end_date: string | null;
+        cap_amount: string;
+        cap_remaining: string;
+      }>(
+        `
+        WITH cycle_candidates AS (
+          SELECT
+            tac.cap_cycle_start_date,
+            tac.cap_cycle_end_date,
+            MAX(tac.cap_amount) AS cap_amount,
+            MAX(tac.effective_reporting_date) AS latest_effective_date,
+            CASE
+              WHEN tac.cap_cycle_start_date IS NOT NULL
+               AND tac.cap_cycle_end_date IS NOT NULL
+               AND CURRENT_DATE BETWEEN tac.cap_cycle_start_date AND tac.cap_cycle_end_date
+                THEN 1
+              ELSE 0
+            END AS current_cycle_rank
+          FROM migration.transaction_agent_calculations tac
+          WHERE tac.associate_id = $1
+          GROUP BY tac.cap_cycle_start_date, tac.cap_cycle_end_date
+        ),
+        chosen_cycle AS (
+          SELECT *
+          FROM cycle_candidates
+          ORDER BY current_cycle_rank DESC,
+                   COALESCE(cap_cycle_end_date, latest_effective_date) DESC NULLS LAST,
+                   latest_effective_date DESC NULLS LAST
+          LIMIT 1
+        )
+        SELECT
+          tac.cap_cycle_start_date::text,
+          tac.cap_cycle_end_date::text,
+          COALESCE(tac.cap_amount, 0)::text AS cap_amount,
+          COALESCE(tac.cap_remaining, 0)::text AS cap_remaining
+        FROM migration.transaction_agent_calculations tac
+        INNER JOIN chosen_cycle c
+          ON tac.cap_cycle_start_date IS NOT DISTINCT FROM c.cap_cycle_start_date
+         AND tac.cap_cycle_end_date IS NOT DISTINCT FROM c.cap_cycle_end_date
+        WHERE tac.associate_id = $1
+        ORDER BY tac.effective_reporting_date DESC NULLS LAST,
+                 tac.updated_at DESC,
+                 tac.id DESC
+        LIMIT 1
+        `,
+        [associateId]
+      ),
+      pool.query<{ total: string }>(
+        `
+        SELECT COUNT(DISTINCT la.listing_id)::text AS total
+        FROM migration.listing_agents la
+        INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
+        WHERE la.associate_id = $1
+          AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+        `,
+        [associateId]
+      ),
+      pool.query<{
+        id: string;
+        source_listing_id: string | null;
+        listing_number: string | null;
+        status_name: string | null;
+        listing_status_tag: string | null;
+        address_line: string | null;
+        suburb: string | null;
+        city: string | null;
+        price: string | null;
+      }>(
+        `
+        SELECT
+          cl.id::text,
+          cl.source_listing_id,
+          cl.listing_number,
+          cl.status_name,
+          cl.listing_status_tag,
+          cl.address_line,
+          cl.suburb,
+          cl.city,
+          cl.price::text
+        FROM migration.listing_agents la
+        INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
+        WHERE la.associate_id = $1
+          AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+        ORDER BY cl.updated_at DESC, cl.id DESC
+        LIMIT 25
+        `,
+        [associateId]
+      ),
       pool.query<{
         status_key: string;
         total_transactions: string;
         total_gci: string;
       }>(
-        canUseTacGci
-          ? `
-            SELECT
-              LOWER(TRIM(COALESCE(ct.transaction_status, ''))) AS status_key,
-              COUNT(DISTINCT ct.id)::text AS total_transactions,
-              COALESCE(SUM(COALESCE(tac.gci_after_fees_excl_vat, ct.total_gci, 0)), 0)::text AS total_gci
-            FROM migration.transaction_agents ta
-            INNER JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
-            LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
-            WHERE ta.associate_id = $1
-              AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) IN ('start', 'working', 'submitted', 'pending', 'registered')
-            GROUP BY LOWER(TRIM(COALESCE(ct.transaction_status, '')))
-            `
-          : `
-            SELECT
-              LOWER(TRIM(COALESCE(ct.transaction_status, ''))) AS status_key,
-              COUNT(DISTINCT ct.id)::text AS total_transactions,
-              COALESCE(SUM(COALESCE(ct.total_gci, 0)), 0)::text AS total_gci
-            FROM migration.transaction_agents ta
-            INNER JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
-            WHERE ta.associate_id = $1
-              AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) IN ('start', 'working', 'submitted', 'pending', 'registered')
-            GROUP BY LOWER(TRIM(COALESCE(ct.transaction_status, '')))
-            `,
+        `
+        SELECT
+          LOWER(TRIM(COALESCE(ct.transaction_status, ''))) AS status_key,
+          COUNT(DISTINCT ct.id)::text AS total_transactions,
+          COALESCE(SUM(COALESCE(tac.gci_after_fees_excl_vat, ct.total_gci, 0)), 0)::text AS total_gci
+        FROM migration.transaction_agents ta
+        INNER JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
+        LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
+        WHERE ta.associate_id = $1
+          AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) IN ('start', 'working', 'submitted', 'pending', 'registered')
+        GROUP BY LOWER(TRIM(COALESCE(ct.transaction_status, '')))
+        `,
         [associateId]
       ),
     ]);
 
-    const capAchieved = Math.max(Number(capAchievedResult.rows[0]?.cap_achieved ?? 0) || 0, 0);
-    const capRemaining = totalCapAmount > 0 ? Math.max(totalCapAmount - capAchieved, 0) : 0;
-    const progressPct = totalCapAmount > 0 ? Math.min((capAchieved / totalCapAmount) * 100, 100) : 0;
+    const capRow = capResult.rows[0];
+    const capAmount = Number(capRow?.cap_amount ?? 0) || 0;
+    const capRemaining = Number(capRow?.cap_remaining ?? 0) || 0;
+    const capAchieved = Math.max(capAmount - capRemaining, 0);
+    const progressPct = capAmount > 0 ? Math.min((capAchieved / capAmount) * 100, 100) : 0;
 
     const statusMap = new Map(
       statusDefaults.map((entry) => [entry.status.toLowerCase(), entry] as const)
@@ -904,11 +525,11 @@ router.get('/me/home', async (req, res) => {
       email: userEmail,
       associate,
       cap: {
-        period_start_date: activeCapCycle?.start ?? null,
-        period_end_date: activeCapCycle?.end ?? null,
-        total_cap_amount: totalCapAmount,
+        period_start_date: capRow?.cap_cycle_start_date ?? null,
+        period_end_date: capRow?.cap_cycle_end_date ?? null,
+        total_cap_amount: capAmount,
         cap_achieved: capAchieved,
-        cap_remaining: capRemaining,
+        cap_remaining: Math.max(capRemaining, 0),
         progress_pct: Number(progressPct.toFixed(2)),
       },
       active_listings: {
@@ -923,7 +544,7 @@ router.get('/me/home', async (req, res) => {
   }
 });
 
-router.get('/:id/details', resolvePermissions, async (req, res) => {
+router.get('/:id/details', async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }
@@ -966,7 +587,6 @@ router.get('/:id/details', resolvePermissions, async (req, res) => {
         a.entegral_opt_in,
         a.agent_entegral_id,
         a.entegral_status,
-        COALESCE(a.agent_entegral_portals, ARRAY[]::TEXT[]) AS agent_entegral_portals,
         a.private_property_opt_in,
         a.private_property_status,
         a.cap::text,
@@ -977,10 +597,8 @@ router.get('/:id/details', resolvePermissions, async (req, res) => {
         a.start_date::text,
         a.end_date::text,
         a.anniversary_date::text,
-        a.cap_date::text,
-        COALESCE(mc.entegral_portals, ARRAY[]::TEXT[]) AS mc_entegral_portals
+        a.cap_date::text
       FROM migration.core_associates a
-      LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = a.source_market_center_id
       WHERE a.id = $1
       LIMIT 1
       `,
@@ -1035,79 +653,18 @@ router.get('/:id/details', resolvePermissions, async (req, res) => {
     const dateNotes = notes.rows.filter((n) => n.note_type === 'dates');
     const documentNotes = notes.rows.filter((n) => n.note_type === 'documents');
 
-    // Determine whether the requesting user has admin-level visibility over this associate.
-    // Admin access means: GLOBAL scope, or MARKET_CENTRE scope for the associate's own MC,
-    // or the user is viewing their own record (OWN scope + matching id).
-    const perms = req.permissions!;
-    const targetMcId = (payload.source_market_center_id as string | null) ?? null;
-    const isOwnRecord = (payload.id as string) === perms.associateDbId;
-    const hasAdminView =
-      perms.scope === 'GLOBAL' ||
-      (perms.scope === 'MARKET_CENTRE' && targetMcId === perms.marketCenterId) ||
-      isOwnRecord;
-
-    // Fields visible only to users with admin-level access for this associate
-    const sensitiveFields: Record<string, unknown> = hasAdminView
-      ? {
-          national_id: payload.national_id,
-          private_email: payload.private_email,
-          growth_share_sponsor: payload.growth_share_sponsor,
-          temporary_growth_share_sponsor: payload.temporary_growth_share_sponsor,
-          proposed_growth_share_sponsor: payload.proposed_growth_share_sponsor,
-          vested: payload.vested,
-          vesting_period_start_date: payload.vesting_period_start_date,
-          listing_approval_required: payload.listing_approval_required,
-          exclude_from_individual_reports: payload.exclude_from_individual_reports,
-          cap: payload.cap,
-          manual_cap: payload.manual_cap,
-          agent_split: payload.agent_split,
-          projected_cos: payload.projected_cos,
-          projected_cap: payload.projected_cap,
-          start_date: payload.start_date,
-          end_date: payload.end_date,
-          anniversary_date: payload.anniversary_date,
-          cap_date: payload.cap_date,
-          documents: documents.rows,
-          commission_notes: commissionNotes,
-          date_notes: dateNotes,
-          document_notes: documentNotes,
-        }
-      : {
-          national_id: null,
-          private_email: null,
-          growth_share_sponsor: null,
-          temporary_growth_share_sponsor: null,
-          proposed_growth_share_sponsor: null,
-          vested: null,
-          vesting_period_start_date: null,
-          listing_approval_required: null,
-          exclude_from_individual_reports: null,
-          cap: null,
-          manual_cap: null,
-          agent_split: null,
-          projected_cos: null,
-          projected_cap: null,
-          start_date: null,
-          end_date: null,
-          anniversary_date: null,
-          cap_date: null,
-          documents: [],
-          commission_notes: [],
-          date_notes: [],
-          document_notes: [],
-        };
-
     return res.json({
       ...payload,
-      ...sensitiveFields,
-      // canEdit: lets the frontend know whether to show the edit form
-      canEdit: hasAdminView || isOwnRecord,
       social_media: socialMedia.rows,
       roles: roles.rows.map((row) => row.role_name),
       job_titles: jobTitles.rows.map((row) => row.job_title),
       service_communities: serviceCommunities.rows.map((row) => row.community_name),
       admin_market_centers: adminMarketCenters.rows.map((row) => row.source_market_center_id),
       admin_teams: adminTeams.rows.map((row) => row.source_team_id),
+      documents: documents.rows,
+      commission_notes: commissionNotes,
+      date_notes: dateNotes,
+      document_notes: documentNotes,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -1248,15 +805,9 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', resolvePermissions, async (req, res) => {
+router.post('/', async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
-  }
-
-  // Only Regional Admin or Office Admin may create new associates
-  const perms = req.permissions!;
-  if (perms.scope === 'OWN') {
-    return res.status(403).json({ error: 'Permission denied: only admins may create new associates' });
   }
 
   const body = (req.body ?? {}) as Record<string, unknown>;
@@ -1267,11 +818,6 @@ router.post('/', resolvePermissions, async (req, res) => {
   const sourceAssociateId = toText(body.source_associate_id) ?? buildManualAssociateId();
   const sourceMarketCenterId = toText(body.source_market_center_id);
   const sourceTeamId = toText(body.source_team_id);
-
-  // MARKET_CENTRE scope: Office Admin may only create associates in their own MC
-  if (perms.scope === 'MARKET_CENTRE' && sourceMarketCenterId && sourceMarketCenterId !== perms.marketCenterId) {
-    return res.status(403).json({ error: 'Permission denied: you may only create associates in your assigned market centre' });
-  }
 
   if (!fullName) {
     return res.status(400).json({ error: 'full_name (or first_name/last_name) is required.' });
@@ -1359,7 +905,6 @@ router.post('/', resolvePermissions, async (req, res) => {
         entegral_opt_in,
         agent_entegral_id,
         entegral_status,
-        agent_entegral_portals,
         private_property_opt_in,
         private_property_status,
         cap,
@@ -1376,7 +921,7 @@ router.post('/', resolvePermissions, async (req, res) => {
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
         $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
         $21,$22::date,$23,$24,$25,$26,$27,$28,$29,$30,
-        $31,$32,$33,$34,$35,$36,$37,$38,$39::date,$40::date,$41::date,$42::date,
+        $31,$32,$33,$34,$35,$36,$37,$38::date,$39::date,$40::date,$41::date,
         NOW()
       )
       RETURNING id::text
@@ -1412,7 +957,6 @@ router.post('/', resolvePermissions, async (req, res) => {
         entegralOptIn,
         agentEntegralId,
         entegralStatus,
-        toTextArray(body.agent_entegral_portals),
         privatePropertyOptIn,
         privatePropertyStatus,
         cap,
@@ -1428,48 +972,11 @@ router.post('/', resolvePermissions, async (req, res) => {
     );
 
     const associateId = Number(insert.rows[0].id);
-
     await saveCollections(client, associateId, body);
     await recomputeAllTransactionAgentCalculations(client);
 
     await client.query('COMMIT');
-
-    // P24: auto-register agent when opted in and no P24 ID was provided manually
-    let resolvedP24Id = agentProperty24Id;
-    if (property24OptIn && !agentProperty24Id && env.property24.baseUrl && env.property24.apiKey && pool) {
-      try {
-        const jobTitles = await loadJobTitlesForAssociate(pool, associateId);
-        const agencyId = await resolveP24AgencyIdForMC(pool, sourceMarketCenterId)
-          ?? (env.property24.defaultAgencyId ? Number(env.property24.defaultAgencyId) : null);
-        const fields: P24AgentFields = {
-          firstName, lastName, kwsaEmail, mobileNumber, officeNumber: toText(body.office_number),
-          nationalId, ffcNumber, sourceAssociateId, sourceMarketCenterId, kwuid,
-          jobTitles, statusName: toText(body.status_name),
-        };
-        const p24Id = await callP24CreateAgent(fields, agencyId, env.property24.baseUrl, env.property24.apiKey, env.property24.userGroupId);
-        if (p24Id) {
-          resolvedP24Id = String(p24Id);
-          await pool.query(
-            `UPDATE migration.core_associates
-             SET agent_property24_id = $1, property24_status = 'Registered', updated_at = NOW()
-             WHERE id = $2`,
-            [resolvedP24Id, associateId],
-          );
-          console.info(`[P24] Registered new agent ${String(associateId)} → P24 ID ${p24Id}`);
-        } else {
-          await pool.query(
-            `UPDATE migration.core_associates
-             SET property24_status = 'Registration failed - retry via profile', updated_at = NOW()
-             WHERE id = $1`,
-            [associateId],
-          );
-        }
-      } catch (p24Err) {
-        console.warn('[P24] Auto-register on create error:', p24Err);
-      }
-    }
-
-    return res.status(201).json({ id: insert.rows[0].id, source_associate_id: sourceAssociateId, agent_property24_id: resolvedP24Id });
+    return res.status(201).json({ id: insert.rows[0].id, source_associate_id: sourceAssociateId });
   } catch (error) {
     await client.query('ROLLBACK');
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -1479,7 +986,7 @@ router.post('/', resolvePermissions, async (req, res) => {
   }
 });
 
-router.put('/:id', resolvePermissions, async (req, res) => {
+router.put('/:id', async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }
@@ -1489,63 +996,7 @@ router.put('/:id', resolvePermissions, async (req, res) => {
     return res.status(400).json({ error: 'Invalid associate id.' });
   }
 
-  // Enforce edit permission: look up the target associate's MC and verify scope
-  const perms = req.permissions!;
-  if (perms.scope !== 'GLOBAL') {
-    const targetAssoc = await pool.query<{ id: string; source_market_center_id: string | null }>(
-      `SELECT id::text, source_market_center_id FROM migration.core_associates WHERE id = $1 LIMIT 1`,
-      [id]
-    );
-    if (!targetAssoc.rows[0]) {
-      return res.status(404).json({ error: 'Associate not found.' });
-    }
-    const targetMcId = targetAssoc.rows[0].source_market_center_id;
-    const isOwnRecord = targetAssoc.rows[0].id === perms.associateDbId;
-
-    if (perms.scope === 'OWN') {
-      if (!isOwnRecord) {
-        return res.status(403).json({ error: 'Permission denied: you may only edit your own profile' });
-      }
-    } else if (perms.scope === 'MARKET_CENTRE') {
-      if (targetMcId !== perms.marketCenterId && !isOwnRecord) {
-        return res.status(403).json({ error: 'Permission denied: associate is not in your market centre' });
-      }
-    }
-  }
-
   const body = (req.body ?? {}) as Record<string, unknown>;
-
-  // ── Role / title edit restrictions ─────────────────────────────────────────
-  // Agents cannot modify roles, job titles, or admin market centers at all.
-  // Office Admins can modify job titles and admin market centers but may not
-  // assign or remove the Regional Admin role.
-  // Only Regional Admins may set the Regional Admin role.
-  if (perms.scope === 'OWN') {
-    // Strip any attempt to change roles, job_titles or admin_market_centers
-    delete (body as Record<string, unknown>).roles;
-    delete (body as Record<string, unknown>).job_titles;
-    delete (body as Record<string, unknown>).admin_market_centers;
-  } else if (perms.scope === 'MARKET_CENTRE') {
-    const submittedRoles = Array.isArray(body.roles) ? (body.roles as unknown[]).map(String) : null;
-    if (submittedRoles !== null) {
-      // Fetch the current roles for this associate so we can preserve any
-      // Regional Admin role that was already set (they cannot add or remove it).
-      const currentRolesResult = await pool.query<{ role_name: string }>(
-        `SELECT role_name FROM migration.associate_roles WHERE associate_id = $1`,
-        [id]
-      );
-      const currentRoles = currentRolesResult.rows.map((r) => r.role_name);
-      const hasCurrentRegionalAdmin = currentRoles.some((r) => r.trim().toUpperCase().replace(/\s+/g, '_') === 'REGIONAL_ADMIN');
-      // Prevent adding Regional Admin
-      const filteredRoles = submittedRoles.filter((r) => r.trim().toUpperCase().replace(/\s+/g, '_') !== 'REGIONAL_ADMIN');
-      // Re-add Regional Admin if it was already present (preserve it, don't strip it)
-      if (hasCurrentRegionalAdmin) filteredRoles.push('Regional Admin');
-      (body as Record<string, unknown>).roles = filteredRoles;
-    }
-  }
-  // GLOBAL scope: no restrictions — all fields allowed as submitted.
-  // ───────────────────────────────────────────────────────────────────────────
-
   const firstName = toText(body.first_name);
   const lastName = toText(body.last_name);
   const fallbackFullName = [firstName, lastName].filter(Boolean).join(' ').trim();
@@ -1560,21 +1011,6 @@ router.put('/:id', resolvePermissions, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
-    // Load prior state so we can detect MC transfer and deactivation after commit
-    const priorStateResult = await client.query<{
-      source_market_center_id: string | null;
-      status_name: string | null;
-      agent_property24_id: string | null;
-      property24_opt_in: boolean | null;
-    }>(
-      `SELECT source_market_center_id, status_name, agent_property24_id, property24_opt_in
-       FROM migration.core_associates WHERE id = $1 LIMIT 1`,
-      [id],
-    );
-    const prevMC = priorStateResult.rows[0]?.source_market_center_id ?? null;
-    const prevStatusRaw = (priorStateResult.rows[0]?.status_name ?? '').toLowerCase().trim();
-    const prevP24Id = toText(priorStateResult.rows[0]?.agent_property24_id);
 
     const mcLookup = sourceMarketCenterId
       ? await client.query<{ id: string }>(
@@ -1617,20 +1053,19 @@ router.put('/:id', resolvePermissions, async (req, res) => {
         entegral_opt_in = $27,
         agent_entegral_id = $28,
         entegral_status = $29,
-        agent_entegral_portals = $30,
-        private_property_opt_in = $31,
-        private_property_status = $32,
-        cap = $33,
-        manual_cap = $34,
-        agent_split = $35,
-        projected_cos = $36,
-        projected_cap = $37,
-        start_date = $38::date,
-        end_date = $39::date,
-        anniversary_date = $40::date,
-        cap_date = $41::date,
+        private_property_opt_in = $30,
+        private_property_status = $31,
+        cap = $32,
+        manual_cap = $33,
+        agent_split = $34,
+        projected_cos = $35,
+        projected_cap = $36,
+        start_date = $37::date,
+        end_date = $38::date,
+        anniversary_date = $39::date,
+        cap_date = $40::date,
         updated_at = NOW()
-      WHERE id = $42
+      WHERE id = $41
       RETURNING id::text
       `,
       [
@@ -1663,7 +1098,6 @@ router.put('/:id', resolvePermissions, async (req, res) => {
         toBool(body.entegral_opt_in),
         toText(body.agent_entegral_id),
         toText(body.entegral_status),
-        toTextArray(body.agent_entegral_portals),
         toBool(body.private_property_opt_in),
         toText(body.private_property_status),
         toNumber(body.cap),
@@ -1687,81 +1121,6 @@ router.put('/:id', resolvePermissions, async (req, res) => {
     await saveCollections(client, id, body);
   await recomputeAllTransactionAgentCalculations(client);
     await client.query('COMMIT');
-
-    // P24 sync — runs after commit, best-effort (errors don't fail the response)
-    const p24Base = env.property24.baseUrl;
-    const p24Key = env.property24.apiKey;
-    if (pool && p24Base && p24Key) {
-      try {
-        const newP24OptIn = toBool(body.property24_opt_in);
-        const newP24IdRaw = toText(body.agent_property24_id) ?? prevP24Id;
-        const newP24Id = newP24IdRaw ? Number(newP24IdRaw) : 0;
-        const newMC = toText(body.source_market_center_id);
-        const newStatusRaw = (toText(body.status_name) ?? '').toLowerCase().trim();
-
-        // Deactivation: was active/working, now inactive/withdrawn
-        const activeStatuses = new Set(['active', '1', 'working', '']);
-        const inactiveStatuses = new Set(['inactive', 'withdrawn', '0', 'archived', 'terminated']);
-        const wasActive = activeStatuses.has(prevStatusRaw);
-        const isNowInactive = inactiveStatuses.has(newStatusRaw);
-        const isDeactivating = wasActive && isNowInactive;
-
-        if (newP24OptIn && newP24Id > 0) {
-          const agencyId = await resolveP24AgencyIdForMC(pool, newMC)
-            ?? (env.property24.defaultAgencyId ? Number(env.property24.defaultAgencyId) : null);
-
-          if (isDeactivating) {
-            // 1. Mark agent inactive on P24
-            const fields = await loadP24AgentFields(pool, id, newMC);
-            if (fields) {
-              await callP24UpdateAgent(newP24Id, fields, agencyId, 'Inactive', p24Base, p24Key, env.property24.userGroupId);
-              console.info(`[P24] Deactivated agent ${id} (P24 ID ${newP24Id})`);
-            }
-            // 2. Withdraw all active P24-linked listings for this agent
-            await withdrawP24ListingsForAgent(pool, id, p24Base, p24Key, env.property24.userGroupId, env.property24.defaultAgencyId);
-            await pool.query(
-              `UPDATE migration.core_associates SET property24_status = 'Deactivated', updated_at = NOW() WHERE id = $1`,
-              [id],
-            );
-          } else if (newMC !== prevMC) {
-            // MC transfer: update agencyId on P24 so listings continue under the new office
-            const fields = await loadP24AgentFields(pool, id, newMC);
-            if (fields) {
-              const ok = await callP24UpdateAgent(newP24Id, fields, agencyId, 'Active', p24Base, p24Key, env.property24.userGroupId);
-              const statusMsg = ok ? `Updated - MC transfer to ${newMC ?? '?'}` : `Update failed - MC transfer`;
-              await pool.query(
-                `UPDATE migration.core_associates SET property24_status = $1, updated_at = NOW() WHERE id = $2`,
-                [statusMsg, id],
-              );
-              console.info(`[P24] MC transfer for agent ${id} → new MC ${newMC ?? '?'} (${ok ? 'ok' : 'failed'})`);
-            }
-          }
-        } else if (newP24OptIn && newP24Id <= 0) {
-          // Opted in but no P24 ID yet — auto-register
-          const fields = await loadP24AgentFields(pool, id, newMC);
-          if (fields) {
-            const agencyId = await resolveP24AgencyIdForMC(pool, newMC)
-              ?? (env.property24.defaultAgencyId ? Number(env.property24.defaultAgencyId) : null);
-            const p24Id = await callP24CreateAgent(fields, agencyId, p24Base, p24Key, env.property24.userGroupId);
-            if (p24Id) {
-              await pool.query(
-                `UPDATE migration.core_associates SET agent_property24_id = $1, property24_status = 'Registered', updated_at = NOW() WHERE id = $2`,
-                [String(p24Id), id],
-              );
-              console.info(`[P24] Registered agent ${id} → P24 ID ${p24Id}`);
-            } else {
-              await pool.query(
-                `UPDATE migration.core_associates SET property24_status = 'Registration failed - retry via profile', updated_at = NOW() WHERE id = $1`,
-                [id],
-              );
-            }
-          }
-        }
-      } catch (p24Err) {
-        console.warn('[P24] Agent sync error on update:', p24Err);
-      }
-    }
-
     return res.json({ id: result.rows[0].id });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1769,62 +1128,6 @@ router.put('/:id', resolvePermissions, async (req, res) => {
     return res.status(500).json({ error: message });
   } finally {
     client.release();
-  }
-});
-
-// Manual P24 registration / re-sync endpoint
-router.post('/:id/register-on-property24', async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
-
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid associate id.' });
-
-  const p24Base = env.property24.baseUrl;
-  const p24Key = env.property24.apiKey;
-  if (!p24Base || !p24Key) {
-    return res.status(503).json({ error: 'Property24 API is not configured. Set PROPERTY24_BASE_URL and PROPERTY24_API_KEY.' });
-  }
-
-  try {
-    const fields = await loadP24AgentFields(pool, id);
-    if (!fields) return res.status(404).json({ error: 'Associate not found.' });
-
-    const existingResult = await pool.query<{ agent_property24_id: string | null; property24_opt_in: boolean | null }>(
-      `SELECT agent_property24_id, property24_opt_in FROM migration.core_associates WHERE id = $1 LIMIT 1`,
-      [id],
-    );
-    const existingP24Id = toText(existingResult.rows[0]?.agent_property24_id);
-    const agencyId = await resolveP24AgencyIdForMC(pool, fields.sourceMarketCenterId)
-      ?? (env.property24.defaultAgencyId ? Number(env.property24.defaultAgencyId) : null);
-
-    if (existingP24Id && Number(existingP24Id) > 0) {
-      // Already has a P24 ID — update instead
-      const ok = await callP24UpdateAgent(Number(existingP24Id), fields, agencyId, 'Active', p24Base, p24Key, env.property24.userGroupId);
-      await pool.query(
-        `UPDATE migration.core_associates SET property24_status = $1, updated_at = NOW() WHERE id = $2`,
-        [ok ? 'Re-synced' : 'Re-sync failed', id],
-      );
-      return res.json({ success: ok, agent_property24_id: existingP24Id, action: 'updated' });
-    }
-
-    // No P24 ID — register new
-    const p24Id = await callP24CreateAgent(fields, agencyId, p24Base, p24Key, env.property24.userGroupId);
-    if (p24Id) {
-      await pool.query(
-        `UPDATE migration.core_associates SET agent_property24_id = $1, property24_opt_in = true,
-         property24_status = 'Registered', updated_at = NOW() WHERE id = $2`,
-        [String(p24Id), id],
-      );
-      return res.json({ success: true, agent_property24_id: String(p24Id), action: 'created' });
-    }
-    await pool.query(
-      `UPDATE migration.core_associates SET property24_status = 'Registration failed', updated_at = NOW() WHERE id = $1`,
-      [id],
-    );
-    return res.status(422).json({ success: false, error: 'Property24 agent registration failed. Check agent data and P24 credentials.' });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return res.status(500).json({ error: message });
   }
 });
 
@@ -1946,170 +1249,6 @@ router.post('/:id/upload-document', async (req, res, next) => {
     }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return res.status(500).json({ error: message });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// POST /:id/sync-to-entegral  — push agent to Entegral (create or update)
-// ---------------------------------------------------------------------------
-
-router.post('/:id/sync-to-entegral', async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
-
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid associate id.' });
-
-  const entegralBaseUrl = env.entegral.baseUrl;
-  const entegralGlobalAuth = env.entegral.globalAuth;
-
-  if (!entegralBaseUrl || !entegralGlobalAuth) {
-    return res.status(501).json({
-      success: false,
-      error: 'Entegral integration is not configured. Set ENTEGRAL_BASE_URL and ENTEGRAL_GLOBAL_AUTH.',
-    });
-  }
-
-  const authHeader = `Basic ${Buffer.from(entegralGlobalAuth).toString('base64')}`;
-  const entegralUrl = (segment: string) => `${entegralBaseUrl.replace(/\/$/, '')}/${segment}`;
-
-  try {
-    // Load agent
-    const agentResult = await pool.query(
-      `SELECT a.id::text, a.first_name, a.last_name, a.full_name, a.status_name,
-              a.kwsa_email, a.mobile_number, a.office_number, a.image_url,
-              a.source_associate_id, a.source_market_center_id, a.market_center_id,
-              a.agent_entegral_id, a.entegral_opt_in, a.entegral_status,
-              a.updated_at::text
-       FROM migration.core_associates a WHERE a.id = $1 LIMIT 1`,
-      [id]
-    );
-
-    if (agentResult.rowCount === 0) {
-      return res.status(404).json({ error: 'Associate not found.' });
-    }
-
-    const agent = agentResult.rows[0] as Record<string, unknown>;
-
-    // Determine action
-    const statusName = (toText(agent.status_name) ?? '').toLowerCase();
-    const isDeactivate = req.body?.action === 'delete' ||
-      statusName === 'inactive' || statusName === 'terminated';
-    const existingEntegralId = toText(agent.agent_entegral_id);
-    const action = isDeactivate ? 'delete' : existingEntegralId ? 'update' : 'create';
-
-    // Load market center (for clientOfficeID and portalAgent list)
-    const mcLookupId = toText(agent.market_center_id);
-    let marketCenter: Record<string, unknown> | undefined;
-    let entegralPortals: string[] = [];
-
-    if (mcLookupId) {
-      const mcColResult = await pool.query<{ column_name: string }>(
-        `SELECT column_name FROM information_schema.columns
-         WHERE table_schema = 'migration' AND table_name = 'core_market_centers'
-           AND column_name IN ('source_market_center_id', 'name', 'entegral_portals', 'contact_number', 'contact_email')`
-      );
-      const mcCols = new Set(mcColResult.rows.map((r) => r.column_name));
-      const optSelect = ['entegral_portals', 'contact_number', 'contact_email']
-        .map((c) => (mcCols.has(c) ? c : `NULL AS ${c}`))
-        .join(', ');
-
-      const mcResult = await pool.query(
-        `SELECT id::text, source_market_center_id, name, ${optSelect}
-         FROM migration.core_market_centers WHERE id::text = $1 LIMIT 1`,
-        [mcLookupId]
-      );
-      marketCenter = mcResult.rows[0] as Record<string, unknown> | undefined;
-
-      const rawPortals = marketCenter?.entegral_portals;
-      if (Array.isArray(rawPortals)) {
-        entegralPortals = rawPortals.map(String).filter(Boolean);
-      } else if (typeof rawPortals === 'string' && rawPortals) {
-        entegralPortals = rawPortals
-          .replace(/^\{|\}$/g, '')
-          .split(',')
-          .map((s) => s.trim().replace(/^"|"$/g, ''))
-          .filter(Boolean);
-      }
-    }
-
-    // Load job titles
-    const jobTitleResult = await pool.query<{ job_title: string }>(
-      `SELECT job_title FROM migration.associate_job_titles WHERE associate_id = $1 ORDER BY id ASC`,
-      [id]
-    );
-    const role = jobTitleResult.rows.map((r) => r.job_title).join(', ') || 'Agent';
-
-    const clientAgentID = existingEntegralId ?? toText(agent.source_associate_id) ?? String(id);
-    const clientOfficeID = toText(agent.source_market_center_id) ?? toText(marketCenter?.source_market_center_id) ?? '';
-    const firstName = toText(agent.first_name) ?? '';
-    const lastName = toText(agent.last_name) ?? '';
-    const fullName = toText(agent.full_name) ?? `${firstName} ${lastName}`.trim();
-
-    const entegralPayload: Record<string, unknown> = {
-      clientAgentID,
-      clientOfficeID,
-      fullName,
-      lastName,
-      role,
-      cell: toText(agent.mobile_number) ?? '',
-      email: toText(agent.kwsa_email) ?? '',
-      officeTel: toText(agent.office_number) ?? toText(marketCenter?.contact_number) ?? '',
-      officeEmail: toText(marketCenter?.contact_email) ?? '',
-      profile: '',
-      action,
-      photo: toText(agent.image_url) ?? '',
-      timeStamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
-      portalAgent: entegralPortals.map((p) => ({ name: p, id: p })),
-    };
-
-    // POST agent to Entegral
-    const entegralResponse = await fetch(entegralUrl('agents'), {
-      method: 'POST',
-      headers: {
-        Authorization: authHeader,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify(entegralPayload),
-      signal: AbortSignal.timeout(30000),
-    });
-
-    const rawResponseBody = await entegralResponse.text();
-    let parsedResponse: unknown;
-    try { parsedResponse = JSON.parse(rawResponseBody); } catch { parsedResponse = rawResponseBody; }
-
-    const success = entegralResponse.ok;
-    const newStatus = success
-      ? (isDeactivate ? 'Deactivated' : existingEntegralId ? 'Updated' : 'Synced')
-      : `Error ${entegralResponse.status}`;
-
-    // Persist new entegral ID if this was a create
-    let newEntegralId = existingEntegralId;
-    if (success && action === 'create') {
-      const body = parsedResponse as Record<string, unknown> | null;
-      newEntegralId = (typeof body?.clientAgentID === 'string' ? body.clientAgentID : null) ?? clientAgentID;
-    }
-
-    await pool.query(
-      `UPDATE migration.core_associates
-       SET agent_entegral_id = $1, entegral_status = $2, updated_at = NOW()
-       WHERE id = $3`,
-      [newEntegralId, newStatus, id]
-    );
-
-    return res.status(success ? 200 : 422).json({
-      success,
-      message: success
-        ? `Agent ${action === 'delete' ? 'deactivated on' : action === 'update' ? 'updated on' : 'registered on'} Entegral.`
-        : `Entegral responded with status ${entegralResponse.status}`,
-      agent_entegral_id: newEntegralId,
-      action,
-      ...(process.env.NODE_ENV !== 'production' ? { rawResponse: parsedResponse, payload: entegralPayload } : {}),
-    });
-  } catch (err) {
-    console.error('[sync-to-entegral] Error:', err);
-    const message = err instanceof Error ? err.message : String(err);
-    return res.status(500).json({ success: false, error: message });
   }
 });
 
