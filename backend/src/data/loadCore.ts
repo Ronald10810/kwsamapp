@@ -40,6 +40,21 @@ function normalizeDate(value: unknown): string | null {
   return date.toISOString().slice(0, 10);
 }
 
+function normalizeBoolean(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return null;
+  }
+
+  const text = normalizeText(value)?.toLowerCase();
+  if (!text) return null;
+  if (['true', '1', 'yes', 'y'].includes(text)) return true;
+  if (['false', '0', 'no', 'n'].includes(text)) return false;
+  return null;
+}
+
 function payloadRecord(payload: unknown): Record<string, unknown> {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
   return payload as Record<string, unknown>;
@@ -67,6 +82,312 @@ function payloadDate(record: Record<string, unknown>, keys: string[]): string | 
     if (value) return value;
   }
   return null;
+}
+
+function payloadBool(record: Record<string, unknown>, keys: string[]): boolean | null {
+  for (const key of keys) {
+    const value = normalizeBoolean(record[key]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function payloadObject(record: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  for (const key of keys) {
+    const value = record[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+  }
+  return {};
+}
+
+function payloadArray(record: Record<string, unknown>, keys: string[]): unknown[] {
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+function toTextList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    const items: string[] = [];
+    for (const entry of value) {
+      if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        const obj = entry as Record<string, unknown>;
+        const label = payloadText(obj, ['Name', 'name', 'Value', 'value', 'P24Tag', 'p24_tag']);
+        if (label) items.push(label);
+        continue;
+      }
+
+      const text = normalizeText(entry);
+      if (text) items.push(text);
+    }
+    return items;
+  }
+
+  const text = normalizeText(value);
+  if (!text) return [];
+
+  return text
+    .split(/[|,;]+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function uniqueText(values: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
+function areaTypeFromLegacyId(id: number | null): string | null {
+  if (id === null) return null;
+
+  const map: Record<number, string> = {
+    1: 'Bedroom',
+    2: 'Bathroom',
+    3: 'Bar',
+    4: 'Braai Room',
+    5: 'Dining Room',
+    7: 'Garage',
+    9: 'Kitchen',
+    10: 'Lounge',
+    12: 'Office',
+    13: 'Outbuilding',
+    14: 'Pool',
+    16: 'Parking',
+    17: 'Security',
+    23: 'Family TV Room',
+    24: 'Entrance Hall',
+  };
+
+  return map[id] ?? null;
+}
+
+async function syncListingCoreDetailsFromPayload(): Promise<void> {
+  await runInTransaction(async (client) => {
+    const listingRows = await client.query<{
+      id: string;
+      listing_payload: unknown;
+    }>(
+      `SELECT id::text, listing_payload FROM migration.core_listings`
+    );
+
+    for (const listing of listingRows.rows) {
+      const payload = payloadRecord(listing.listing_payload);
+      const buildingInfo = payloadObject(payload, ['ListingBuildingInfo', 'listing_building_info']);
+      const sustainabilityInfo = payloadObject(payload, [
+        'ListingBuildingInfoSustainability',
+        'listing_building_info_sustainability',
+      ]);
+      const internetInfo = payloadObject(payload, ['ListingBuildingInfoInternet', 'listing_building_info_internet']);
+      const publicTransportInfo = payloadObject(payload, [
+        'ListingBuildingInfoPublicTransport',
+        'listing_building_info_public_transport',
+      ]);
+      const zoningObj = payloadObject(buildingInfo, ['ListingBuildingZoningType', 'listing_building_zoning_type']);
+
+      // Fall back to top-level payload keys for CSV-imported listings where building info is not nested
+      const erfSize = payloadNumber(buildingInfo, ['ErfSize', 'erf_size']) ?? payloadNumber(payload, ['ErfSize', 'erf_size']);
+      const floorArea = payloadNumber(buildingInfo, ['FloorArea', 'floor_area']) ?? payloadNumber(payload, ['FloorArea', 'floor_area']);
+      const constructionDate = payloadDate(buildingInfo, [
+        'ConstructionYear',
+        'ConstructionDate',
+        'construction_year',
+        'construction_date',
+      ]) ?? payloadDate(payload, ['ConstructionYear', 'ConstructionDate', 'construction_year', 'construction_date']);
+      const heightRestriction = payloadNumber(buildingInfo, [
+        'HeightRestriction',
+        'HeighRestriction',
+        'height_restriction',
+      ]) ?? payloadNumber(payload, ['HeightRestriction', 'HeighRestriction', 'height_restriction']);
+      const outBuildingSize = payloadNumber(buildingInfo, ['OutBuildingSize', 'out_building_size']) ?? payloadNumber(payload, ['OutBuildingSize', 'out_building_size']);
+
+      const zoningType =
+        payloadText(zoningObj, ['Name', 'name']) ??
+        payloadText(buildingInfo, ['ZoningType', 'zoning_type', 'ListingBuildingZoningType']) ??
+        payloadText(payload, ['ZoningType', 'zoning_type']);
+
+      const isFurnished = payloadBool(buildingInfo, ['FurnishedProperty', 'is_furnished', 'IsFurnished']);
+      const petFriendly = payloadBool(buildingInfo, ['PetFriendly', 'pet_friendly']);
+      const hasStandaloneBuilding = payloadBool(buildingInfo, [
+        'HasStandaloneBuilding',
+        'has_standalone_building',
+      ]);
+      const hasFlatlet = payloadBool(buildingInfo, ['HasFlatlet', 'has_flatlet']);
+      const hasBackupWater = payloadBool(buildingInfo, ['HasBackupWater', 'has_backup_water']);
+      const wheelchairAccessible = payloadBool(buildingInfo, [
+        'WheelChairAccessible',
+        'WheelchairAccessible',
+        'wheelchair_accessible',
+      ]);
+      const hasGenerator = payloadBool(buildingInfo, ['HasGenerator', 'has_generator']);
+
+      const hasBorehole = payloadBool(sustainabilityInfo, ['HasBorehole', 'has_borehole']);
+      const hasGasGeyser = payloadBool(sustainabilityInfo, ['HasGasGeyser', 'has_gas_geyser']);
+      const hasSolarPanels = payloadBool(sustainabilityInfo, ['HasSolarPanels', 'has_solar_panels']);
+      const hasBackupBatteryOrInverter = payloadBool(sustainabilityInfo, [
+        'HasBackupBatteryOrInverter',
+        'has_backup_battery_or_inverter',
+      ]);
+      const hasSolarGeyser = payloadBool(sustainabilityInfo, ['HasSolarGeyser', 'has_solar_geyser']);
+      const hasWaterTank = payloadBool(sustainabilityInfo, ['HasWaterTank', 'has_water_tank']);
+
+      const adsl = payloadBool(internetInfo, ['ADSL', 'adsl']);
+      const fibre = payloadBool(internetInfo, ['Fibre', 'fibre']);
+      const isdn = payloadBool(internetInfo, ['ISDN', 'isdn']);
+      const dialup = payloadBool(internetInfo, ['DialUp', 'dialup']);
+      const fixedWimax = payloadBool(internetInfo, ['FixedWiMax', 'fixed_wimax']);
+      const satellite = payloadBool(internetInfo, ['Satellite', 'satellite']);
+
+      const nearbyBusService = payloadBool(publicTransportInfo, ['HasNearbyBusService', 'nearby_bus_service']);
+      const nearbyMinibusTaxiService = payloadBool(publicTransportInfo, [
+        'HasNearbyMinibusTaxiService',
+        'nearby_minibus_taxi_service',
+      ]);
+      const nearbyTrainService = payloadBool(publicTransportInfo, ['HasNearbyTrainService', 'nearby_train_service']);
+
+      await client.query(
+        `UPDATE migration.core_listings
+         SET
+           erf_size = COALESCE($2::numeric, erf_size),
+           floor_area = COALESCE($3::numeric, floor_area),
+           construction_date = COALESCE($4::date, construction_date),
+           height_restriction = COALESCE($5::numeric, height_restriction),
+           out_building_size = COALESCE($6::numeric, out_building_size),
+           zoning_type = COALESCE($7, zoning_type),
+           is_furnished = COALESCE($8, is_furnished),
+           pet_friendly = COALESCE($9, pet_friendly),
+           has_standalone_building = COALESCE($10, has_standalone_building),
+           has_flatlet = COALESCE($11, has_flatlet),
+           has_backup_water = COALESCE($12, has_backup_water),
+           wheelchair_accessible = COALESCE($13, wheelchair_accessible),
+           has_generator = COALESCE($14, has_generator),
+           has_borehole = COALESCE($15, has_borehole),
+           has_gas_geyser = COALESCE($16, has_gas_geyser),
+           has_solar_panels = COALESCE($17, has_solar_panels),
+           has_backup_battery_or_inverter = COALESCE($18, has_backup_battery_or_inverter),
+           has_solar_geyser = COALESCE($19, has_solar_geyser),
+           has_water_tank = COALESCE($20, has_water_tank),
+           adsl = COALESCE($21, adsl),
+           fibre = COALESCE($22, fibre),
+           isdn = COALESCE($23, isdn),
+           dialup = COALESCE($24, dialup),
+           fixed_wimax = COALESCE($25, fixed_wimax),
+           satellite = COALESCE($26, satellite),
+           nearby_bus_service = COALESCE($27, nearby_bus_service),
+           nearby_minibus_taxi_service = COALESCE($28, nearby_minibus_taxi_service),
+           nearby_train_service = COALESCE($29, nearby_train_service),
+           updated_at = NOW()
+         WHERE id = $1`,
+        [
+          Number(listing.id),
+          erfSize,
+          floorArea,
+          constructionDate,
+          heightRestriction,
+          outBuildingSize,
+          zoningType,
+          isFurnished,
+          petFriendly,
+          hasStandaloneBuilding,
+          hasFlatlet,
+          hasBackupWater,
+          wheelchairAccessible,
+          hasGenerator,
+          hasBorehole,
+          hasGasGeyser,
+          hasSolarPanels,
+          hasBackupBatteryOrInverter,
+          hasSolarGeyser,
+          hasWaterTank,
+          adsl,
+          fibre,
+          isdn,
+          dialup,
+          fixedWimax,
+          satellite,
+          nearbyBusService,
+          nearbyMinibusTaxiService,
+          nearbyTrainService,
+        ]
+      );
+    }
+  });
+}
+
+async function syncListingFeaturesFromPayload(): Promise<void> {
+  await runInTransaction(async (client) => {
+    const listingRows = await client.query<{
+      id: string;
+      listing_payload: unknown;
+    }>(
+      `SELECT id::text, listing_payload FROM migration.core_listings`
+    );
+
+    for (const listing of listingRows.rows) {
+      const listingId = Number(listing.id);
+      const existingFeatures = await client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM migration.listing_features WHERE listing_id = $1`,
+        [listingId]
+      );
+
+      if (Number(existingFeatures.rows[0]?.count ?? '0') > 0) continue;
+
+      const payload = payloadRecord(listing.listing_payload);
+      const buildingInfo = payloadObject(payload, ['ListingBuildingInfo', 'listing_building_info']);
+
+      const buildingFeatures = uniqueText([
+        ...toTextList(payload['BuildingFeatures']),
+        ...toTextList(payload['building_features']),
+        ...toTextList(payload['ListingBuildingAreaFeatures']),
+        ...toTextList(payload['listing_building_area_features']),
+        ...toTextList(buildingInfo['ListingBuildingInfoAreaFeatures']),
+      ]);
+
+      const propertyDescriptives = uniqueText([
+        ...toTextList(payload['PropertyDescriptives']),
+        ...toTextList(payload['property_descriptives']),
+        ...toTextList(payload['DescriptiveFeatures']),
+        ...toTextList(payload['descriptive_features']),
+      ]);
+
+      const lifestyleTags = uniqueText([
+        ...toTextList(payload['LifestyleTags']),
+        ...toTextList(payload['lifestyle_tags']),
+        ...toTextList(payload['Lifestyle']),
+        ...toTextList(payload['lifestyle']),
+      ]);
+
+      const categories: Array<{ category: string; values: string[] }> = [
+        { category: 'Building Features', values: buildingFeatures },
+        { category: 'Property Descriptives', values: propertyDescriptives },
+        { category: 'Lifestyle Tags', values: lifestyleTags },
+      ];
+
+      for (const category of categories) {
+        for (const [index, value] of category.values.entries()) {
+          await client.query(
+            `INSERT INTO migration.listing_features (
+               listing_id,
+               feature_category,
+               feature_value,
+               sort_order
+             ) VALUES ($1, $2, $3, $4)`,
+            [listingId, category.category, value, index]
+          );
+        }
+      }
+    }
+  });
 }
 
 function readObjectValue(record: Record<string, unknown>, keys: string[]): string | null {
@@ -351,6 +672,12 @@ async function syncListingPropertyAreasFromPayload(): Promise<void> {
       { areaType: 'Bedroom', keys: ['Bedrooms', 'BedroomCount', 'bedrooms'] },
       { areaType: 'Bathroom', keys: ['Bathrooms', 'BathroomCount', 'bathrooms'] },
       { areaType: 'Garage', keys: ['Garages', 'GarageCount', 'garages'] },
+      { areaType: 'Parking', keys: ['ParkingBays', 'ParkingCount', 'parking_bays', 'parking_count'] },
+      { areaType: 'Kitchen', keys: ['Kitchens', 'KitchenCount', 'kitchens'] },
+      { areaType: 'Bar', keys: ['Bars', 'BarCount', 'bars'] },
+      { areaType: 'Office', keys: ['Offices', 'OfficeCount', 'offices'] },
+      { areaType: 'Outbuilding', keys: ['Outbuildings', 'OutBuildingCount', 'outbuildings'] },
+      { areaType: 'Security', keys: ['SecurityRooms', 'SecurityCount', 'security'] },
       { areaType: 'Pool', keys: ['Pools', 'PoolCount', 'pools'] },
       { areaType: 'Dining Room', keys: ['DiningRooms', 'DiningRoomCount', 'dining_rooms'] },
       { areaType: 'Family TV Room', keys: ['FamilyRooms', 'FamilyRoomCount', 'family_rooms'] },
@@ -359,19 +686,28 @@ async function syncListingPropertyAreasFromPayload(): Promise<void> {
 
     for (const listing of listingRows.rows) {
       const listingId = Number(listing.id);
-      const existingAreas = await client.query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM migration.listing_property_areas WHERE listing_id = $1`,
+      const payload = payloadRecord(listing.listing_payload);
+
+      const existingRows = await client.query<{ area_type: string }>(
+        `SELECT area_type FROM migration.listing_property_areas WHERE listing_id = $1`,
         [listingId]
       );
+      const existingAreaTypes = new Set(
+        existingRows.rows
+          .map((row) => normalizeText(row.area_type)?.toLowerCase())
+          .filter((value): value is string => Boolean(value))
+      );
 
-      if (Number(existingAreas.rows[0]?.count ?? '0') > 0) continue;
-
-      const payload = payloadRecord(listing.listing_payload);
-      let sortOrder = 0;
+      const sortOrderLookup = await client.query<{ max_sort: string | null }>(
+        `SELECT MAX(sort_order)::text AS max_sort FROM migration.listing_property_areas WHERE listing_id = $1`,
+        [listingId]
+      );
+      let sortOrder = Number(sortOrderLookup.rows[0]?.max_sort ?? '-1') + 1;
 
       for (const mapping of areaMapping) {
         const countValue = payloadNumber(payload, mapping.keys);
         if (countValue === null || countValue <= 0) continue;
+        if (existingAreaTypes.has(mapping.areaType.toLowerCase())) continue;
 
         await client.query(
           `INSERT INTO migration.listing_property_areas (
@@ -386,6 +722,63 @@ async function syncListingPropertyAreasFromPayload(): Promise<void> {
           [listingId, mapping.areaType, Math.floor(countValue), sortOrder]
         );
 
+        existingAreaTypes.add(mapping.areaType.toLowerCase());
+        sortOrder += 1;
+      }
+
+      const payloadAreas = payloadArray(payload, ['ListingPropertyAreas', 'listing_property_areas', 'PropertyAreas']);
+      for (const area of payloadAreas) {
+        if (!area || typeof area !== 'object' || Array.isArray(area)) continue;
+        const areaRecord = area as Record<string, unknown>;
+
+        const areaTypeObject = payloadObject(areaRecord, ['ListingPropertyAreaType', 'listing_property_area_type']);
+        const areaTypeId =
+          payloadNumber(areaRecord, ['ListingPropertyAreaTypeId', 'listing_property_area_type_id']) ??
+          payloadNumber(areaTypeObject, ['Id', 'id']);
+
+        const areaType =
+          payloadText(areaRecord, ['AreaName', 'area_name', 'AreaType', 'area_type']) ??
+          payloadText(areaTypeObject, ['Name', 'name']) ??
+          areaTypeFromLegacyId(areaTypeId !== null ? Math.floor(areaTypeId) : null);
+
+        if (!areaType) continue;
+        if (existingAreaTypes.has(areaType.toLowerCase())) continue;
+
+        const areaCount = payloadNumber(areaRecord, ['Count', 'count', 'Quantity', 'quantity']);
+        const areaSize = payloadNumber(areaRecord, ['Size', 'size']);
+        const areaDescription = payloadText(areaRecord, ['Description', 'description']);
+
+        const subFeatures = uniqueText([
+          ...toTextList(areaRecord['SubFeatures']),
+          ...toTextList(areaRecord['sub_features']),
+          ...toTextList(areaRecord['Features']),
+          ...toTextList(areaRecord['features']),
+          ...toTextList(areaRecord['ListingPropertyFeatures']),
+          ...toTextList(areaRecord['listing_property_features']),
+        ]);
+
+        await client.query(
+          `INSERT INTO migration.listing_property_areas (
+             listing_id,
+             area_type,
+             count,
+             size,
+             description,
+             sub_features,
+             sort_order
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            listingId,
+            areaType,
+            areaCount !== null ? Math.floor(areaCount) : null,
+            areaSize,
+            areaDescription,
+            subFeatures,
+            sortOrder,
+          ]
+        );
+
+        existingAreaTypes.add(areaType.toLowerCase());
         sortOrder += 1;
       }
     }
@@ -1025,6 +1418,8 @@ async function main(): Promise<void> {
   await loadTeams();
   await loadAssociates();
   await loadListings();
+  await syncListingCoreDetailsFromPayload();
+  await syncListingFeaturesFromPayload();
   await syncListingPropertyAreasFromPayload();
   await syncListingAgentsFromPayload();
   await loadTransactions();

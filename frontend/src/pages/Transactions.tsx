@@ -1,5 +1,6 @@
-﻿import { useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '../contexts/AuthContext';
 
 type TransactionAgent = {
   associate_id: number | null;
@@ -34,6 +35,7 @@ type TransactionRow = {
   transaction_number: string | null;
   agents: TransactionAgent[];
   source_market_center_id?: string | null;
+  can_edit?: boolean;
   transaction_status: string | null;
   transaction_type: string | null;
   listing_number: string | null;
@@ -217,6 +219,73 @@ function toNumberOrZero(value: string | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function normalizeRole(value: string | null | undefined): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function isOutsideRole(value: string): boolean {
+  return value.includes('outside');
+}
+
+function toRoleLabel(value: string): string {
+  if (value === 'both') return 'Both';
+  if (value === 'seller') return 'Seller';
+  if (value === 'buyer') return 'Buyer';
+  if (value.length === 0) return '-';
+  return value
+    .split(' ')
+    .map((part) => (part.length > 0 ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(' ');
+}
+
+function getDisplayTransactionType(item: TransactionRow): string {
+  const explicit = (item.transaction_type ?? '').trim();
+  const explicitNormalized = normalizeRole(explicit);
+
+  const internalRoles = new Set<string>();
+  let hasOutsideRole = false;
+
+  for (const agent of item.agents ?? []) {
+    const role = normalizeRole(agent.agent_role ?? agent.summary?.transaction_type ?? null);
+    if (role.length === 0) {
+      continue;
+    }
+    if (isOutsideRole(role)) {
+      hasOutsideRole = true;
+      continue;
+    }
+    internalRoles.add(role);
+  }
+
+  let inferredInternalType = '';
+  if (internalRoles.has('both') || (internalRoles.has('seller') && internalRoles.has('buyer'))) {
+    inferredInternalType = 'Both';
+  } else if (internalRoles.has('seller')) {
+    inferredInternalType = 'Seller';
+  } else if (internalRoles.has('buyer')) {
+    inferredInternalType = 'Buyer';
+  } else if (internalRoles.size === 1) {
+    inferredInternalType = toRoleLabel(Array.from(internalRoles)[0]);
+  }
+
+  if (explicit.length > 0) {
+    if (isOutsideRole(explicitNormalized) && inferredInternalType.length > 0) {
+      return inferredInternalType;
+    }
+    return explicit;
+  }
+
+  if (inferredInternalType.length > 0) {
+    return inferredInternalType;
+  }
+
+  if (hasOutsideRole) {
+    return 'Outside Agency';
+  }
+
+  return '-';
+}
+
 function toPercent(value: number): string {
   return `${value.toFixed(2)}%`;
 }
@@ -226,6 +295,7 @@ function buildEmptyOutsideAgency(): OutsideAgencyContact {
 }
 
 export default function TransactionsPage() {
+  const { activeContext } = useAuth();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
@@ -259,8 +329,10 @@ export default function TransactionsPage() {
     agents: [],
   });
 
+  const activeContextId = activeContext?.id ?? 'no-context';
+
   const { data, isLoading, isFetching, isError, refetch } = useQuery({
-    queryKey: ['transactions', page, search, status],
+    queryKey: ['transactions', activeContextId, page, search, status],
     queryFn: () => {
       const offset = (page - 1) * PAGE_SIZE;
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
@@ -276,6 +348,11 @@ export default function TransactionsPage() {
     },
     placeholderData: (prev) => prev,
   });
+
+  useEffect(() => {
+    setPage(1);
+    void refetch();
+  }, [activeContextId, refetch]);
 
   const { data: summaryData, isLoading: isSummaryLoading, isError: isSummaryError } = useQuery({
     queryKey: ['transactions-summary'],
@@ -353,7 +430,7 @@ export default function TransactionsPage() {
           result = compareText(a.market_center_name, b.market_center_name);
           break;
         case 'type':
-          result = compareText(a.transaction_type, b.transaction_type);
+          result = compareText(getDisplayTransactionType(a), getDisplayTransactionType(b));
           break;
         case 'status':
           result = compareText(a.transaction_status, b.transaction_status);
@@ -448,7 +525,7 @@ export default function TransactionsPage() {
       source_transaction_id: item.source_transaction_id,
       transaction_number: item.transaction_number ?? '',
       transaction_status: item.transaction_status ?? '',
-      transaction_type: item.transaction_type ?? '',
+      transaction_type: item.transaction_type ?? (getDisplayTransactionType(item) === '-' ? '' : getDisplayTransactionType(item)),
       source_listing_id: item.source_listing_id ?? '',
       listing_number: item.listing_number ?? '',
       address: item.address ?? '',
@@ -1257,7 +1334,7 @@ export default function TransactionsPage() {
                     </div>
                   </td>
                   <td className="px-3 py-2">{item.market_center_name ?? '-'}</td>
-                  <td className="px-3 py-2">{item.transaction_type ?? '-'}</td>
+                  <td className="px-3 py-2">{getDisplayTransactionType(item)}</td>
                   <td className="px-3 py-2">
                     <span className="status-chip info">{item.transaction_status ?? '-'}</span>
                   </td>
@@ -1267,9 +1344,11 @@ export default function TransactionsPage() {
                   <td className="px-3 py-2">{toMoney(item.net_comm)}</td>
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-2">
-                      <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => openEditForm(item)}>
-                        Edit
-                      </button>
+                      {item.can_edit && (
+                        <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => openEditForm(item)}>
+                          Edit
+                        </button>
+                      )}
                       <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => setQuickSummaryRow(item)}>
                         Summary
                       </button>

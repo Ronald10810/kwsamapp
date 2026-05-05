@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '../contexts/AuthContext';
 
 type MarketCentreRow = {
   id: string;
@@ -149,7 +150,6 @@ const ENTEGRAL_PORTAL_OPTIONS = [
   'MyProperty South Africa',
   'MyProperty Namibia',
   'IOL Property (Property360)',
-  'Private Property',
   'Namibia bundle includes HouseFinder',
   'South Africa bundle includes Ananzi',
   'Property Central',
@@ -250,6 +250,7 @@ function renderLogo(url: string | null | undefined, name: string): JSX.Element {
 }
 
 export default function MarketCentresPage() {
+  const { canCreateMarketCenter, canEditMarketCenter } = useAuth();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'Active' | 'Inactive'>('Active');
@@ -484,7 +485,9 @@ export default function MarketCentresPage() {
             <button type="button" onClick={() => { setView('list'); setPage(1); }} className={`px-3 py-1.5 border-l border-slate-300 ${view === 'list' ? 'bg-red-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>List</button>
           </div>
           <button className="primary-btn" type="button" onClick={() => refetch()}>{isFetching ? 'Refreshing...' : 'Refresh'}</button>
-          <button className="primary-btn" type="button" onClick={openCreateForm}>Add Market Centre</button>
+          {canCreateMarketCenter && (
+            <button className="primary-btn" type="button" onClick={openCreateForm}>Add Market Centre</button>
+          )}
         </div>
       </div>
 
@@ -725,7 +728,9 @@ export default function MarketCentresPage() {
                       </div>
                       <div className="flex items-center justify-between border-t border-slate-100 pt-2">
                         <p className="text-[11px] text-slate-400 font-mono">{item.frontdoor_id ? `Frontdoor: ${item.frontdoor_id}` : item.source_market_center_id}</p>
-                        <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>Edit</button>
+                        {canEditMarketCenter(item.source_market_center_id) && (
+                          <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>Edit</button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -754,7 +759,7 @@ export default function MarketCentresPage() {
                       <td className="px-4 py-3 text-slate-600">{item.agent_count}</td>
                       <td className="px-4 py-3 text-slate-600 text-xs">{item.city ?? '-'}<div className="text-slate-400">{item.kw_office_id ?? ''}</div></td>
                       <td className="px-4 py-3 text-slate-600 text-xs">{item.market_center_property24_id ?? '-'}<div className="text-slate-400">{item.property24_opt_in ? 'Opted in' : 'Not opted in'}</div></td>
-                      <td className="px-4 py-3"><button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>Edit</button></td>
+                      <td className="px-4 py-3">{canEditMarketCenter(item.source_market_center_id) && (<button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>Edit</button>)}</td>
                     </tr>
                   );
                 })}

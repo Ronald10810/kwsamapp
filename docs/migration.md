@@ -190,6 +190,21 @@ psql $env:DATABASE_URL -f scripts/transform-staging-to-migration.sql
 psql $env:DATABASE_URL -f scripts/insert-migration-to-public.sql
 ```
 
+### Step 6 — Load listing-detail sections (building/features/areas)
+
+This fills fields used by Listings Edit/Preview and portal mapping payloads.
+
+```powershell
+cd ..
+$env:AZURE_SQL_USER = "<azure_user>"
+$env:AZURE_SQL_PASSWORD = "<azure_password>"
+.\scripts\export-azure-listing-details-to-csv.ps1
+
+node scripts/run-sql.cjs scripts/bootstrap-ssms-listing-details-staging.sql
+psql "$env:DATABASE_URL" -f scripts/import-ssms-listing-details-from-csv.sql
+node scripts/run-sql.cjs scripts/map-ssms-listing-details-into-migration.sql
+```
+
 Dependency order: reference tables → geography → addresses → market_centers → teams → associates → listings → transactions.
 
 ### Reconciliation spot-checks

@@ -1,4 +1,9 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
+
+const envFilePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.env');
+dotenv.config({ path: envFilePath });
 
 export type DatabaseClient = 'postgres' | 'sqlserver';
 export type StorageBackend = 'local' | 'gcs';
@@ -31,6 +36,19 @@ function parseList(value: string | undefined, fallback: string[]): string[] {
     .filter(Boolean);
 }
 
+function normalizeLogLevel(value: string | undefined, fallback: string): string {
+  const normalized = normalizeString(value)?.toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (normalized === 'warning') {
+    return 'warn';
+  }
+
+  return normalized;
+}
+
 function parseDatabaseClient(value: string | undefined): DatabaseClient {
   const normalized = normalizeString(value)?.toLowerCase();
   return normalized === 'sqlserver' ? 'sqlserver' : 'postgres';
@@ -55,25 +73,58 @@ function buildPostgresUrlFromParts(): string | null {
   return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
 }
 
+function assertLocalUatDbTarget(databaseUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw new Error('Invalid DATABASE_URL. Local dev requires a valid Postgres URL targeting kwsa_uat.');
+  }
+
+  const dbName = parsed.pathname.replace(/^\//, '').trim().toLowerCase();
+  const host = parsed.hostname.trim().toLowerCase();
+  if (dbName !== 'kwsa_uat') {
+    throw new Error(`Local dev database safety check failed: expected database "kwsa_uat", got "${dbName || '(empty)'}".`);
+  }
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+    throw new Error('Local dev database safety check failed: localhost targets are blocked. Expected remote kwsa_uat host.');
+  }
+}
+
 const nodeEnv = normalizeString(process.env.NODE_ENV) ?? 'development';
 const databaseClient = parseDatabaseClient(process.env.DB_CLIENT);
 const storageBackend = parseStorageBackend(process.env.STORAGE_BACKEND);
 const uploadsDir = path.resolve(process.cwd(), normalizeString(process.env.UPLOADS_DIR) ?? 'uploads');
 
+const localGoogleClientIdFallback =
+  nodeEnv === 'development'
+    ? '768625368107-oficd2i4fn505g3lf7dt6sjmlv77b109.apps.googleusercontent.com'
+    : null;
+
 const databaseUrl = normalizeString(process.env.DATABASE_URL)
   ?? (databaseClient === 'postgres' ? buildPostgresUrlFromParts() : null);
+
+const enforceLocalUatDb = parseBoolean(process.env.ENFORCE_LOCAL_UAT_DB, nodeEnv === 'development');
+if (nodeEnv === 'development' && enforceLocalUatDb) {
+  if (!databaseUrl) {
+    throw new Error('Local dev database safety check failed: DATABASE_URL is required when ENFORCE_LOCAL_UAT_DB=true.');
+  }
+  assertLocalUatDbTarget(databaseUrl);
+}
 
 export const env = {
   nodeEnv,
   isDevelopment: nodeEnv === 'development',
   isProduction: nodeEnv === 'production',
   port: parseInteger(process.env.PORT, 3000),
-  logLevel: normalizeString(process.env.LOG_LEVEL) ?? 'info',
+  uploadsPublicBaseUrl: normalizeString(process.env.UPLOADS_PUBLIC_BASE_URL),
+  logLevel: normalizeLogLevel(process.env.LOG_LEVEL, 'info'),
   trustProxy: parseBoolean(process.env.TRUST_PROXY, nodeEnv === 'production'),
+  enforceLocalUatDb,
   corsOrigins: parseList(process.env.CORS_ORIGIN, ['http://localhost:5173']),
   preserveCoreEdits: parseBoolean(process.env.PRESERVE_CORE_EDITS, false),
   allowDevLogin: parseBoolean(process.env.ALLOW_DEV_LOGIN, nodeEnv === 'development'),
-  googleClientId: normalizeString(process.env.GOOGLE_CLIENT_ID),
+  googleClientId: normalizeString(process.env.GOOGLE_CLIENT_ID) ?? localGoogleClientIdFallback,
   jwtSecret: normalizeString(process.env.JWT_SECRET) ?? 'dev-jwt-secret-change-in-production',
   database: {
     client: databaseClient,
@@ -87,6 +138,30 @@ export const env = {
   gcp: {
     projectId: normalizeString(process.env.GOOGLE_CLOUD_PROJECT),
     uploadsBucket: normalizeString(process.env.GCS_BUCKET_NAME),
+  },
+  property24: {
+    baseUrl: normalizeString(process.env.PROPERTY24_BASE_URL),
+    apiKey: normalizeString(process.env.PROPERTY24_API_KEY),
+    listingsEndpoint: normalizeString(process.env.PROPERTY24_LISTINGS_ENDPOINT) ?? 'listings',
+    userGroupId: normalizeString(process.env.PROPERTY24_USER_GROUP_ID),
+    defaultAgencyId: normalizeString(process.env.PROPERTY24_DEFAULT_AGENCY_ID),
+  },
+  privateProperty: {
+    baseUrl: normalizeString(process.env.PRIVATE_PROPERTY_BASE_URL),
+    username: normalizeString(process.env.PRIVATE_PROPERTY_USERNAME),
+    password: normalizeString(process.env.PRIVATE_PROPERTY_PASSWORD),
+    passwordAlt: normalizeString(process.env.PRIVATE_PROPERTY_PASSWORD_ALT),
+    branchGuid: normalizeString(process.env.PRIVATE_PROPERTY_BRANCH_GUID),
+  },
+  kww: {
+    baseUrl: normalizeString(process.env.KWW_BASE_URL),
+    apiKey: normalizeString(process.env.KWW_API_KEY),
+    apiSecret: normalizeString(process.env.KWW_API_SECRET),
+  },
+  entegral: {
+    baseUrl: normalizeString(process.env.ENTEGRAL_BASE_URL),
+    globalAuth: normalizeString(process.env.ENTEGRAL_GLOBAL_AUTH),
+    sourceId: normalizeString(process.env.ENTEGRAL_SOURCE_ID) ?? '6',
   },
 } as const;
 

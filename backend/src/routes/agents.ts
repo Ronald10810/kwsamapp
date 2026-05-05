@@ -280,16 +280,20 @@ router.get('/options', async (_req, res) => {
 
   try {
     const result = await pool.query<{
+      id: string;
       source_associate_id: string;
       full_name: string | null;
       source_market_center_id: string | null;
+      market_center_id: string | null;
       market_center_name: string | null;
     }>(
       `
       SELECT
+        a.id::text AS id,
         a.source_associate_id,
         a.full_name,
         a.source_market_center_id,
+        a.market_center_id::text AS market_center_id,
         mc.name AS market_center_name
       FROM migration.core_associates a
       LEFT JOIN migration.core_market_centers mc ON mc.id = a.market_center_id
@@ -299,9 +303,11 @@ router.get('/options', async (_req, res) => {
 
     return res.json({
       items: result.rows.map((row) => ({
+        id: row.id,
         source_associate_id: row.source_associate_id,
         full_name: row.full_name,
         source_market_center_id: row.source_market_center_id,
+        market_center_id: row.market_center_id,
         market_center_name: row.market_center_name,
       })),
     });
@@ -327,6 +333,7 @@ router.get('/me/home', async (req, res) => {
       source_associate_id: string;
       full_name: string | null;
       status_name: string | null;
+      listing_approval_required: boolean;
       kwsa_email: string | null;
       private_email: string | null;
       email: string | null;
@@ -339,6 +346,7 @@ router.get('/me/home', async (req, res) => {
         a.source_associate_id,
         a.full_name,
         a.status_name,
+        a.listing_approval_required,
         a.kwsa_email,
         a.private_email,
         a.email,
@@ -392,8 +400,15 @@ router.get('/me/home', async (req, res) => {
 
     const associateId = Number(associate.id);
 
-    const [capResult, listingCountResult, listingsResult, txStatusResult] = await Promise.all([
-      pool.query<{
+    let capRows: Array<{
+      cap_cycle_start_date: string | null;
+      cap_cycle_end_date: string | null;
+      cap_amount: string;
+      cap_remaining: string;
+    }> = [];
+
+    try {
+      const capResult = await pool.query<{
         cap_cycle_start_date: string | null;
         cap_cycle_end_date: string | null;
         cap_amount: string;
@@ -441,7 +456,18 @@ router.get('/me/home', async (req, res) => {
         LIMIT 1
         `,
         [associateId]
-      ),
+      );
+      capRows = capResult.rows;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.toLowerCase().includes('cap_cycle_start_date')) {
+        console.warn('GET /api/agents/me/home: cap-cycle columns missing, returning cap defaults');
+      } else {
+        throw error;
+      }
+    }
+
+    const [listingCountResult, listingsResult, txStatusResult] = await Promise.all([
       pool.query<{ total: string }>(
         `
         SELECT COUNT(DISTINCT la.listing_id)::text AS total
@@ -504,7 +530,7 @@ router.get('/me/home', async (req, res) => {
       ),
     ]);
 
-    const capRow = capResult.rows[0];
+    const capRow = capRows[0];
     const capAmount = Number(capRow?.cap_amount ?? 0) || 0;
     const capRemaining = Number(capRow?.cap_remaining ?? 0) || 0;
     const capAchieved = Math.max(capAmount - capRemaining, 0);

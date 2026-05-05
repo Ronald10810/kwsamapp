@@ -40,7 +40,9 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [scriptReady, setScriptReady] = useState(false);
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
-  const canUseLocalDevLogin = import.meta.env.DEV;
+  const proxyTarget = (import.meta.env.VITE_API_PROXY_TARGET as string | undefined)?.toLowerCase() ?? '';
+  const isLocalBackendMode = proxyTarget.includes('localhost') || proxyTarget.includes('127.0.0.1');
+  const canUseLocalDevLogin = import.meta.env.DEV && isLocalBackendMode;
 
   useEffect(() => {
     if (user) {
@@ -147,6 +149,11 @@ export default function LoginPage() {
                   {isDevLoginLoading ? 'Signing in...' : 'Local Dev Login'}
                 </button>
               </div>
+            )}
+            {!canUseLocalDevLogin && import.meta.env.DEV && (
+              <p className="mt-3 text-center text-sm text-[#8a6a6d]">
+                Local is currently linked to production data. Use Google Sign-In.
+              </p>
             )}
             {!scriptReady && !error && <p className="mt-3 text-center text-sm text-[#8a6a6d] animate-pulse">Loading sign-in...</p>}
             {error && <p className="mt-3 text-center text-sm font-medium text-[#b91c1c]">{error}</p>}

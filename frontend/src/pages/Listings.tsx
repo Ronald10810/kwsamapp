@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { useGoogleMapsScript } from '../hooks/useGoogleMapsScript';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -8,6 +11,8 @@ import { useQuery } from '@tanstack/react-query';
 type ListingRow = {
   id: string;
   source_listing_id: string;
+  source_market_center_id: string | null;
+  market_center_id?: string | null;
   listing_number: string | null;
   status_name: string | null;
   listing_status_tag: string | null;
@@ -43,6 +48,8 @@ type ListingRow = {
   floor_area?: string | null;
   property24_reference_id?: string | null;
   private_property_reference_id?: string | null;
+  private_property_sync_status?: string | null;
+  feed_to_private_property?: boolean | null;
   kww_reference_id?: string | null;
   entegral_reference_id?: string | null;
   is_draft?: boolean;
@@ -50,6 +57,7 @@ type ListingRow = {
   mandate_type?: string | null;
   image_urls?: string[];
   thumbnail_url?: string | null;
+  can_edit?: boolean;
   updated_at: string;
 };
 
@@ -192,6 +200,7 @@ type ListingFormState = {
   kww_ref2: string;
   kww_sync_status: string;
   feed_to_entegral: boolean;
+  entegral_reference_id: string;
   entegral_sync_status: string;
   feed_to_property24: boolean;
   property24_ref1: string;
@@ -312,16 +321,261 @@ type OptionsResponse = {
   suburb_by_province: Record<string, string[]>;
 };
 
+type Property24SuburbOption = {
+  id: string;
+  name: string;
+  city: string | null;
+  province: string | null;
+  alternateNames: string[];
+};
+
+type Property24SuburbSearchResponse = {
+  items: Property24SuburbOption[];
+};
+
+type Property24CityOption = {
+  id: string;
+  name: string;
+  province: string | null;
+  alternateNames: string[];
+};
+
+type Property24CitySearchResponse = {
+  items: Property24CityOption[];
+};
+
+type Property24ProvinceOption = {
+  id: string;
+  name: string;
+};
+
+type Property24ProvinceSearchResponse = {
+  items: Property24ProvinceOption[];
+};
+
 type ActiveAgentRow = { id: string; full_name: string | null; source_market_center_id: string | null; market_center_id: string | null; market_center_name: string | null };
 
 type ViewMode = 'card' | 'list';
 type ListingSection = 'info' | 'address' | 'marketing' | 'images' | 'mandate' | 'property';
 
 const PAGE_SIZE = 20;
+const SOUTH_AFRICA_PROVINCES = [
+  'Eastern Cape',
+  'Free State',
+  'Gauteng',
+  'KwaZulu-Natal',
+  'Limpopo',
+  'Mpumalanga',
+  'Northern Cape',
+  'North West',
+  'Western Cape',
+];
+
+type PortalPublishRequirement = {
+  section: ListingSection;
+  label: string;
+  helpText: string;
+  isMissing: (form: ListingFormState) => boolean;
+  when?: (form: ListingFormState) => boolean;
+};
+
+type PublishValidationError = {
+  section: ListingSection;
+  sectionLabel: string;
+  label: string;
+  helpText: string;
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+const listingSectionLabels: Record<ListingSection, string> = {
+  info: 'Listing Info',
+  address: 'Address & Validation',
+  marketing: 'Marketing',
+  images: 'Images',
+  mandate: 'Mandate',
+  property: 'Property Details',
+};
+
+function hasPrimaryAgent(form: ListingFormState): boolean {
+  return form.agents.some((agent) => {
+    const assocId = (agent.associate_id ?? '').trim();
+    const name = (agent.agent_name ?? '').trim();
+    return Boolean(assocId || name);
+  });
+}
+
+const MIN_PHOTOS_FOR_PUBLISH = 3;
+
+function hasImageForPublish(form: ListingFormState): boolean {
+  const normalizedCount = form.normalized_images.filter((item) => Boolean((item.file_url ?? '').trim())).length;
+  const fallbackCount = form.image_urls.filter((url) => Boolean((url ?? '').trim())).length;
+  return (normalizedCount + fallbackCount) >= MIN_PHOTOS_FOR_PUBLISH;
+}
+
+function hasPropertyAreaCount(form: ListingFormState, keyword: string): boolean {
+  const key = keyword.trim().toLowerCase();
+  return form.property_areas.some((area) => {
+    const areaType = (area.area_type ?? '').trim().toLowerCase();
+    const count = numericValue(area.count) ?? 0;
+    return areaType.includes(key) && count > 0;
+  });
+}
+
+function isResidentialProperty(form: ListingFormState): boolean {
+  const propertyType = (form.property_type ?? '').trim().toLowerCase();
+  return propertyType.length === 0 || (propertyType !== 'commercial' && propertyType !== 'industrial' && propertyType !== 'land' && propertyType !== 'farm');
+}
+
+function isLandProperty(form: ListingFormState): boolean {
+  const subType = (form.property_sub_type ?? '').trim().toLowerCase();
+  const propertyType = (form.property_type ?? '').trim().toLowerCase();
+  return subType === 'vacant land' || subType === 'land' || propertyType === 'land';
+}
+
+// Sub-types that support a unit number (sectional title / complex / multi-unit)
+const SECTIONAL_TITLE_SUB_TYPES = new Set([
+  'flat/apartment', 'apartment/flat', 'apartment', 'townhouse', 'cluster',
+]);
+
+function isSectionalTitleSubType(form: ListingFormState): boolean {
+  const subType = (form.property_sub_type ?? '').trim().toLowerCase();
+  return SECTIONAL_TITLE_SUB_TYPES.has(subType);
+}
+
+const minimumPortalRequirements: PortalPublishRequirement[] = [
+  {
+    section: 'info',
+    label: 'For Sale or For Rent',
+    helpText: 'Please indicate whether this property is for sale or for rent.',
+    isMissing: (form) => !form.sale_or_rent.trim(),
+  },
+  {
+    section: 'info',
+    label: 'Listing Status',
+    helpText: 'The listing must have a status (e.g. Active) before it can be published.',
+    isMissing: (form) => !form.status_name.trim(),
+  },
+  {
+    section: 'info',
+    label: 'Expiry Date',
+    helpText: 'All portal listings need an expiry date. Please set the date this listing expires.',
+    isMissing: (form) => !form.expiry_date.trim(),
+  },
+  {
+    section: 'info',
+    label: 'Asking Price',
+    helpText: 'Please enter the asking price for this property, or tick "Price on Application" if you prefer not to show it.',
+    isMissing: (form) => !form.price.trim() && !form.poa,
+  },
+  {
+    section: 'property',
+    label: 'Property Type',
+    helpText: 'Portals need to know what kind of property this is (e.g. House, Apartment, Farm). Please select a property type.',
+    isMissing: (form) => !form.property_type.trim(),
+  },
+  {
+    section: 'property',
+    label: 'Property Sub-Type',
+    helpText: 'Please select a sub-type to help buyers find the right kind of property (e.g. Freehold, Sectional Title).',
+    isMissing: (form) => !form.property_sub_type.trim(),
+  },
+  {
+    section: 'property',
+    label: 'Listing Headline',
+    helpText: 'Add a short, catchy headline for this listing — this is what buyers see first on the portals.',
+    isMissing: (form) => !form.property_title.trim(),
+  },
+  {
+    section: 'property',
+    label: 'Property Description',
+    helpText: 'Write a description of the property. This tells buyers what makes it special and is required by all portals.',
+    isMissing: (form) => !form.property_description.trim(),
+  },
+  {
+    section: 'address',
+    label: 'Suburb',
+    helpText: 'The suburb is required so buyers can search for properties in the right area.',
+    isMissing: (form) => !form.suburb.trim(),
+  },
+  {
+    section: 'address',
+    label: 'City',
+    helpText: 'Please add the city where this property is located.',
+    isMissing: (form) => !form.city.trim(),
+  },
+  {
+    section: 'address',
+    label: 'Province',
+    helpText: 'Please select the province this property is in.',
+    isMissing: (form) => !form.province.trim(),
+  },
+  {
+    section: 'address',
+    label: 'Street Address',
+    helpText: 'A street address is needed so the portals can confirm the correct location.',
+    isMissing: (form) => !form.address_line.trim() && !form.street_name.trim(),
+  },
+  {
+    section: 'images',
+    label: 'At Least 3 Photos',
+    helpText: 'Listings with more photos get significantly more interest. Please upload at least 3 photos before publishing.',
+    isMissing: (form) => !hasImageForPublish(form),
+  },
+  {
+    section: 'mandate',
+    label: 'Agent Assignment',
+    helpText: 'This listing needs at least one agent assigned to it so that buyers know who to contact.',
+    isMissing: (form) => !hasPrimaryAgent(form),
+  },
+  {
+    section: 'property',
+    label: 'Number of Bedrooms',
+    helpText: 'Buyers filter their search by bedrooms — please add how many bedrooms this property has.',
+    isMissing: (form) => !hasPropertyAreaCount(form, 'bedroom'),
+    when: (form) => isResidentialProperty(form),
+  },
+  {
+    section: 'property',
+    label: 'Number of Bathrooms',
+    helpText: 'Buyers filter their search by bathrooms — please add how many bathrooms this property has.',
+    isMissing: (form) => !hasPropertyAreaCount(form, 'bathroom'),
+    when: (form) => isResidentialProperty(form),
+  },
+  {
+    section: 'property',
+    label: 'Erf / Land Size (m²)',
+    helpText: 'For land and vacant land listings, the stand size is required so buyers know the size of the plot.',
+    isMissing: (form) => !(form.erf_size ?? '').trim(),
+    when: (form) => isLandProperty(form),
+  },
+];
+
+function getSelectedPortalNames(form: ListingFormState): string[] {
+  return [
+    form.feed_to_property24 ? 'Property24' : null,
+    form.feed_to_private_property ? 'Private Property' : null,
+    form.feed_to_kww ? 'KWW' : null,
+    form.feed_to_entegral ? 'Entegral' : null,
+  ].filter((name): name is string => Boolean(name));
+}
+
+function getPortalPublishMissingFields(form: ListingFormState): PublishValidationError[] {
+  const missing: PublishValidationError[] = [];
+  for (const requirement of minimumPortalRequirements) {
+    if (requirement.when && !requirement.when(form)) continue;
+    if (!requirement.isMissing(form)) continue;
+    missing.push({
+      section: requirement.section,
+      sectionLabel: listingSectionLabels[requirement.section],
+      label: requirement.label,
+      helpText: requirement.helpText,
+    });
+  }
+  return missing;
+}
 
 function toInputDate(value: string | null | undefined): string {
   if (!value) return '';
@@ -340,13 +594,19 @@ function toMoney(value: string | null): string {
 function buildProperty24Url(referenceId: string | null | undefined): string | null {
   const reference = referenceId?.trim();
   if (!reference) return null;
-  return `https://www.property24.com/search?query=${encodeURIComponent(reference)}`;
+  return `https://www.property24.com/for-sale/modimolle/modimolle/limpopo/11294/${reference}`;
 }
 
 function buildPrivatePropertyUrl(referenceId: string | null | undefined): string | null {
   const reference = referenceId?.trim();
   if (!reference) return null;
-  return `https://www.privateproperty.co.za/search?searchTerms=${encodeURIComponent(reference)}`;
+  return `https://www.privateproperty.co.za/${reference}`;
+}
+
+function buildKwwUrl(referenceId: string | null | undefined): string | null {
+  const reference = referenceId?.trim();
+  if (!reference) return null;
+  return `https://kw.com/property/${reference}`;
 }
 
 function normalizeReference(value: unknown): string | null {
@@ -356,12 +616,52 @@ function normalizeReference(value: unknown): string | null {
   return trimmed;
 }
 
+function normalizePrivatePropertyReference(value: unknown): string | null {
+  const normalized = normalizeReference(value);
+  if (!normalized) return null;
+  return /^T\d{5,}$/i.test(normalized) ? normalized.toUpperCase() : null;
+}
+
 function firstReference(...values: unknown[]): string | null {
   for (const value of values) {
     const normalized = normalizeReference(value);
     if (normalized) return normalized;
   }
   return null;
+}
+
+function firstPrivatePropertyReference(...values: unknown[]): string | null {
+  for (const value of values) {
+    const normalized = normalizePrivatePropertyReference(value);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function buildPreviewDetailFromForm(form: ListingFormState, originalListingPayload: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...originalListingPayload,
+    property24_ref1: form.property24_ref1,
+    property24_ref2: form.property24_ref2,
+    private_property_ref1: form.private_property_ref1,
+    private_property_ref2: form.private_property_ref2,
+    kww_property_reference: form.kww_property_reference,
+    kww_ref1: form.kww_ref1,
+    kww_ref2: form.kww_ref2,
+  };
+}
+
+function extractProperty24SuburbId(listingPayload: unknown): string | null {
+  if (!listingPayload || typeof listingPayload !== 'object') return null;
+  const payload = listingPayload as Record<string, unknown>;
+  const propertyInfo = payload.propertyInfo;
+  if (propertyInfo && typeof propertyInfo === 'object') {
+    const suburbId = normalizeReference((propertyInfo as Record<string, unknown>).suburbId);
+    if (suburbId && /^\d+$/.test(suburbId)) return suburbId;
+  }
+
+  const suburbId = normalizeReference(payload.suburbId);
+  return suburbId && /^\d+$/.test(suburbId) ? suburbId : null;
 }
 
 function parseBooleanLike(value: unknown): boolean {
@@ -393,8 +693,21 @@ function deriveListingStatusTag(statusTag: string | null | undefined, saleOrRent
 }
 
 function normalizeImageUrls(input: string[]): string[] {
-  const cleaned = input.map((v) => v.trim()).filter((v) => /^https?:\/\//i.test(v) || v.startsWith('/uploads/'));
+  const cleaned = input.map((v) => v.trim()).filter((v) => /^https?:\/\//i.test(v) || v.startsWith('/uploads/') || v.startsWith('https://storage.googleapis.com/'));
   return [...new Set(cleaned)];
+}
+
+function isWithdrawalState(statusName: string | null | undefined, statusTag: string | null | undefined): boolean {
+  const status = (statusName ?? '').toLowerCase().trim();
+  const tag = (statusTag ?? '').toLowerCase().trim();
+  return status === 'inactive' || status === 'withdrawn' || tag === 'withdrawn' || tag === 'withdraw';
+}
+
+function normalizeRenderableImageUrl(value: string): string {
+  const v = value.trim();
+  if (!v) return v;
+  const uploadHostMatch = v.match(/^https?:\/\/[^/]+(\/uploads\/.+)$/i);
+  return uploadHostMatch ? uploadHostMatch[1] : v;
 }
 
 function canonicalFeatureCategory(value: string): string {
@@ -433,6 +746,13 @@ async function fileToBase64(file: File): Promise<string> {
   });
 }
 
+const MAX_LISTING_IMAGE_SIZE_BYTES = 15 * 1024 * 1024;
+
+async function getUploadErrorMessage(res: Response, fallback: string): Promise<string> {
+  const body = await res.json().catch(() => ({})) as { error?: string; message?: string };
+  return body.error ?? body.message ?? fallback;
+}
+
 type ListingQueryFilters = {
   propertyType: string;
   minPrice: string;
@@ -448,6 +768,8 @@ type ListingQueryFilters = {
   auction: boolean;
   securityEstate: boolean;
   repossessed: boolean;
+  /** Scope filter driven by active role in backend (cleared when user explicitly searches). */
+  scoped?: boolean;
 };
 
 async function fetchListings(page: number, search: string, status: string, saleOrRent: string, filters: ListingQueryFilters): Promise<ListingsResponse> {
@@ -470,6 +792,7 @@ async function fetchListings(page: number, search: string, status: string, saleO
   if (filters.auction) params.set('auction', 'true');
   if (filters.securityEstate) params.set('securityEstate', 'true');
   if (filters.repossessed) params.set('repossessed', 'true');
+  if (filters.scoped) params.set('scoped', 'true');
   const res = await fetch(`/api/listings?${params.toString()}`);
   if (!res.ok) throw new Error('Failed to fetch listings');
   return res.json() as Promise<ListingsResponse>;
@@ -491,7 +814,7 @@ const emptyForm: ListingFormState = {
   display_address_on_website: true, viewing_instructions: '', viewing_directions: '',
   feed_to_private_property: false, private_property_ref1: '', private_property_ref2: '', private_property_sync_status: '',
   feed_to_kww: false, kww_property_reference: '', kww_ref1: '', kww_ref2: '', kww_sync_status: '',
-  feed_to_entegral: false, entegral_sync_status: '',
+  feed_to_entegral: false, entegral_reference_id: '', entegral_sync_status: '',
   feed_to_property24: false, property24_ref1: '', property24_ref2: '', property24_sync_status: '',
   signed_date: '', on_market_since_date: '', rates_and_taxes: '', monthly_levy: '',
   occupation_date: '', mandate_type: 'Sole Mandate',
@@ -522,6 +845,9 @@ const emptyForm: ListingFormState = {
 // ---------------------------------------------------------------------------
 
 export default function Listings() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { user, canCreateListing, canEditListing, isOfficeAdmin, isAgent, activeContext } = useAuth();
   const [view, setView] = useState<ViewMode>('card');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -542,6 +868,15 @@ export default function Listings() {
   const [securityEstateFilter, setSecurityEstateFilter] = useState(false);
   const [repossessedFilter, setRepossessedFilter] = useState(false);
   const [showOptionalFilters, setShowOptionalFilters] = useState(false);
+  /** When true, the query is scoped to the user's role (own listings / own MC). Cleared on any user-initiated filter change. */
+  const [scopeActive, setScopeActive] = useState(true);
+
+  // Reset scope whenever the active context changes (role switch)
+  useEffect(() => {
+    setScopeActive(true);
+    setPage(1);
+  }, [activeContext?.id]);
+
   const [previewItem, setPreviewItem] = useState<ListingRow | null>(null);
   const [previewDetail, setPreviewDetail] = useState<Record<string, unknown> | null>(null);
   const [previewImageIdx, setPreviewImageIdx] = useState(0);
@@ -552,12 +887,26 @@ export default function Listings() {
   const [activeSection, setActiveSection] = useState<ListingSection>('info');
   const [form, setForm] = useState<ListingFormState>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
+  const [publishValidationErrors, setPublishValidationErrors] = useState<PublishValidationError[]>([]);
+  const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  const [originalListingPayload, setOriginalListingPayload] = useState<Record<string, unknown>>({});
+  const [selectedProperty24SuburbId, setSelectedProperty24SuburbId] = useState<string | null>(null);
+  const [isGeocodingAddress, setIsGeocodingAddress] = useState(false);
+  const [geocodeStatusMessage, setGeocodeStatusMessage] = useState<string | null>(null);
+  const [p24Result, setP24Result] = useState<{ success: boolean; message: string; property24_reference_id?: string | null; details?: unknown } | null>(null);
+  const [ppResult, setPpResult] = useState<{ success: boolean; message: string; reference_id?: string | null; details?: unknown } | null>(null);
+  const [kwwResult, setKwwResult] = useState<{ success: boolean; message: string; reference_id?: string | null; reference_uuid?: string | null; reference_key?: string | null; details?: unknown } | null>(null);
+  const [entegralResult, setEntegralResult] = useState<{ success: boolean; message: string; reference_id?: string | null; details?: unknown } | null>(null);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [isUploadingDocs, setIsUploadingDocs] = useState(false);
   const [isGeneratingNumber, setIsGeneratingNumber] = useState(false);
   const preloadedImagesRef = useRef<Set<string>>(new Set());
+  const openedFromReviewParamRef = useRef<string | null>(null);
+
+  // Scoped mode is backend permission-driven (OWN/MARKET_CENTRE) and lifted when user changes filters.
+  const scopedMode = scopeActive && (isAgent || isOfficeAdmin);
 
   const queryFilters: ListingQueryFilters = {
     propertyType: propertyTypeFilter,
@@ -574,12 +923,71 @@ export default function Listings() {
     auction: auctionFilter,
     securityEstate: securityEstateFilter,
     repossessed: repossessedFilter,
+    scoped: scopedMode,
   };
 
+  const activeContextId = activeContext?.id ?? 'no-context';
+
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
-    queryKey: ['listings', page, search, statusFilter, saleOrRentFilter, queryFilters],
+    queryKey: ['listings', activeContextId, page, search, statusFilter, saleOrRentFilter, queryFilters],
     queryFn: () => fetchListings(page, search, statusFilter, saleOrRentFilter, queryFilters),
   });
+
+  // Ensure we immediately refresh listing data when role/context changes,
+  // so row-level can_edit flags are never carried over from a previous context.
+  useEffect(() => {
+    void refetch();
+  }, [activeContextId, refetch]);
+
+  // Poll for PP T-number after a successful publish that returned no reference yet.
+  // PP assigns the T-number asynchronously — poll /api/listings/:id every 30s for up to 10 min.
+  useEffect(() => {
+    const awaitingRef = ppResult?.success && !ppResult.reference_id && editingId;
+    if (!awaitingRef) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 20; // 20 × 30s = 10 minutes
+
+    const poll = async () => {
+      if (cancelled || attempts >= MAX_ATTEMPTS) return;
+      attempts++;
+      try {
+        const res = await fetch(`/api/listings/${editingId}`);
+        if (!res.ok) return;
+        const body = await res.json() as Record<string, unknown>;
+        const ref = (
+          normalizePrivatePropertyReference(body.private_property_ref1) ??
+          normalizePrivatePropertyReference(body.private_property_ref2) ??
+          normalizePrivatePropertyReference((body.listing_payload as Record<string, unknown>)?.private_property_ref1)
+        );
+        if (ref && !cancelled) {
+          // T-number arrived — fill form and refresh listing cards
+          setForm((prev) => ({
+            ...prev,
+            private_property_ref1: ref,
+            private_property_sync_status: `Active ${new Date().toISOString().slice(0, 10)}`,
+          }));
+          setPpResult((prev) => prev ? { ...prev, reference_id: ref } : prev);
+          void refetch();
+          return; // stop polling
+        }
+      } catch {
+        // network hiccup — keep polling
+      }
+      if (!cancelled) {
+        timerId = window.setTimeout(() => { void poll(); }, 30_000);
+      }
+    };
+
+    let timerId = window.setTimeout(() => { void poll(); }, 30_000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timerId);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ppResult?.success, ppResult?.reference_id, editingId]);
 
   const { data: options } = useQuery<OptionsResponse>({
     queryKey: ['listing-options'],
@@ -593,17 +1001,94 @@ export default function Listings() {
   const { data: activeAgentsData } = useQuery({
     queryKey: ['active-agents-for-listings'],
     queryFn: async () => {
-      const res = await fetch('/api/agents?limit=500&offset=0&status=Active');
+      const res = await fetch('/api/agents/options?status=active');
       if (!res.ok) return { items: [] as ActiveAgentRow[] };
-      const body = (await res.json()) as { items?: ActiveAgentRow[] };
-      return body;
+      const body = (await res.json()) as {
+        items?: Array<{
+          id: string;
+          full_name: string | null;
+          source_market_center_id: string | null;
+          market_center_id: string | null;
+          market_center_name: string | null;
+        }>;
+      };
+      return {
+        items: (body.items ?? []).map((row) => ({
+          id: row.id,
+          full_name: row.full_name,
+          source_market_center_id: row.source_market_center_id,
+          market_center_id: row.market_center_id,
+          market_center_name: row.market_center_name,
+        })),
+      };
     },
     staleTime: 60000,
   });
 
+  const { data: property24SuburbData, isFetching: isSearchingProperty24Suburbs } = useQuery<Property24SuburbSearchResponse>({
+    queryKey: ['listing-property24-suburbs', form.province, form.city, form.suburb],
+    queryFn: async () => {
+      const params = new URLSearchParams({ province: form.province, city: form.city, q: form.suburb });
+      const res = await fetch(`/api/listings/property24-suburbs/search?${params.toString()}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? 'Failed to load Property24 suburbs');
+      }
+      return res.json() as Promise<Property24SuburbSearchResponse>;
+    },
+    enabled: isFormOpen && activeSection === 'address' && Boolean(form.province.trim()) && Boolean(form.city.trim()),
+    staleTime: 30000,
+  });
+
+  const { data: property24CityData, isFetching: isSearchingProperty24Cities } = useQuery<Property24CitySearchResponse>({
+    queryKey: ['listing-property24-cities', form.province, form.city],
+    queryFn: async () => {
+      const params = new URLSearchParams({ province: form.province, q: form.city });
+      const res = await fetch(`/api/listings/property24-cities/search?${params.toString()}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? 'Failed to load Property24 cities');
+      }
+      return res.json() as Promise<Property24CitySearchResponse>;
+    },
+    enabled: isFormOpen && activeSection === 'address' && Boolean(form.province.trim()),
+    staleTime: 30000,
+  });
+
+  const { data: property24ProvinceData, isFetching: isSearchingProperty24Provinces } = useQuery<Property24ProvinceSearchResponse>({
+    queryKey: ['listing-property24-provinces'],
+    queryFn: async () => {
+      const res = await fetch('/api/listings/property24-provinces');
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? 'Failed to load Property24 provinces');
+      }
+      return res.json() as Promise<Property24ProvinceSearchResponse>;
+    },
+    enabled: isFormOpen,
+    staleTime: Infinity,
+  });
+
   const activeAgents = activeAgentsData?.items ?? [];
 
+  // Fetch whether the current agent requires admin approval before publish
+  const { data: homeData } = useQuery<{ associate?: { listing_approval_required?: boolean } }>({
+    queryKey: ['listings-home-approval-required', activeContextId],
+    queryFn: async () => {
+      const res = await fetch('/api/agents/me/home');
+      if (!res.ok) return {};
+      return res.json() as Promise<{ associate?: { listing_approval_required?: boolean } }>;
+    },
+    staleTime: 60000,
+  });
+  const listingApprovalRequired = Boolean(homeData?.associate?.listing_approval_required);
+  const { ready: isGoogleMapsReady } = useGoogleMapsScript();
+
   const visibleItems = useMemo(() => data?.items ?? [], [data]);
+  const editingRow = useMemo(() => {
+    if (!editingId) return null;
+    return visibleItems.find((item) => item.id === editingId) ?? null;
+  }, [editingId, visibleItems]);
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
   const canGoPrev = page > 1;
   const canGoNext = page < totalPages;
@@ -619,6 +1104,66 @@ export default function Listings() {
   const priceOptions = ['250000', '500000', '750000', '1000000', '1500000', '2000000', '3000000', '5000000', '7500000', '10000000', '15000000', '20000000'];
   const bedroomCountOptions = ['', '1', '2', '3', '4', '5'];
   const bathroomCountOptions = ['', '1', '2', '3', '4', '5'];
+
+  const formPreviewItem = useMemo<ListingRow>(() => {
+    const primaryAgent = form.agents.find((agent) => agent.is_primary) ?? form.agents[0] ?? null;
+    const primaryContact = form.contacts[0] ?? null;
+    const imageUrls = normalizeImageUrls([
+      ...form.normalized_images.map((image) => image.file_url ?? '').filter(Boolean),
+      ...form.image_urls,
+    ]);
+
+    return {
+      id: editingId ?? 'draft-preview',
+      source_listing_id: form.source_listing_id || editingId || 'draft-preview',
+      source_market_center_id: form.source_market_center_id || editingRow?.source_market_center_id || null,
+      market_center_id: editingRow?.market_center_id ?? (form.source_market_center_id || null),
+      listing_number: form.listing_number || null,
+      status_name: form.status_name || null,
+      listing_status_tag: form.listing_status_tag || null,
+      sale_or_rent: form.sale_or_rent || null,
+      address_line: form.address_line || null,
+      street_number: form.street_number || null,
+      street_name: form.street_name || null,
+      suburb: form.suburb || null,
+      city: form.city || null,
+      province: form.province || null,
+      country: form.country || null,
+      price: form.price || null,
+      expiry_date: form.expiry_date || null,
+      property_title: form.property_title || form.short_title || form.listing_number || 'Listing',
+      short_title: form.short_title || null,
+      property_description: form.property_description || null,
+      short_description: form.short_description || null,
+      property_type: form.property_type || null,
+      property_sub_type: form.property_sub_type || null,
+      primary_agent_name: primaryAgent?.agent_name || editingRow?.primary_agent_name || null,
+      primary_agent_image_url: editingRow?.primary_agent_image_url ?? null,
+      primary_agent_phone: editingRow?.primary_agent_phone ?? null,
+      primary_agent_email: editingRow?.primary_agent_email ?? null,
+      market_center_logo_url: editingRow?.market_center_logo_url ?? null,
+      primary_contact_name: primaryContact?.full_name || null,
+      primary_contact_phone: primaryContact?.phone_number || null,
+      primary_contact_email: primaryContact?.email_address || null,
+      bedroom_count: editingRow?.bedroom_count ?? null,
+      bathroom_count: editingRow?.bathroom_count ?? null,
+      garage_count: editingRow?.garage_count ?? null,
+      parking_count: editingRow?.parking_count ?? null,
+      erf_size: form.erf_size || editingRow?.erf_size || null,
+      floor_area: form.floor_area || editingRow?.floor_area || null,
+      property24_reference_id: form.property24_ref1 || form.property24_ref2 || editingRow?.property24_reference_id || null,
+      private_property_reference_id: form.private_property_ref1 || form.private_property_ref2 || editingRow?.private_property_reference_id || null,
+      kww_reference_id: form.kww_property_reference || form.kww_ref1 || form.kww_ref2 || editingRow?.kww_reference_id || null,
+      entegral_reference_id: form.entegral_reference_id || editingRow?.entegral_reference_id || null,
+      is_draft: form.is_draft,
+      is_published: form.is_published,
+      mandate_type: form.mandate_type || null,
+      image_urls: imageUrls,
+      thumbnail_url: imageUrls[0] ?? null,
+      can_edit: true,
+      updated_at: editingRow?.updated_at ?? new Date().toISOString(),
+    };
+  }, [editingId, editingRow, form]);
 
   const openPreview = (item: ListingRow): void => {
     setPreviewItem(item);
@@ -639,6 +1184,13 @@ export default function Listings() {
       });
   };
 
+  const openFormPreview = (): void => {
+    setPreviewItem(formPreviewItem);
+    setPreviewDetail(buildPreviewDetailFromForm(form, originalListingPayload));
+    setPreviewImageIdx(0);
+    setPreviewExpandedDescription(false);
+  };
+
   const closePreview = (): void => {
     setPreviewItem(null);
     setPreviewDetail(null);
@@ -652,12 +1204,38 @@ export default function Listings() {
     return options.property_sub_types[form.property_type] ?? [];
   }, [options, form.property_type]);
 
-  // Available agents filtered by same market center as the first selected agent (if any)
+  const getDescriptiveFeatureOptions = (propertyType: string, propertySubType: string): string[] => {
+    const map = options?.property_descriptives ?? {};
+    const candidates = [
+      propertySubType,
+      propertySubType.replace('Town House', 'Townhouse'),
+      propertySubType.replace('TownHouse', 'Townhouse'),
+      propertySubType.replace('Apartment / Flat', 'Flat/Apartment'),
+      propertySubType.replace('Apartment/Flat', 'Flat/Apartment'),
+      propertySubType.replace('Flat / Apartment', 'Flat/Apartment'),
+      propertySubType.replace('Flat/Apartment', 'Apartment'),
+      propertyType,
+    ].filter(Boolean);
+
+    for (const key of candidates) {
+      const opts = map[key];
+      if (opts && opts.length > 0) return opts;
+    }
+    return [];
+  };
+
+  const descriptiveFeatureOptions = useMemo(() => {
+    return getDescriptiveFeatureOptions(form.property_type, form.property_sub_type);
+  }, [options, form.property_type, form.property_sub_type]);
+
+  // Available agents filtered by same market center as the first selected agent (if any).
+  // For Agent/OfficeAdmin roles, also restrict by the active context's market centre even before a primary is chosen.
   const agentMarketCenterId = form.agents[0]?.market_center_id ?? '';
   const filteredAgents = useMemo(() => {
-    if (!agentMarketCenterId) return activeAgents;
-    return activeAgents.filter((a) => a.market_center_id === agentMarketCenterId || !a.market_center_id);
-  }, [activeAgents, agentMarketCenterId]);
+    const mcFilter = agentMarketCenterId || (isAgent || isOfficeAdmin ? activeContext?.marketCenterId ?? '' : '');
+    if (!mcFilter) return activeAgents;
+    return activeAgents.filter((a) => a.market_center_id === mcFilter);
+  }, [activeAgents, agentMarketCenterId, isAgent, isOfficeAdmin, activeContext]);
 
   const filteredCities = useMemo(() => {
     if (!options) return [];
@@ -672,7 +1250,36 @@ export default function Listings() {
     return options.suburbs ?? [];
   }, [options, form.city, form.province]);
 
+  const suburbPickerOptions = useMemo(() => {
+    const property24Options = property24SuburbData?.items ?? [];
+    if (property24Options.length > 0) return property24Options;
+
+    return filteredSuburbs.map((name) => ({
+      id: '',
+      name,
+      city: form.city || null,
+      province: form.province || null,
+      alternateNames: [],
+    }));
+  }, [property24SuburbData, filteredSuburbs, form.city, form.province]);
+
+  const cityPickerOptions = useMemo(() => {
+    const property24Options = property24CityData?.items ?? [];
+    if (property24Options.length > 0) return property24Options;
+
+    return filteredCities.map((name) => ({
+      id: '',
+      name,
+      province: form.province || null,
+      alternateNames: [],
+    }));
+  }, [property24CityData, filteredCities, form.province]);
+
   const isCommercialOrIndustrial = form.property_type === 'Commercial' || form.property_type === 'Industrial';
+  const reviewListingId = useMemo(() => {
+    const value = new URLSearchParams(location.search).get('review');
+    return value ? value.trim() : '';
+  }, [location.search]);
 
   const preloadImage = (url: string): void => {
     if (!url || preloadedImagesRef.current.has(url)) return;
@@ -690,18 +1297,155 @@ export default function Listings() {
   }, [visibleItems]);
 
   useEffect(() => {
-    if (!form.province || !options) return;
-    if (form.city && !(options.city_by_province?.[form.province] ?? []).includes(form.city)) {
-      setForm((p) => ({ ...p, city: '', suburb: '' }));
+    if (!reviewListingId) {
+      openedFromReviewParamRef.current = null;
+      return;
     }
-  }, [form.province, form.city, options]);
+    if (openedFromReviewParamRef.current === reviewListingId) return;
 
+    openedFromReviewParamRef.current = reviewListingId;
+    void openEditForm({ id: reviewListingId } as ListingRow);
+
+    const params = new URLSearchParams(location.search);
+    params.delete('review');
+    const nextSearch = params.toString();
+    void navigate(
+      {
+        pathname: location.pathname,
+        search: nextSearch ? `?${nextSearch}` : '',
+      },
+      { replace: true },
+    );
+  }, [location.pathname, location.search, navigate, reviewListingId]);
+
+  // Keep city/suburb searchable and free-typed while the user is typing.
+  // We only reset dependent fields on explicit picker selections/change handlers.
+
+  // Auto-populate Address Line (Full) from individual address fields
+  const addressLineDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!form.city || !options) return;
-    if (form.suburb && !(options.suburb_by_city?.[form.city] ?? []).includes(form.suburb)) {
-      setForm((p) => ({ ...p, suburb: '' }));
+    if (addressLineDebounceRef.current) clearTimeout(addressLineDebounceRef.current);
+    addressLineDebounceRef.current = setTimeout(() => {
+      const { street_number, street_name, suburb, city, province, postal_code } = form;
+      if (!street_number && !street_name && !suburb && !city && !province) return;
+      const parts = [
+        [street_number, street_name].filter(Boolean).join(' '),
+        suburb,
+        city,
+        province,
+        postal_code,
+      ].filter(Boolean);
+      if (parts.length === 0) return;
+      const assembled = parts.join(', ');
+      setForm((p) => ({ ...p, address_line: assembled }));
+    }, 400);
+    return () => { if (addressLineDebounceRef.current) clearTimeout(addressLineDebounceRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.street_number, form.street_name, form.suburb, form.city, form.province, form.postal_code]);
+
+  // Silent geocoding: when province + city + suburb + street number + street name are all present,
+  // call the Google Maps JS Geocoder and fill latitude/longitude automatically.
+  const geocodeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const { province, city, suburb, street_number, street_name, country } = form;
+    if (!province || !city || !suburb || !street_number || !street_name) {
+      setIsGeocodingAddress(false);
+      setGeocodeStatusMessage(null);
+      return;
     }
-  }, [form.city, form.suburb, options]);
+    if (!isGoogleMapsReady || typeof window.google?.maps?.Geocoder === 'undefined') {
+      setGeocodeStatusMessage('Google Maps is not ready yet.');
+      return;
+    }
+
+    if (geocodeDebounceRef.current) clearTimeout(geocodeDebounceRef.current);
+    let disposed = false;
+
+    geocodeDebounceRef.current = setTimeout(() => {
+      const parts = [street_number, street_name, suburb, city, province, country || 'South Africa'].filter(Boolean);
+      const addressStr = parts.join(', ');
+      setIsGeocodingAddress(true);
+      setGeocodeStatusMessage(null);
+      let settled = false;
+
+      const finish = (message: string | null, lat?: number, lng?: number) => {
+        if (settled || disposed) return;
+        settled = true;
+        if (typeof lat === 'number' && typeof lng === 'number') {
+          setForm((p) => ({
+            ...p,
+            latitude: String(lat),
+            longitude: String(lng),
+          }));
+        }
+        setGeocodeStatusMessage(message);
+        setIsGeocodingAddress(false);
+      };
+
+      // Fallback: backend Nominatim (OpenStreetMap, no key, works server-side)
+      const fetchBackendGeocode = async (): Promise<void> => {
+        try {
+          const url = `/api/listings/geocode-address/search?address=${encodeURIComponent(addressStr)}`;
+          const response = await fetch(url);
+          const body = await response.json().catch(() => ({})) as {
+            found?: boolean;
+            latitude?: number;
+            longitude?: number;
+            status?: string;
+            error?: string;
+          };
+          if (response.ok && body.found && typeof body.latitude === 'number' && typeof body.longitude === 'number') {
+            finish(null, body.latitude, body.longitude);
+          } else {
+            finish(null); // silent — coordinates just won't fill
+          }
+        } catch {
+          finish(null);
+        }
+      };
+
+      // Primary: browser fetch to Google Geocoding REST API.
+      // The browser automatically sends the Origin header which satisfies HTTP Referrer key restrictions.
+      const mapsKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) ?? '';
+      if (!mapsKey) {
+        void fetchBackendGeocode();
+        return;
+      }
+
+      const googleUrl = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+      googleUrl.searchParams.set('address', addressStr);
+      googleUrl.searchParams.set('components', 'country:ZA');
+      googleUrl.searchParams.set('key', mapsKey);
+
+      const controller = new AbortController();
+      const watchdog = window.setTimeout(() => {
+        controller.abort();
+        if (!settled) void fetchBackendGeocode();
+      }, 6000);
+
+      fetch(googleUrl.toString(), { signal: controller.signal })
+        .then((res) => res.json())
+        .then((body: { status: string; results: Array<{ geometry: { location: { lat: number; lng: number } } }> }) => {
+          window.clearTimeout(watchdog);
+          if (body.status === 'OK' && body.results.length > 0) {
+            const { lat, lng } = body.results[0].geometry.location;
+            finish(null, lat, lng);
+          } else {
+            void fetchBackendGeocode();
+          }
+        })
+        .catch(() => {
+          window.clearTimeout(watchdog);
+          if (!settled) void fetchBackendGeocode();
+        });
+    }, 800);
+
+    return () => {
+      disposed = true;
+      if (geocodeDebounceRef.current) clearTimeout(geocodeDebounceRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.province, form.city, form.suburb, form.street_number, form.street_name, form.country, isGoogleMapsReady]);
 
   async function generateListingNumber(): Promise<void> {
     if (form.listing_number) return; // already has one
@@ -718,10 +1462,28 @@ export default function Listings() {
   }
 
   function openCreateForm(): void {
-    setForm(emptyForm);
+    let initialAgents: typeof emptyForm.agents = [];
+    if ((isAgent || isOfficeAdmin) && activeContext?.associateId) {
+      const me = activeAgents.find((a) => a.id === activeContext.associateId);
+      initialAgents = [{
+        associate_id: activeContext.associateId,
+        agent_name: me?.full_name ?? user?.name ?? '',
+        agent_role: 'Primary',
+        is_primary: true,
+        market_center_id: me?.market_center_id ?? activeContext.marketCenterId ?? '',
+        sort_order: 0,
+      }];
+    }
+    setForm({ ...emptyForm, agents: initialAgents });
     setEditingId(null);
     setActiveSection('info');
     setFormError(null);
+    setOriginalListingPayload({});
+    setSelectedProperty24SuburbId(null);
+    setP24Result(null);
+    setPpResult(null);
+    setKwwResult(null);
+    setEntegralResult(null);
     setIsFormOpen(true);
   }
 
@@ -730,6 +1492,10 @@ export default function Listings() {
     setEditingId(item.id);
     setActiveSection('info');
     setFormError(null);
+    setP24Result(null);
+    setPpResult(null);
+    setKwwResult(null);
+    setEntegralResult(null);
     setIsFormOpen(true);
 
     try {
@@ -741,6 +1507,7 @@ export default function Listings() {
       const payload = typeof listing.listing_payload === 'object' && listing.listing_payload !== null
         ? (listing.listing_payload as Record<string, unknown>)
         : {};
+      const property24SuburbId = extractProperty24SuburbId(payload);
       const payloadBool = (...keys: string[]): boolean => keys.some((key) => parseBooleanLike(payload[key]));
       const ci = typeof payload.commercial_industrial === 'object' && payload.commercial_industrial !== null
         ? (payload.commercial_industrial as Record<string, unknown>)
@@ -755,17 +1522,31 @@ export default function Listings() {
         return '';
       };
 
-      const privatePropertyRef = firstNonEmpty(
+      const normalizePayloadKey = (key: string): string => key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+      const findPayloadValue = (root: unknown, candidateKeys: string[]): unknown => {
+        const wanted = new Set(candidateKeys.map(normalizePayloadKey));
+        const stack: unknown[] = [root];
+        while (stack.length > 0) {
+          const current = stack.pop();
+          if (!current || typeof current !== 'object') continue;
+          for (const [k, v] of Object.entries(current as Record<string, unknown>)) {
+            if (wanted.has(normalizePayloadKey(k)) && v !== null && v !== undefined) return v;
+            if (v && typeof v === 'object') stack.push(v);
+          }
+        }
+        return undefined;
+      };
+
+      const privatePropertyRef = firstPrivatePropertyReference(
         listing.private_property_ref1,
         listing.private_property_ref2,
         listing.private_property_reference_id,
         payload.PrivatePropertyReference,
-        payload.PrivatePropertyId,
         payload.private_property_reference,
         payload.privatePropertyReference,
         payload.private_property_ref1,
         payload.private_property_ref2
-      );
+      ) ?? '';
       const property24Ref = firstNonEmpty(
         listing.property24_ref1,
         listing.property24_ref2,
@@ -877,6 +1658,8 @@ export default function Listings() {
             sort_order: index,
           }));
 
+  setOriginalListingPayload(payload);
+  setSelectedProperty24SuburbId(property24SuburbId);
       setForm({
         source_listing_id: s('source_listing_id'),
         source_market_center_id: s('source_market_center_id'),
@@ -935,6 +1718,7 @@ export default function Listings() {
         kww_ref2: s('kww_ref2'),
         kww_sync_status: kwwSyncStatus,
         feed_to_entegral: feedToEntegral,
+        entegral_reference_id: entegralRef,
         entegral_sync_status: entegralSyncStatus,
         feed_to_property24: feedToProperty24,
         property24_ref1: property24Ref,
@@ -946,11 +1730,26 @@ export default function Listings() {
         monthly_levy: s('monthly_levy'),
         occupation_date: toInputDate(s('occupation_date')),
         mandate_type: s('mandate_type') || 'Sole Mandate',
-        erf_size: s('erf_size'),
-        floor_area: s('floor_area'),
-        construction_date: toInputDate(s('construction_date')),
-        height_restriction: s('height_restriction'),
-        out_building_size: s('out_building_size'),
+        erf_size: firstNonEmpty(
+          listing.erf_size,
+          findPayloadValue(payload, ['ErfSize', 'erf_size', 'erfSize', 'LandSize', 'land_size', 'landSize', 'LotSize', 'lot_size', 'lotSize', 'PlotSize', 'plot_size', 'plotSize'])
+        ),
+        floor_area: firstNonEmpty(
+          listing.floor_area,
+          findPayloadValue(payload, ['FloorArea', 'floor_area', 'floorArea', 'BuildingSize', 'building_size', 'buildingSize', 'GrossFloorArea', 'gross_floor_area', 'grossFloorArea'])
+        ),
+        construction_date: toInputDate(firstNonEmpty(
+          listing.construction_date,
+          findPayloadValue(payload, ['ConstructionDate', 'construction_date', 'constructionDate', 'BuiltDate', 'built_date', 'builtDate', 'YearBuilt', 'year_built', 'yearBuilt'])
+        )),
+        height_restriction: firstNonEmpty(
+          listing.height_restriction,
+          findPayloadValue(payload, ['HeightRestriction', 'height_restriction', 'heightRestriction', 'HeightOfRoof', 'height_of_roof', 'heightOfRoof'])
+        ),
+        out_building_size: firstNonEmpty(
+          listing.out_building_size,
+          findPayloadValue(payload, ['OutBuildingSize', 'out_building_size', 'outBuildingSize', 'OutbuildingSize', 'outbuilding_size', 'outbuildingSize'])
+        ),
         zoning_type: s('zoning_type'),
         is_furnished: b('is_furnished') || payloadBool('is_furnished', 'IsFurnished'),
         pet_friendly: b('pet_friendly') || payloadBool('pet_friendly', 'PetFriendly'),
@@ -1003,7 +1802,21 @@ export default function Listings() {
         commercial_boardrooms_internet_port: Boolean(ci.boardrooms_internet_port),
         commercial_boardrooms_tv_port: Boolean(ci.boardrooms_tv_port),
         commercial_boardrooms_wifi: Boolean(ci.boardrooms_wifi),
-        agents: Array.isArray(listing.agents) ? (listing.agents as AgentEntry[]) : [],
+        agents: (() => {
+          const loaded: AgentEntry[] = Array.isArray(listing.agents) ? (listing.agents as AgentEntry[]) : [];
+          if (loaded.length === 0 && (isAgent || isOfficeAdmin) && activeContext?.associateId) {
+            const me = activeAgents.find((a) => a.id === activeContext.associateId);
+            return [{
+              associate_id: activeContext.associateId,
+              agent_name: me?.full_name ?? user?.name ?? '',
+              agent_role: 'Primary',
+              is_primary: true,
+              market_center_id: me?.market_center_id ?? activeContext.marketCenterId ?? '',
+              sort_order: 0,
+            }];
+          }
+          return loaded;
+        })(),
         contacts: Array.isArray(listing.contacts) ? (listing.contacts as ContactEntry[]) : [],
         show_times: Array.isArray(listing.show_times) ? (listing.show_times as ShowTimeEntry[]) : [],
         open_house: Array.isArray(listing.open_house) ? (listing.open_house as OpenHouseEntry[]) : [],
@@ -1027,6 +1840,11 @@ export default function Listings() {
   async function saveListing(publish: boolean): Promise<void> {
     setIsSaving(true);
     setFormError(null);
+    setPublishValidationErrors([]);
+    setP24Result(null);
+    setPpResult(null);
+    setKwwResult(null);
+    setEntegralResult(null);
 
     try {
       // Auto-generate listing number on first save if not already set
@@ -1040,13 +1858,50 @@ export default function Listings() {
         }
       }
 
+      const existingPropertyInfo = originalListingPayload.propertyInfo && typeof originalListingPayload.propertyInfo === 'object'
+        ? (originalListingPayload.propertyInfo as Record<string, unknown>)
+        : {};
+
+      // Draft saves should always persist Listing Status as Draft.
+      const effectiveStatusName = publish ? form.status_name : 'Draft';
+      const effectiveForm = publish ? form : { ...form, status_name: effectiveStatusName };
+
+      const withdrawing = isWithdrawalState(effectiveStatusName, form.listing_status_tag);
+      const requiresApprovalOnPublish = publish && listingApprovalRequired && !isOfficeAdmin && !withdrawing;
+      const shouldBePublished = publish && !requiresApprovalOnPublish && !withdrawing;
+      const selectedPortalNames = getSelectedPortalNames(effectiveForm);
+      const shouldValidatePortalMinimum = publish && selectedPortalNames.length > 0 && !requiresApprovalOnPublish;
+
+      if (shouldValidatePortalMinimum) {
+        const missingFields = getPortalPublishMissingFields(effectiveForm);
+        if (missingFields.length > 0) {
+          setPublishValidationErrors(missingFields);
+          setIsSaving(false);
+          return;
+        }
+      }
+
       const payload = {
-        ...form,
+        ...effectiveForm,
+        status_name: effectiveStatusName,
         listing_number: listingNumber,
-        is_draft: !publish,
-        is_published: publish,
-        image_urls: normalizeImageUrls(form.image_urls),
+        // If approval required: keep as draft; approval flow will publish after review
+        is_draft: requiresApprovalOnPublish ? true : !publish,
+        is_published: shouldBePublished,
+        listing_status_tag: requiresApprovalOnPublish ? 'Pending Approval' : form.listing_status_tag,
+        image_urls: normalizeImageUrls([...form.normalized_images.map(ni => ni.file_url ?? '').filter(u => u), ...form.image_urls]),
         listing_payload: {
+          ...originalListingPayload,
+          EntegralReference: form.entegral_reference_id,
+          EntegralId: form.entegral_reference_id,
+          entegral_reference: form.entegral_reference_id,
+          entegral_reference_id: form.entegral_reference_id,
+          EntegralSyncMessage: form.entegral_sync_status,
+          entegral_sync_status: form.entegral_sync_status,
+          propertyInfo: {
+            ...existingPropertyInfo,
+            ...(selectedProperty24SuburbId ? { suburbId: Number(selectedProperty24SuburbId) } : {}),
+          },
           commercial_industrial: {
             building_name: form.commercial_building_name,
             gross_lettable_area_sqm: form.commercial_gross_lettable_area_sqm,
@@ -1091,13 +1946,125 @@ export default function Listings() {
       });
 
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? 'Failed to save listing');
+        const raw = await res.text();
+        let message = `Failed to save listing (${res.status})`;
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw) as { error?: string; message?: string };
+            message = parsed.error ?? parsed.message ?? message;
+          } catch {
+            message = raw;
+          }
+        }
+        throw new Error(message);
       }
 
+      let savedId = editingId;
       if (!editingId) {
         const body = (await res.json()) as { id: string };
         setEditingId(body.id);
+        savedId = body.id;
+      }
+
+      // Approval flow: submit for admin review instead of direct publish
+      if (requiresApprovalOnPublish && savedId) {
+        const submitRes = await fetch(`/api/listings/${savedId}/submit-for-approval`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ comment: 'Submitted from listing workspace' }),
+        });
+        if (!submitRes.ok) {
+          const body = (await submitRes.json().catch(() => ({}))) as { error?: string };
+          throw new Error(body.error ?? 'Failed to submit listing for approval');
+        }
+        setFormSuccess('Your listing has been submitted for approval. Admins will be notified to review it.');
+        await refetch();
+        return;
+      }
+
+      // If publishing and any portal is enabled, call each independently in parallel
+      const anyPortalEnabled = publish && savedId && (form.feed_to_property24 || form.feed_to_private_property || form.feed_to_kww || form.feed_to_entegral);
+      if (anyPortalEnabled && savedId) {
+        await Promise.all([
+          form.feed_to_property24
+            ? fetch(`/api/listings/${savedId}/publish-to-property24`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                .then(async (r) => {
+                  const body = (await r.json().catch(() => ({}))) as { success?: boolean; message?: string; property24_reference_id?: string | null; error?: string; details?: unknown };
+                  if (r.ok && body.success) {
+                    setP24Result({ success: true, message: body.message ?? 'Published to Property24.', property24_reference_id: body.property24_reference_id ?? null, details: body.details });
+                    if (body.property24_reference_id) {
+                      setForm((prev) => ({ ...prev, property24_ref1: body.property24_reference_id ?? prev.property24_ref1, property24_sync_status: `Published ${new Date().toISOString().slice(0, 10)}`, feed_to_property24: true }));
+                    }
+                  } else {
+                    const errMsg = body.message ?? body.error ?? `Property24 publish failed (HTTP ${r.status})`;
+                    setP24Result({ success: false, message: errMsg, details: body.details });
+                    setForm((prev) => ({ ...prev, property24_sync_status: `Failed: ${errMsg.slice(0, 200)}` }));
+                  }
+                })
+                .catch((err: unknown) => { setP24Result({ success: false, message: err instanceof Error ? err.message : 'Network error' }); })
+            : Promise.resolve(),
+          form.feed_to_private_property
+            ? fetch(`/api/listings/${savedId}/publish-to-private-property`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                .then(async (r) => {
+                  const body = (await r.json().catch(() => ({}))) as { success?: boolean; message?: string; reference_id?: string | null; error?: string; details?: unknown };
+                  const ok = r.ok && !!body.success;
+                  const msg = body.message ?? body.error ?? (ok ? 'Published to Private Property.' : `Private Property publish failed (HTTP ${r.status})`);
+                  setPpResult({ success: ok, message: msg, reference_id: body.reference_id ?? null, details: body.details });
+                  if (ok) {
+                    // Always update sync status; only update ref if PP returned one (T-number may arrive later)
+                    setForm((prev) => ({
+                      ...prev,
+                      private_property_ref1: body.reference_id ?? prev.private_property_ref1,
+                      private_property_sync_status: body.reference_id
+                        ? `Active ${new Date().toISOString().slice(0, 10)}`
+                        : `Active (awaiting ref)`,
+                    }));
+                  }
+                })
+                .catch((err: unknown) => { setPpResult({ success: false, message: err instanceof Error ? err.message : 'Network error' }); })
+            : Promise.resolve(),
+          form.feed_to_kww
+            ? fetch(`/api/listings/${savedId}/publish-to-kww`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                .then(async (r) => {
+                  const body = (await r.json().catch(() => ({}))) as { success?: boolean; message?: string; reference_id?: string | null; reference?: string | null; reference_uuid?: string | null; reference_key?: string | null; error?: string; details?: unknown; rawResponse?: unknown };
+                  const ok = r.ok && !!body.success;
+                  const detailsText = !ok && body.details
+                    ? (() => {
+                        try { return JSON.stringify(body.details); } catch { return String(body.details); }
+                      })()
+                    : null;
+                  const msg = body.message ?? body.error ?? detailsText ?? (ok ? 'Published to KW Worldwide.' : `KWW publish failed (HTTP ${r.status})`);
+                  const ref = body.reference_id ?? body.reference ?? null;
+                  setKwwResult({ success: ok, message: msg, reference_id: ref, reference_uuid: body.reference_uuid ?? null, reference_key: body.reference_key ?? null, details: body.details ?? body.rawResponse });
+                  if (ok) {
+                    setForm((prev) => ({
+                      ...prev,
+                      kww_property_reference: ref ?? prev.kww_property_reference,
+                      kww_ref1: body.reference_uuid ?? prev.kww_ref1,
+                      kww_ref2: body.reference_key ?? prev.kww_ref2,
+                      kww_sync_status: 'Active',
+                    }));
+                  }
+                })
+                .catch((err: unknown) => { setKwwResult({ success: false, message: err instanceof Error ? err.message : 'Network error' }); })
+            : Promise.resolve(),
+          form.feed_to_entegral
+            ? fetch(`/api/listings/${savedId}/publish-to-entegral`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                .then(async (r) => {
+                  const body = (await r.json().catch(() => ({}))) as { success?: boolean; message?: string; reference_id?: string | null; error?: string; details?: unknown };
+                  const ok = r.ok && !!body.success;
+                  const msg = body.message ?? body.error ?? (ok ? 'Published to Entegral.' : `Entegral publish failed (HTTP ${r.status})`);
+                  setEntegralResult({ success: ok, message: msg, reference_id: body.reference_id ?? null, details: body.details });
+                  if (ok) {
+                    setForm((prev) => ({ ...prev, entegral_sync_status: `Published ${new Date().toISOString().slice(0, 10)}` }));
+                  }
+                })
+                .catch((err: unknown) => { setEntegralResult({ success: false, message: err instanceof Error ? err.message : 'Network error' }); })
+            : Promise.resolve(),
+        ]);
+
+        await refetch();
+        return; // Keep form open so user can see portal results
       }
 
       setIsFormOpen(false);
@@ -1109,27 +2076,57 @@ export default function Listings() {
     }
   }
 
+  function closeListingWorkspace(): void {
+    setFormError(null);
+    setFormSuccess(null);
+    setP24Result(null);
+    setPpResult(null);
+    setKwwResult(null);
+    setEntegralResult(null);
+    setIsFormOpen(false);
+  }
+
   async function uploadListingImages(files: FileList | null): Promise<void> {
     if (!files || files.length === 0) return;
     setIsUploadingImages(true);
     setFormError(null);
+    const allNewUrls: string[] = [];
+    const failures: string[] = [];
     try {
-      const payloadFiles = await Promise.all(
-        Array.from(files).map(async (f) => ({
+      for (const f of Array.from(files)) {
+        if (!f.type.startsWith('image/')) {
+          failures.push(`${f.name}: unsupported file type.`);
+          continue;
+        }
+
+        if (f.size > MAX_LISTING_IMAGE_SIZE_BYTES) {
+          failures.push(`${f.name}: file too large. Maximum image size is 15MB.`);
+          continue;
+        }
+
+        const payloadFiles = [{
           name: f.name,
           mimeType: f.type,
           contentBase64: await fileToBase64(f),
-        }))
-      );
-      const res = await fetch('/api/listings/images/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: payloadFiles }),
-      });
-      if (!res.ok) throw new Error('Image upload failed');
-      const body = (await res.json()) as { image_urls?: string[] };
-      const newUrls = normalizeImageUrls(body.image_urls ?? []);
-      const newNormalized: NormalizedImageEntry[] = newUrls.map((url, i) => ({
+        }];
+        const res = await fetch('/api/listings/images/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: payloadFiles }),
+        });
+        if (!res.ok) {
+          failures.push(`${f.name}: ${await getUploadErrorMessage(res, 'Image upload failed.')}`);
+          continue;
+        }
+        const body = (await res.json()) as { image_urls?: string[] };
+        allNewUrls.push(...normalizeImageUrls(body.image_urls ?? []));
+      }
+
+      if (allNewUrls.length === 0 && failures.length > 0) {
+        throw new Error(failures.join(' '));
+      }
+
+      const newNormalized: NormalizedImageEntry[] = allNewUrls.map((url, i) => ({
         file_url: url,
         file_name: url.split('/').pop() ?? '',
         media_type: 'image',
@@ -1139,8 +2136,12 @@ export default function Listings() {
       setForm((p) => ({
         ...p,
         normalized_images: [...p.normalized_images, ...newNormalized],
-        image_urls: normalizeImageUrls([...p.image_urls, ...newUrls]),
+        image_urls: normalizeImageUrls([...p.image_urls, ...allNewUrls]),
       }));
+
+      if (failures.length > 0) {
+        setFormError(failures.join(' '));
+      }
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Image upload failed');
     } finally {
@@ -1275,23 +2276,100 @@ export default function Listings() {
     );
   }
 
-  function searchableAddressField(label: string, key: 'province' | 'city' | 'suburb', choices: string[]) {
-    const listId = `listing-${key}-options`;
+  function property24ProvinceField() {
+    const allProvinces = (property24ProvinceData?.items ?? []).length > 0
+      ? (property24ProvinceData?.items ?? [])
+      : (options?.provinces ?? []).length > 0
+        ? (options?.provinces ?? []).map((name) => ({ id: name, name }))
+        : SOUTH_AFRICA_PROVINCES.map((name) => ({ id: name, name }));
+    const provinceOptions = Array.from(new Set(allProvinces.map((p) => p.name))).sort((a, b) => a.localeCompare(b));
     return (
-      <label key={key} className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">{label}</span>
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-slate-600">Province</span>
         <input
-          list={listId}
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          value={form[key]}
-          onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
-          placeholder={`Search ${label.toLowerCase()}`}
+          list="listing-province-options"
+          value={form.province}
+          name="listingProvince"
+          autoComplete="new-password"
+          onChange={(e) => {
+            const nextValue = e.target.value;
+            setForm((p) => ({ ...p, province: nextValue, city: '', suburb: '' }));
+            setSelectedProperty24SuburbId(null);
+          }}
+          placeholder={isSearchingProperty24Provinces ? 'Loading provinces…' : 'Search or select province'}
         />
-        <datalist id={listId}>
-          {choices.map((choice) => (
-            <option key={choice} value={choice} />
+        <datalist id="listing-province-options">
+          {provinceOptions.map((name) => (
+            <option key={name} value={name} />
           ))}
         </datalist>
+      </label>
+    );
+  }
+
+  function property24SuburbField() {
+    const suburbOptions = Array.from(new Set(suburbPickerOptions.map((option) => option.name))).sort((a, b) => a.localeCompare(b));
+    return (
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-slate-600">Suburb</span>
+        <input
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          list="listing-suburb-options"
+          name="listingSuburb"
+          autoComplete="new-password"
+          value={form.suburb}
+          onChange={(e) => {
+            const nextValue = e.target.value;
+            const matched = suburbPickerOptions.find((option) => option.name.toLowerCase() === nextValue.trim().toLowerCase());
+            setForm((p) => ({ ...p, suburb: nextValue }));
+            setSelectedProperty24SuburbId(matched?.id || null);
+          }}
+          placeholder={form.city && form.province ? 'Search Property24 suburbs' : 'Select province and city first'}
+        />
+        <datalist id="listing-suburb-options">
+          {suburbOptions.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+        <div className="flex min-h-5 items-center justify-between text-[11px] text-slate-500">
+          <span>
+            {selectedProperty24SuburbId
+              ? `Matched to Property24 suburb ID ${selectedProperty24SuburbId}`
+              : 'Choose a suburb from the Property24 list to lock the suburb ID.'}
+          </span>
+          {isSearchingProperty24Suburbs && <span>Searching...</span>}
+        </div>
+      </label>
+    );
+  }
+
+  function property24CityField() {
+    const cityOptions = Array.from(new Set(cityPickerOptions.map((option) => option.name))).sort((a, b) => a.localeCompare(b));
+    return (
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-slate-600">City</span>
+        <input
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          list="listing-city-options"
+          name="listingCity"
+          autoComplete="new-password"
+          value={form.city}
+          onChange={(e) => {
+            const nextValue = e.target.value;
+            setForm((p) => ({ ...p, city: nextValue, suburb: '' }));
+            setSelectedProperty24SuburbId(null);
+          }}
+          placeholder={form.province ? 'Search Property24 cities' : 'Select province first'}
+        />
+        <datalist id="listing-city-options">
+          {cityOptions.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+        <div className="flex min-h-5 items-center justify-end text-[11px] text-slate-500">
+          {isSearchingProperty24Cities && <span>Searching...</span>}
+        </div>
       </label>
     );
   }
@@ -1328,13 +2406,25 @@ export default function Listings() {
   };
 
   const AgentSelector = ({ roles }: { roles: string[] }) => {
-    const [agentId, setAgentId] = useState('');
+    const agentListId = 'listing-agent-options';
+    const [agentQuery, setAgentQuery] = useState('');
     const [agentRole, setAgentRole] = useState('Secondary');
 
+    const searchableAgents = useMemo(() => filteredAgents.map((a) => ({
+      ...a,
+      display: `${a.full_name ?? a.id} (${a.source_market_center_id ?? ''})`,
+    })), [filteredAgents]);
+
     function addAgent() {
-      const found = activeAgents.find((a) => a.id === agentId);
+      const query = agentQuery.trim().toLowerCase();
+      if (!query) return;
+      const found = searchableAgents.find((a) =>
+        a.id.toLowerCase() === query
+        || a.display.toLowerCase() === query
+        || `${a.full_name ?? ''} ${a.id} ${a.source_market_center_id ?? ''} ${a.market_center_name ?? ''}`.toLowerCase().includes(query)
+      );
       if (!found) return;
-      if (form.agents.some((a) => a.associate_id === agentId)) return;
+      if (form.agents.some((a) => a.associate_id === found.id)) return;
       const isPrimary = form.agents.length === 0;
       setForm((p) => ({
         ...p,
@@ -1351,18 +2441,25 @@ export default function Listings() {
           },
         ],
       }));
-      setAgentId('');
+      setAgentQuery('');
     }
 
     return (
       <div className="space-y-3">
         <div className="flex gap-2 flex-wrap">
-          <select className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white flex-1 min-w-48" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-            <option value="">-- Select Agent --</option>
-            {filteredAgents.map((a) => (
-              <option key={a.id} value={a.id}>{a.full_name ?? a.id} ({a.source_market_center_id ?? ''})</option>
+          <input
+            type="search"
+            list={agentListId}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white flex-1 min-w-48"
+            value={agentQuery}
+            onChange={(e) => setAgentQuery(e.target.value)}
+            placeholder="-- Select Agent (type to search) --"
+          />
+          <datalist id={agentListId}>
+            {searchableAgents.map((a) => (
+              <option key={a.id} value={a.display} />
             ))}
-          </select>
+          </datalist>
           {form.agents.length > 0 && (
             <select className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white" value={agentRole} onChange={(e) => setAgentRole(e.target.value)}>
               {roles.filter((r) => r !== 'Primary').map((r) => <option key={r} value={r}>{r}</option>)}
@@ -1432,7 +2529,9 @@ export default function Listings() {
           </div>
           <span className="status-chip info">{data?.total ?? 0} total</span>
           <button className="primary-btn" type="button" onClick={() => void refetch()}>{isFetching ? 'Refreshing...' : 'Refresh'}</button>
-          <button className="primary-btn" type="button" onClick={openCreateForm}>Add Listing</button>
+          {canCreateListing && (
+            <button className="primary-btn" type="button" onClick={openCreateForm}>Add Listing</button>
+          )}
         </div>
       </div>
 
@@ -1457,7 +2556,14 @@ export default function Listings() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" type="button" onClick={() => setIsFormOpen(false)}>Cancel</button>
+                <button
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                  type="button"
+                  onClick={openFormPreview}
+                >
+                  Preview Listing
+                </button>
+                <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" type="button" onClick={closeListingWorkspace}>Cancel</button>
                 <button
                   className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-1.5 text-sm font-medium text-amber-800 hover:bg-amber-100"
                   type="button"
@@ -1472,7 +2578,22 @@ export default function Listings() {
                   disabled={isSaving}
                   onClick={() => void saveListing(true)}
                 >
-                  {isSaving ? 'Saving...' : 'Save / Publish'}
+                  {isSaving
+                    ? (form.feed_to_property24 ? 'Saving...' : 'Saving...')
+                    : (() => {
+                        const withdrawing = isWithdrawalState(form.status_name, form.listing_status_tag);
+                        if (listingApprovalRequired && !isOfficeAdmin && !withdrawing) return 'Save & Submit for Approval';
+                        const selectedPortals = [
+                          form.feed_to_property24 ? 'Property24' : null,
+                          form.feed_to_private_property ? 'Private Property' : null,
+                          form.feed_to_kww ? 'KWW' : null,
+                          form.feed_to_entegral ? 'Entegral' : null,
+                        ].filter((name): name is string => Boolean(name));
+                        if (selectedPortals.length === 0) return 'Save / Publish';
+                        const action = withdrawing ? 'Withdraw from' : 'Publish to';
+                        if (selectedPortals.length === 1) return `Save & ${action} ${selectedPortals[0]}`;
+                        return `Save & ${action} Selected Portals`;
+                      })()}
                 </button>
               </div>
             </div>
@@ -1487,22 +2608,156 @@ export default function Listings() {
                   ['images', 'Images'],
                   ['mandate', 'Mandate'],
                   ['property', 'Property Details'],
-                ] as [ListingSection, string][]).map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setActiveSection(key)}
-                    className={`w-full rounded-lg px-3 py-2 text-left text-sm font-medium ${activeSection === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'}`}
-                  >
-                    {label}
-                  </button>
-                ))}
+                ] as [ListingSection, string][]).map(([key, label]) => {
+                  const sectionHasError = publishValidationErrors.some((e) => e.section === key);
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setActiveSection(key)}
+                      className={`w-full rounded-lg px-3 py-2 text-left text-sm font-medium flex items-center justify-between gap-2 ${activeSection === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'}`}
+                    >
+                      <span>{label}</span>
+                      {sectionHasError && (
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${activeSection === key ? 'bg-white' : 'bg-amber-500'}`} title="This section has required fields missing" />
+                      )}
+                    </button>
+                  );
+                })}
               </aside>
 
               {/* Content Panel */}
               <div className="flex-1 overflow-auto p-6 space-y-6">
                 {isLoadingDetails && <p className="text-sm text-slate-500">Loading listing details...</p>}
+                {formSuccess && <p className="text-sm text-green-700 rounded-lg bg-green-50 p-3 border border-green-200">{formSuccess}</p>}
                 {formError && <p className="text-sm text-amber-700 rounded-lg bg-amber-50 p-3 border border-amber-200">{formError}</p>}
+                {publishValidationErrors.length > 0 && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 space-y-3">
+                    <div className="flex items-start gap-2">
+                      <span className="text-amber-500 text-lg leading-none mt-0.5">⚠️</span>
+                      <div>
+                        <p className="font-semibold text-amber-800 text-sm">A few things are needed before you can publish</p>
+                        <p className="text-amber-700 text-xs mt-0.5">Please complete the following before publishing to the portals:</p>
+                      </div>
+                    </div>
+                    <ul className="space-y-2 pl-1">
+                      {publishValidationErrors.map((err, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <button
+                            type="button"
+                            className="text-xs bg-amber-200 text-amber-800 rounded px-1.5 py-0.5 font-medium shrink-0 mt-0.5 hover:bg-amber-300 transition-colors text-center"
+                            style={{ minWidth: '9.5rem' }}
+                            onClick={() => setActiveSection(err.section)}
+                          >
+                            {err.sectionLabel}
+                          </button>
+                          <div>
+                            <p className="text-sm font-medium text-amber-900">{err.label}</p>
+                            <p className="text-xs text-amber-700">{err.helpText}</p>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      className="text-xs text-amber-600 hover:text-amber-800 underline"
+                      onClick={() => setPublishValidationErrors([])}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+                {(p24Result || ppResult || kwwResult || entegralResult) && (
+                  <div className="flex items-center justify-end">
+                    <button
+                      type="button"
+                      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      onClick={closeListingWorkspace}
+                    >
+                      Close Workspace
+                    </button>
+                  </div>
+                )}
+                {p24Result && (
+                  <div className={`rounded-lg border p-4 flex items-start gap-3 ${p24Result.success ? 'bg-green-50 border-green-300 text-green-800' : 'bg-red-50 border-red-300 text-red-800'}`}>
+                    <span className="text-lg">{p24Result.success ? '✅' : '❌'}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-sm">
+                        {p24Result.success
+                          ? (p24Result.message.toLowerCase().includes('withdrawn') ? 'Property24 Withdraw Successful' : 'Property24 Publish Successful')
+                          : (p24Result.message.toLowerCase().includes('withdraw') ? 'Property24 Withdraw Failed' : 'Property24 Publish Failed')}
+                      </p>
+                      <p className="text-sm mt-0.5">{p24Result.message}</p>
+                      {p24Result.success && p24Result.property24_reference_id && (
+                        <p className="text-xs mt-1 font-mono bg-white/60 rounded px-2 py-1 inline-block border border-green-200">
+                          Reference ID: {p24Result.property24_reference_id}
+                        </p>
+                      )}
+                      {!p24Result.success && Boolean(p24Result.details) && (
+                        <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded bg-white/60 px-3 py-2 text-xs leading-5 border border-red-200">
+                          {JSON.stringify(p24Result.details, null, 2)}
+                        </pre>
+                      )}
+                    </div>
+                    <button type="button" className="text-xs opacity-60 hover:opacity-100 shrink-0" onClick={() => setP24Result(null)}>Dismiss</button>
+                  </div>
+                )}
+                {ppResult && (
+                  <div className={`rounded-lg border p-4 flex items-start gap-3 ${ppResult.success ? 'bg-green-50 border-green-300 text-green-800' : 'bg-amber-50 border-amber-300 text-amber-800'}`}>
+                    <span className="text-lg">{ppResult.success ? '✅' : '⚠️'}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-sm">
+                        {ppResult.success ? 'Private Property Publish Successful' : 'Private Property Not Published'}
+                      </p>
+                      <p className="text-sm mt-0.5">{ppResult.message}</p>
+                      {ppResult.success && ppResult.reference_id && (
+                        <p className="text-xs mt-1 font-mono bg-white/60 rounded px-2 py-1 inline-block border border-green-200">
+                          Reference ID: {ppResult.reference_id}
+                        </p>
+                      )}
+                      {ppResult.success && !ppResult.reference_id && (
+                        <p className="text-xs mt-1 text-amber-700 animate-pulse">
+                          Checking for PP reference number… (auto-fills when assigned)
+                        </p>
+                      )}
+                    </div>
+                    <button type="button" className="text-xs opacity-60 hover:opacity-100 shrink-0" onClick={() => setPpResult(null)}>Dismiss</button>
+                  </div>
+                )}
+                {kwwResult && (
+                  <div className={`rounded-lg border p-4 flex items-start gap-3 ${kwwResult.success ? 'bg-green-50 border-green-300 text-green-800' : 'bg-amber-50 border-amber-300 text-amber-800'}`}>
+                    <span className="text-lg">{kwwResult.success ? '✅' : '⚠️'}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-sm">
+                        {kwwResult.success ? 'KW Worldwide Publish Successful' : 'KW Worldwide Not Published'}
+                      </p>
+                      <p className="text-sm mt-0.5">{kwwResult.message}</p>
+                      {kwwResult.success && kwwResult.reference_id && (
+                        <p className="text-xs mt-1 font-mono bg-white/60 rounded px-2 py-1 inline-block border border-green-200">
+                          Reference ID: {kwwResult.reference_id}
+                        </p>
+                      )}
+                    </div>
+                    <button type="button" className="text-xs opacity-60 hover:opacity-100 shrink-0" onClick={() => setKwwResult(null)}>Dismiss</button>
+                  </div>
+                )}
+                {entegralResult && (
+                  <div className={`rounded-lg border p-4 flex items-start gap-3 ${entegralResult.success ? 'bg-green-50 border-green-300 text-green-800' : 'bg-amber-50 border-amber-300 text-amber-800'}`}>
+                    <span className="text-lg">{entegralResult.success ? '✅' : '⚠️'}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-sm">
+                        {entegralResult.success ? 'Entegral Publish Successful' : 'Entegral Not Published'}
+                      </p>
+                      <p className="text-sm mt-0.5">{entegralResult.message}</p>
+                      {entegralResult.success && entegralResult.reference_id && (
+                        <p className="text-xs mt-1 font-mono bg-white/60 rounded px-2 py-1 inline-block border border-green-200">
+                          Reference ID: {entegralResult.reference_id}
+                        </p>
+                      )}
+                    </div>
+                    <button type="button" className="text-xs opacity-60 hover:opacity-100 shrink-0" onClick={() => setEntegralResult(null)}>Dismiss</button>
+                  </div>
+                )}
 
                 {/* ------------------ LISTING INFO ------------------ */}
                 {activeSection === 'info' && (
@@ -1525,12 +2780,51 @@ export default function Listings() {
                           )}
                         </div>
                       </label>
-                      {inp('Source Listing ID', 'source_listing_id')}
+                      {sel('For Sale or Rent', 'sale_or_rent', options?.sale_or_rent_types ?? [])}
                       {inp('Expiry Date', 'expiry_date', { type: 'date' })}
                       {sel('Listing Status', 'status_name', options?.listing_statuses ?? ['Active', 'Inactive', 'Draft'])}
-                      {sel('Listing Status Tag', 'listing_status_tag', options?.listing_status_tags ?? [])}
+                      {(() => {
+                        const isRental = (form.sale_or_rent ?? '').toLowerCase().includes('rent');
+                        // Portal mapping hints — vary by sale vs rental
+                        const STATUS_TAG_HINTS: Record<string, string> = isRental ? {
+                          'For Sale':          'P24: To Rent (active) · KWW: For Rent · PP: To Let',
+                          'Reduced':           'P24: Reduced banner · KWW: For Rent · PP: To Let',
+                          'Under Offer':       'P24: Pending banner · KWW: Pending · PP: Pending Offer',
+                          'Sold':              'P24: Sold · KWW: Sold · PP: Sold',
+                          'Withdrawn':         'P24: Withdrawn (delisted) · KWW: Withdrawn · PP: Inactive',
+                          'Expired':           'P24: Expired (delisted) · KWW: Expired',
+                          'Pending Approval':  'Internal only — not sent to portals until approved',
+                          'Approval Declined': 'Internal only — listing blocked from publishing',
+                        } : {
+                          'For Sale':          'P24: Active · KWW: For Sale · PP: For Sale',
+                          'Reduced':           'P24: Reduced banner · KWW: For Sale · PP: For Sale',
+                          'Under Offer':       'P24: Pending banner · KWW: Pending · PP: Pending Offer',
+                          'Sold':              'P24: Sold · KWW: Sold · PP: Sold',
+                          'Withdrawn':         'P24: Withdrawn (delisted) · KWW: Withdrawn · PP: Inactive',
+                          'Expired':           'P24: Expired (delisted) · KWW: Expired',
+                          'Pending Approval':  'Internal only — not sent to portals until approved',
+                          'Approval Declined': 'Internal only — listing blocked from publishing',
+                        };
+                        const currentHint = STATUS_TAG_HINTS[form.listing_status_tag] ?? null;
+                        const tagChoices = options?.listing_status_tags ?? ['For Sale', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'];
+                        return (
+                          <label className="flex flex-col gap-1">
+                            <span className="text-xs font-medium text-slate-600">Listing Status Tag</span>
+                            <select
+                              className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
+                              value={form.listing_status_tag}
+                              onChange={(e) => setForm((p) => ({ ...p, listing_status_tag: e.target.value }))}
+                            >
+                              <option value="">-- Select --</option>
+                              {tagChoices.map((c) => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                            {currentHint && (
+                              <span className="text-xs text-slate-500 leading-tight">{currentHint}</span>
+                            )}
+                          </label>
+                        );
+                      })()}
                       {sel('Ownership Type', 'ownership_type', options?.ownership_types ?? [])}
-                      {sel('For Sale or Rent', 'sale_or_rent', options?.sale_or_rent_types ?? [])}
                     </div>
 
                     <h4 className="text-base font-semibold text-slate-800 border-t pt-4">Listing Price</h4>
@@ -1561,19 +2855,83 @@ export default function Listings() {
 
                     <h4 className="text-base font-semibold text-slate-800 border-t pt-4">Property Type</h4>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                      {sel('Property Type', 'property_type', options?.property_types ?? [])}
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-slate-600">Property Type</span>
+                        <select
+                          className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
+                          value={form.property_type}
+                          onChange={(e) => {
+                            const nextType = e.target.value;
+                            const nextSubTypeChoices = options?.property_sub_types?.[nextType] ?? [];
+                            setForm((p) => {
+                              const nextSubType = nextSubTypeChoices.includes(p.property_sub_type)
+                                ? p.property_sub_type
+                                : (nextSubTypeChoices[0] ?? '');
+                              const nextDfOpts = getDescriptiveFeatureOptions(nextType, nextSubType);
+                              const nextDescriptive = nextDfOpts.includes(p.descriptive_feature)
+                                ? p.descriptive_feature
+                                : '';
+                              return {
+                                ...p,
+                                property_type: nextType,
+                                property_sub_type: nextSubType,
+                                descriptive_feature: nextDescriptive,
+                              };
+                            });
+                          }}
+                        >
+                          <option value="">-- Select --</option>
+                          {(options?.property_types ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </label>
                       <label className="flex flex-col gap-1">
                         <span className="text-xs font-medium text-slate-600">Property Sub Type</span>
                         <select
                           className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
                           value={form.property_sub_type}
-                          onChange={(e) => setForm((p) => ({ ...p, property_sub_type: e.target.value }))}
+                          onChange={(e) => {
+                            const nextSubType = e.target.value;
+                            setForm((p) => {
+                              const nextDfOpts = getDescriptiveFeatureOptions(p.property_type, nextSubType);
+                              const nextSubTypeLower = nextSubType.trim().toLowerCase();
+                              const nextIsSectional = SECTIONAL_TITLE_SUB_TYPES.has(nextSubTypeLower);
+                              return {
+                                ...p,
+                                property_sub_type: nextSubType,
+                                descriptive_feature: nextDfOpts.includes(p.descriptive_feature)
+                                  ? p.descriptive_feature
+                                  : '',
+                                // Clear unit/door number for freehold/non-sectional property types
+                                unit_number: nextIsSectional ? p.unit_number : '',
+                                door_number: nextIsSectional ? p.door_number : '',
+                              };
+                            });
+                          }}
                         >
                           <option value="">-- Select --</option>
                           {subTypeOptions.map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </label>
-                      {inp('Descriptive Feature', 'descriptive_feature')}
+                        {(() => {
+                          const dfOpts = descriptiveFeatureOptions;
+                          if (dfOpts.length === 0) return inp('Descriptive Feature', 'descriptive_feature');
+                          return (
+                            <label className="flex flex-col gap-1">
+                              <span className="text-xs font-medium text-slate-600">Descriptive Feature</span>
+                              <select
+                                className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
+                                value={form.descriptive_feature}
+                                onChange={(e) => setForm((p) => ({ ...p, descriptive_feature: e.target.value }))}
+                              >
+                                <option value="">-- Select --</option>
+                                {form.descriptive_feature && !dfOpts.includes(form.descriptive_feature) && (
+                                  <option value={form.descriptive_feature}>{form.descriptive_feature}</option>
+                                )}
+                                {dfOpts.map((c) => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            </label>
+                          );
+                        })()}
                       {chk('Retirement Living', 'retirement_living')}
                     </div>
                   </section>
@@ -1583,18 +2941,36 @@ export default function Listings() {
                 {activeSection === 'address' && (
                   <section className="space-y-6">
                     <h3 className="text-lg font-semibold text-slate-900">Address & Validation</h3>
+
+                    {/* Structured address entry — cascading P24 dropdowns, then street details */}
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                      <p className="text-xs text-slate-500">
+                        Select your location step by step. Once all fields are filled in, the map coordinates will be set automatically.
+                      </p>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                        {inp('Country', 'country')}
+                        {property24ProvinceField()}
+                        {property24CityField()}
+                        {property24SuburbField()}
+                        {inp('Street Number', 'street_number')}
+                        {inp('Street Name', 'street_name')}
+                        {inp('Postal Code', 'postal_code')}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-slate-500 border-t pt-3">
+                        <span className={isGeocodingAddress ? 'text-amber-600 font-medium' : ''}>
+                          {isGeocodingAddress ? '📍 Finding map coordinates…' : '📍 Coordinates are set automatically once all address fields are filled in.'}
+                        </span>
+                        {!isGeocodingAddress && geocodeStatusMessage && (
+                          <span className="text-red-600 font-medium">{geocodeStatusMessage}</span>
+                        )}
+                      </div>
+                    </div>
+
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                      {inp('Country', 'country')}
-                      {searchableAddressField('Province', 'province', options?.provinces ?? [])}
                       {inp('Erf Number', 'erf_number')}
-                      {inp('Unit Number', 'unit_number')}
-                      {inp('Door Number', 'door_number')}
+                      {isSectionalTitleSubType(form) && inp('Unit Number', 'unit_number')}
+                      {isSectionalTitleSubType(form) && inp('Door Number', 'door_number')}
                       {inp('Estate Name', 'estate_name')}
-                      {inp('Street Number', 'street_number')}
-                      {inp('Street Name', 'street_name')}
-                      {searchableAddressField('Suburb', 'suburb', filteredSuburbs)}
-                      {searchableAddressField('City', 'city', filteredCities)}
-                      {inp('Postal Code', 'postal_code')}
                       {inp('Address Line (Full)', 'address_line', { span: 3 })}
                       {inp('Longitude', 'longitude')}
                       {inp('Latitude', 'latitude')}
@@ -1642,9 +3018,8 @@ export default function Listings() {
                           {chk('Feed to Private Property', 'feed_to_private_property')}
                         </div>
                         {(form.feed_to_private_property || Boolean(firstReference(form.private_property_ref1, form.private_property_ref2, form.private_property_sync_status))) && (
-                          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                            {inp('Private Property Reference 1', 'private_property_ref1')}
-                            {inp('Private Property Reference 2', 'private_property_ref2')}
+                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            {inp('Private Property Reference', 'private_property_ref1')}
                             {inp('Sync Status', 'private_property_sync_status')}
                           </div>
                         )}
@@ -1656,10 +3031,8 @@ export default function Listings() {
                           {chk('Feed to KWW', 'feed_to_kww')}
                         </div>
                         {(form.feed_to_kww || Boolean(firstReference(form.kww_property_reference, form.kww_ref1, form.kww_ref2, form.kww_sync_status))) && (
-                          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                             {inp('KWW Property Reference', 'kww_property_reference')}
-                            {inp('KWW Reference 1', 'kww_ref1')}
-                            {inp('KWW Reference 2', 'kww_ref2')}
                             {inp('Sync Status', 'kww_sync_status')}
                           </div>
                         )}
@@ -1670,24 +3043,37 @@ export default function Listings() {
                         <div className="flex items-center gap-3">
                           {chk('Feed to Entegral', 'feed_to_entegral')}
                         </div>
-                        {(form.feed_to_entegral || Boolean(firstReference(form.entegral_sync_status))) && (
+                        {(form.feed_to_entegral || Boolean(firstReference(form.entegral_reference_id, form.entegral_sync_status))) && (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            {inp('Entegral Reference', 'entegral_reference_id')}
                             {inp('Sync Status', 'entegral_sync_status')}
                           </div>
                         )}
                       </div>
 
                       {/* Property24 */}
-                      <div className="rounded-lg border border-slate-200 p-4 space-y-3">
-                        <div className="flex items-center gap-3">
-                          {chk('Feed to Property24', 'feed_to_property24')}
+                      <div className={`rounded-lg border p-4 space-y-3 ${form.feed_to_property24 ? 'border-red-300 bg-red-50/30' : 'border-slate-200'}`}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            {chk('Feed to Property24', 'feed_to_property24')}
+                          </div>
+                          {form.feed_to_property24 && (
+                            <span className="text-xs text-red-700 font-medium bg-red-100 rounded-full px-2 py-0.5">
+                              Will publish live when &quot;Save &amp; Publish to Property24&quot; is clicked
+                            </span>
+                          )}
                         </div>
                         {(form.feed_to_property24 || Boolean(firstReference(form.property24_ref1, form.property24_ref2, form.property24_sync_status))) && (
-                          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                            {inp('Property24 Reference 1', 'property24_ref1')}
-                            {inp('Property24 Reference 2', 'property24_ref2')}
+                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            {inp('Property24 Reference', 'property24_ref1')}
                             {inp('Sync Status', 'property24_sync_status')}
                           </div>
+                        )}
+                        {form.feed_to_property24 && (
+                          <p className="text-xs text-slate-500">
+                            The primary agent must have a <strong>Property24 Agent ID</strong> set on their associate record for the publish to succeed.
+                            Property description, price, address, suburb, city, and province are required.
+                          </p>
                         )}
                       </div>
                     </div>
@@ -2096,7 +3482,7 @@ export default function Listings() {
 
       {/* Listing Preview Modal */}
       {previewItem && (
-        <div className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-sm" onClick={closePreview}>
+        <div className="fixed inset-0 z-[60] bg-slate-950/60 backdrop-blur-sm" onClick={closePreview}>
           <div className="absolute inset-4 md:inset-10 rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
               <div>
@@ -2110,7 +3496,7 @@ export default function Listings() {
                 <div className="relative h-64 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 md:h-96 lg:h-[32rem]">
                   {(previewItem.image_urls?.[previewImageIdx] ?? previewItem.image_urls?.[0]) ? (
                     <img
-                      src={previewItem.image_urls?.[previewImageIdx] ?? previewItem.image_urls?.[0] ?? ''}
+                      src={normalizeRenderableImageUrl(previewItem.image_urls?.[previewImageIdx] ?? previewItem.image_urls?.[0] ?? '')}
                       alt={previewItem.property_title ?? ''}
                       className="h-full w-full object-contain"
                       loading="eager"
@@ -2149,7 +3535,7 @@ export default function Listings() {
                         onClick={() => setPreviewImageIdx(idx)}
                         className={`h-16 w-24 shrink-0 overflow-hidden rounded-lg border ${idx === previewImageIdx ? 'border-red-500' : 'border-slate-200'}`}
                       >
-                        <img src={url} alt="thumbnail" className="h-full w-full object-cover" loading="lazy" decoding="async" />
+                        <img src={normalizeRenderableImageUrl(url)} alt="thumbnail" className="h-full w-full object-cover" loading="lazy" decoding="async" />
                       </button>
                     ))}
                   </div>
@@ -2255,7 +3641,7 @@ export default function Listings() {
                       previewDetail?.property24_reference_id,
                       previewItem.property24_reference_id
                     );
-                    const privatePropertyReference = firstReference(
+                    const privatePropertyReference = firstPrivatePropertyReference(
                       previewDetail?.private_property_ref1,
                       previewDetail?.private_property_ref2,
                       previewDetail?.private_property_reference_id,
@@ -2266,10 +3652,6 @@ export default function Listings() {
                       previewDetail?.kww_ref1,
                       previewDetail?.kww_ref2,
                       previewItem.kww_reference_id
-                    );
-                    const entegralReference = firstReference(
-                      previewDetail?.entegral_reference_id,
-                      previewItem.entegral_reference_id
                     );
 
                     return (
@@ -2300,12 +3682,27 @@ export default function Listings() {
                             >
                               {privatePropertyReference}
                             </a>
+                          ) : (form.feed_to_private_property || (form.private_property_sync_status ?? '').toLowerCase().startsWith('active')) ? (
+                            <span className="text-amber-600 font-medium">Published — awaiting ref number</span>
                           ) : (
                             '-'
                           )}
                         </p>
-                        <p>KWW: {kwwReference ?? '-'}</p>
-                        <p>Entegral: {entegralReference ?? '-'}</p>
+                        <p>
+                          KWW:{' '}
+                          {buildKwwUrl(kwwReference) ? (
+                            <a
+                              href={buildKwwUrl(kwwReference) ?? '#'}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-red-700 hover:underline"
+                            >
+                              {kwwReference}
+                            </a>
+                          ) : (
+                            '-'
+                          )}
+                        </p>
                       </>
                     );
                   })()}
@@ -2322,7 +3719,7 @@ export default function Listings() {
           <div className="grid grid-cols-1 gap-3 md:grid-cols-7">
             <select
               value={saleOrRentFilter}
-              onChange={(e) => { setSaleOrRentFilter(e.target.value); setPage(1); }}
+              onChange={(e) => { setSaleOrRentFilter(e.target.value); setPage(1); setScopeActive(false); }}
               className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm"
             >
               <option value="">For Sale or Rent</option>
@@ -2332,7 +3729,7 @@ export default function Listings() {
             </select>
             <select
               value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); setScopeActive(false); }}
               className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm"
             >
               <option value="">All Statuses</option>
@@ -2342,7 +3739,7 @@ export default function Listings() {
             </select>
             <input
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); setScopeActive(false); }}
               placeholder="Search agent, area, address, KWL number, P24 number, Private Property number..."
               className="md:col-span-4 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none"
             />
@@ -2352,27 +3749,27 @@ export default function Listings() {
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-7">
-            <select value={propertyTypeFilter} onChange={(e) => { setPropertyTypeFilter(e.target.value); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <select value={propertyTypeFilter} onChange={(e) => { setPropertyTypeFilter(e.target.value); setPage(1); setScopeActive(false); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">Property Type</option>
               {propertyTypeOptions.map((type) => <option key={type} value={type}>{type}</option>)}
             </select>
 
-            <select value={minPriceFilter} onChange={(e) => { setMinPriceFilter(e.target.value); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <select value={minPriceFilter} onChange={(e) => { setMinPriceFilter(e.target.value); setPage(1); setScopeActive(false); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">Min Price</option>
               {priceOptions.map((v) => <option key={`min-${v}`} value={v}>{toMoney(v)}</option>)}
             </select>
 
-            <select value={maxPriceFilter} onChange={(e) => { setMaxPriceFilter(e.target.value); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <select value={maxPriceFilter} onChange={(e) => { setMaxPriceFilter(e.target.value); setPage(1); setScopeActive(false); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">Max Price</option>
               {priceOptions.map((v) => <option key={`max-${v}`} value={v}>{toMoney(v)}</option>)}
             </select>
 
-            <select value={minBedroomsFilter} onChange={(e) => { setMinBedroomsFilter(e.target.value); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <select value={minBedroomsFilter} onChange={(e) => { setMinBedroomsFilter(e.target.value); setPage(1); setScopeActive(false); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">Bedrooms</option>
               {bedroomCountOptions.filter(Boolean).map((n) => <option key={`bed-${n}`} value={n}>{n}+</option>)}
             </select>
 
-            <select value={minBathroomsFilter} onChange={(e) => { setMinBathroomsFilter(e.target.value); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <select value={minBathroomsFilter} onChange={(e) => { setMinBathroomsFilter(e.target.value); setPage(1); setScopeActive(false); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">Bathrooms</option>
               {bathroomCountOptions.filter(Boolean).map((n) => <option key={`bath-${n}`} value={n}>{n}+</option>)}
             </select>
@@ -2401,6 +3798,7 @@ export default function Listings() {
                 setSecurityEstateFilter(false);
                 setRepossessedFilter(false);
                 setShowOptionalFilters(false);
+                setScopeActive(true);
                 setPage(1);
               }}
               className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900"
@@ -2412,22 +3810,31 @@ export default function Listings() {
           {showOptionalFilters && (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
               <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={petFriendlyFilter} onChange={(e) => { setPetFriendlyFilter(e.target.checked); setPage(1); }} />Pet Friendly</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={poolFilter} onChange={(e) => { setPoolFilter(e.target.checked); setPage(1); }} />Pool</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={gardenFilter} onChange={(e) => { setGardenFilter(e.target.checked); setPage(1); }} />Garden</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={flatletFilter} onChange={(e) => { setFlatletFilter(e.target.checked); setPage(1); }} />Flatlet</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={retirementFilter} onChange={(e) => { setRetirementFilter(e.target.checked); setPage(1); }} />Retirement</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={onShowFilter} onChange={(e) => { setOnShowFilter(e.target.checked); setPage(1); }} />On Show</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={auctionFilter} onChange={(e) => { setAuctionFilter(e.target.checked); setPage(1); }} />Auction</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={securityEstateFilter} onChange={(e) => { setSecurityEstateFilter(e.target.checked); setPage(1); }} />Security Estate / Cluster</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={repossessedFilter} onChange={(e) => { setRepossessedFilter(e.target.checked); setPage(1); }} />Repossessed</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={petFriendlyFilter} onChange={(e) => { setPetFriendlyFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Pet Friendly</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={poolFilter} onChange={(e) => { setPoolFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Pool</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={gardenFilter} onChange={(e) => { setGardenFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Garden</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={flatletFilter} onChange={(e) => { setFlatletFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Flatlet</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={retirementFilter} onChange={(e) => { setRetirementFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Retirement</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={onShowFilter} onChange={(e) => { setOnShowFilter(e.target.checked); setPage(1); setScopeActive(false); }} />On Show</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={auctionFilter} onChange={(e) => { setAuctionFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Auction</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={securityEstateFilter} onChange={(e) => { setSecurityEstateFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Security Estate / Cluster</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={repossessedFilter} onChange={(e) => { setRepossessedFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Repossessed</label>
               </div>
             </div>
           )}
 
           <div className="flex items-center justify-between text-xs text-slate-600">
             <span>Page {page} of {totalPages}</span>
-            <span>{data?.total ?? 0} listings</span>
+            <div className="flex items-center gap-3">
+              {scopeActive && (isAgent || isOfficeAdmin) && (
+                <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+                  {isAgent ? 'My listings' : `${activeContext?.marketCenter ?? 'My MC'} listings`}
+                  {' · '}
+                  <button type="button" className="underline" onClick={() => setScopeActive(false)}>Show all</button>
+                </span>
+              )}
+              <span>{data?.total ?? 0} listings</span>
+            </div>
           </div>
         </div>
 
@@ -2444,7 +3851,7 @@ export default function Listings() {
             {isError && <div className="col-span-full rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">Could not load listings.</div>}
             {!isLoading && !isError && visibleItems.length === 0 && <div className="col-span-full rounded-lg border border-slate-200 bg-white px-4 py-12 text-center text-slate-500">No listings found for this filter.</div>}
             {visibleItems.map((item) => {
-              const images = item.image_urls ?? [];
+              const images = (item.image_urls ?? []).map(normalizeRenderableImageUrl);
               const activeImage = images[0] ?? null;
               const statusTag = deriveListingStatusTag(item.listing_status_tag, item.sale_or_rent);
               const listingStatus = (item.status_name ?? '').trim();
@@ -2515,7 +3922,11 @@ export default function Listings() {
                   <div className="space-y-2.5 p-4 pt-3 md:p-5 md:pt-4">
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate text-xl font-semibold leading-tight text-slate-900">{item.property_title ?? item.short_title ?? item.listing_number ?? 'Untitled'}</p>
-                      <button className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-600 hover:bg-slate-50" type="button" onClick={(e) => { e.stopPropagation(); void openEditForm(item); }}>Edit</button>
+                        <div className="flex items-center gap-2">
+                          {(item.can_edit ?? canEditListing(item.source_market_center_id, item.primary_agent_email)) && (
+                            <button className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-600 hover:bg-slate-50" type="button" onClick={(e) => { e.stopPropagation(); void openEditForm(item); }}>Edit</button>
+                          )}
+                        </div>
                     </div>
                     <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 items-start">
                       <div className="space-y-2">
@@ -2575,10 +3986,25 @@ export default function Listings() {
                       >
                         PP {item.private_property_reference_id}
                       </a>
+                    ) : (item.feed_to_private_property || (item.private_property_sync_status ?? '').toLowerCase().startsWith('active')) ? (
+                      <span className="text-amber-600 font-medium">PP Pending</span>
                     ) : (
                       <span>PP -</span>
                     )}
-                    {' | '}KWW {item.kww_reference_id ?? '-'} | Entegral {item.entegral_reference_id ?? '-'}
+                    {' | '}
+                    {buildKwwUrl(item.kww_reference_id) ? (
+                      <a
+                        href={buildKwwUrl(item.kww_reference_id) ?? '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-red-700 hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        KWW {item.kww_reference_id}
+                      </a>
+                    ) : (
+                      <span>KWW -</span>
+                    )}
                   </div>
                 </article>
               );
@@ -2607,7 +4033,7 @@ export default function Listings() {
                 {isError && <tr><td className="px-3 py-4 text-amber-700" colSpan={8}>Could not load listings.</td></tr>}
                 {!isLoading && !isError && visibleItems.length === 0 && <tr><td className="px-3 py-4 text-slate-500" colSpan={8}>No listings found.</td></tr>}
                 {visibleItems.map((item) => {
-                  const images = item.image_urls ?? [];
+                  const images = (item.image_urls ?? []).map(normalizeRenderableImageUrl);
                   return (
                     <tr key={item.id} className="cursor-pointer hover:bg-slate-50" onClick={() => openPreview(item)}>
                       <td className="px-3 py-2">
@@ -2654,16 +4080,36 @@ export default function Listings() {
                               >
                                 {item.private_property_reference_id}
                               </a>
+                            ) : (item.feed_to_private_property || (item.private_property_sync_status ?? '').toLowerCase().startsWith('active')) ? (
+                              <span className="text-amber-600 font-medium">Pending</span>
                             ) : (
                               '-'
                             )}
                           </div>
-                          <div>KWW: {item.kww_reference_id ?? '-'}</div>
-                          <div>Entegral: {item.entegral_reference_id ?? '-'}</div>
+                          <div>
+                            KWW:{' '}
+                            {buildKwwUrl(item.kww_reference_id) ? (
+                              <a
+                                href={buildKwwUrl(item.kww_reference_id) ?? '#'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-medium text-red-700 hover:underline"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {item.kww_reference_id}
+                              </a>
+                            ) : (
+                              '-'
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-3 py-2">
-                        <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={(e) => { e.stopPropagation(); void openEditForm(item); }}>Edit</button>
+                        <div className="flex items-center gap-1.5">
+                          {(item.can_edit ?? canEditListing(item.source_market_center_id, item.primary_agent_email)) && (
+                            <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={(e) => { e.stopPropagation(); void openEditForm(item); }}>Edit</button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

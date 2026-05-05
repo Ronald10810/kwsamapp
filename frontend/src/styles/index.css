@@ -76,6 +76,11 @@ button {
     linear-gradient(180deg, #1f1112 0%, #10090a 100%);
 }
 
+.sidebar-shell a[href="/notifications"],
+.sidebar-shell a[href="/listing-approvals"] {
+  display: none !important;
+}
+
 .kpi-card {
   border: 1px solid var(--border-soft);
   background: linear-gradient(165deg, #ffffff 0%, #f1f5f0 100%);

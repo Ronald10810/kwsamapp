@@ -3,7 +3,16 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import { REPORTS } from '../../pages/reportsConfig';
 
-type NavIconName = 'home' | 'dashboard' | 'associates' | 'marketCentres' | 'listings' | 'transactions' | 'reports';
+type NavIconName =
+  | 'home'
+  | 'dashboard'
+  | 'associates'
+  | 'marketCentres'
+  | 'listings'
+  | 'transactions'
+  | 'approvals'
+  | 'notifications'
+  | 'reports';
 
 function NavIcon({ name }: { name: NavIconName }) {
   const base = 'h-4 w-4 text-white/90';
@@ -60,6 +69,20 @@ function NavIcon({ name }: { name: NavIconName }) {
           <path d="m11 14-3 3 3 3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
+    case 'approvals':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
+          <path d="M5 4h14v16H5z" stroke="currentColor" strokeWidth="1.7" />
+          <path d="m8 12 2.5 2.5L16 9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'notifications':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
+          <path d="M12 4a4 4 0 0 0-4 4v2.5c0 1.2-.5 2.4-1.4 3.2L5 15h14l-1.6-1.3a4.2 4.2 0 0 1-1.4-3.2V8a4 4 0 0 0-4-4Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+          <path d="M10 18a2 2 0 0 0 4 0" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+        </svg>
+      );
     case 'reports':
       return (
         <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
@@ -98,6 +121,8 @@ export default function Sidebar() {
     { path: '/market-centres', label: 'Market centres', icon: 'marketCentres' as NavIconName },
     { path: '/listings', label: 'Listings', icon: 'listings' as NavIconName },
     { path: '/transactions', label: 'Transactions', icon: 'transactions' as NavIconName },
+    { path: '/listing-approvals', label: 'Listing approvals', icon: 'approvals' as NavIconName },
+    { path: '/notifications', label: 'Notifications', icon: 'notifications' as NavIconName },
   ];
 
   return (

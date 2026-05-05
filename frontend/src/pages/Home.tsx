@@ -191,6 +191,62 @@ export default function HomePage() {
 
       {!isLoading && !isError && data && data.associate && (
         <>
+          {/* Quick Links */}
+          <section className="surface-card p-6">
+            <h2 className="text-xl font-semibold text-slate-900">Quick Links</h2>
+            <p className="mt-1 text-sm muted-text">Access your frequently used tools and platforms.</p>
+            <div className="mt-5 grid grid-cols-3 gap-3 sm:grid-cols-5">
+              {([
+                {
+                  label: 'KW Command',
+                  href: 'https://console.command.kw.com/login',
+                  favicon: 'https://www.google.com/s2/favicons?domain=command.kw.com&sz=64',
+                  accent: 'bg-red-50 border-red-200 hover:bg-red-100',
+                  textColor: 'text-red-800',
+                },
+                {
+                  label: 'LOOM',
+                  href: 'https://portal.loom.co.za/',
+                  favicon: 'https://www.google.com/s2/favicons?domain=loom.com&sz=64',
+                  accent: 'bg-purple-50 border-purple-200 hover:bg-purple-100',
+                  textColor: 'text-purple-800',
+                },
+                {
+                  label: 'Google Drive',
+                  href: 'https://drive.google.com',
+                  favicon: 'https://www.google.com/s2/favicons?domain=drive.google.com&sz=64',
+                  accent: 'bg-blue-50 border-blue-200 hover:bg-blue-100',
+                  textColor: 'text-blue-800',
+                },
+                {
+                  label: 'Canva',
+                  href: 'https://canva.kw.com',
+                  favicon: 'https://www.google.com/s2/favicons?domain=canva.com&sz=64',
+                  accent: 'bg-teal-50 border-teal-200 hover:bg-teal-100',
+                  textColor: 'text-teal-800',
+                },
+                {
+                  label: 'KWSA Email',
+                  href: 'https://mail.google.com',
+                  favicon: 'https://www.google.com/s2/favicons?domain=mail.google.com&sz=64',
+                  accent: 'bg-orange-50 border-orange-200 hover:bg-orange-100',
+                  textColor: 'text-orange-800',
+                },
+              ] as const).map(({ label, href, favicon, accent, textColor }) => (
+                <a
+                  key={label}
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={`flex flex-col items-center gap-3 rounded-xl border p-5 transition-colors ${accent}`}
+                >
+                  <img src={favicon} alt={label} className="h-8 w-8 rounded-md object-contain" />
+                  <span className={`text-sm font-semibold ${textColor}`}>{label}</span>
+                </a>
+              ))}
+            </div>
+          </section>
+
           <section
             className="grid items-stretch gap-5 w-full"
             style={{ gridTemplateColumns: '490px minmax(0, 1fr)' }}
@@ -289,6 +345,8 @@ export default function HomePage() {
               </div>
             )}
           </section>
+
+
         </>
       )}
     </div>

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { type Pool } from 'pg';
 import { recomputeAllTransactionAgentCalculations } from '../services/transactionCalculations.js';
 import { getOptionalPgPool } from '../config/db.js';
+import { resolvePermissions, type UserPermissions } from '../middleware/permissions.js';
 
 const router = Router();
 const pool = getOptionalPgPool();
@@ -41,6 +42,7 @@ function toText(value: unknown): string | null {
 function toNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {
+    if (value.trim() === '') return null;
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
   }
@@ -59,6 +61,60 @@ function buildManualTransactionId(): string {
   const ts = Date.now().toString();
   const rand = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
   return `MAN-TX-${ts}-${rand}`;
+}
+
+function normalizeKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+async function canAccessTransactionByScope(db: Pool, transactionId: number, perms: UserPermissions): Promise<boolean> {
+  if (perms.scope === 'GLOBAL') return true;
+
+  if (perms.scope === 'OWN') {
+    if (!perms.associateDbId) return false;
+    const own = await db.query(
+      `SELECT 1
+         FROM migration.transaction_agents ta
+        WHERE ta.transaction_id = $1
+          AND ta.associate_id = $2
+        LIMIT 1`,
+      [transactionId, perms.associateDbId]
+    );
+    return (own.rowCount ?? 0) > 0;
+  }
+
+  const mcKey = normalizeKey(perms.marketCenterId);
+  if (!mcKey) return false;
+
+  const mcLookup = await db.query<{ id: string }>(
+    `SELECT id::text FROM migration.core_market_centers WHERE source_market_center_id = $1 LIMIT 1`,
+    [perms.marketCenterId]
+  );
+  const mcDbId = mcLookup.rows[0]?.id ? Number(mcLookup.rows[0].id) : null;
+
+  const matched = await db.query(
+    `SELECT 1
+       FROM migration.core_transactions ct
+      WHERE ct.id = $1
+        AND (
+          REGEXP_REPLACE(LOWER(TRIM(COALESCE((SELECT mc.source_market_center_id
+                                               FROM migration.core_market_centers mc
+                                              WHERE mc.id = ct.primary_market_center_id
+                                              LIMIT 1), ''))), '[^a-z0-9]+', '', 'g') = $2
+          OR ($3::int IS NOT NULL AND ct.primary_market_center_id = $3)
+          OR EXISTS (
+              SELECT 1
+                FROM migration.transaction_agents ta
+                LEFT JOIN migration.core_associates ca ON ca.id = ta.associate_id
+               WHERE ta.transaction_id = ct.id
+                 AND REGEXP_REPLACE(LOWER(TRIM(COALESCE(ca.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = $2
+          )
+        )
+      LIMIT 1`,
+    [transactionId, mcKey, mcDbId]
+  );
+
+  return (matched.rowCount ?? 0) > 0;
 }
 
 function validateAgentSplits(agents: Array<Record<string, unknown>>): string | null {
@@ -108,7 +164,7 @@ router.get('/next-number', async (_req, res) => {
   }
 });
 
-router.get('/summary', async (_req, res) => {
+router.get('/summary', resolvePermissions, async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }
@@ -118,6 +174,71 @@ router.get('/summary', async (_req, res) => {
       `SELECT to_regclass('migration.core_transactions') AS exists`
     );
     if (!exists.rows[0]?.exists) {
+      return res.json({
+        totals: {
+          total_transactions: 0,
+          total_sales_value: 0,
+          total_net_commission: 0,
+          average_split_percentage: 0,
+        },
+        mtd_registered_active: {
+          total_transactions: 0,
+          total_sales_value: 0,
+          total_net_commission: 0,
+          average_split_percentage: 0,
+        },
+        by_status: [],
+        by_type: [],
+        market_center_performance: [],
+        associate_performance: [],
+        expected_closings_90_days: [],
+        reporting_window: null,
+        performance_basis: 'registered',
+      });
+    }
+
+    const perms = req.permissions!;
+    let visibleTransactionIds: number[] | null = null;
+
+    if (perms.scope === 'OWN') {
+      if (!perms.associateDbId) {
+        visibleTransactionIds = [];
+      } else {
+        const ownResult = await pool.query<{ transaction_id: string }>(
+          `SELECT DISTINCT transaction_id::text
+             FROM migration.transaction_agents
+            WHERE associate_id = $1`,
+          [perms.associateDbId]
+        );
+        visibleTransactionIds = ownResult.rows
+          .map((row) => Number(row.transaction_id))
+          .filter((id) => Number.isFinite(id));
+      }
+    } else if (perms.scope === 'MARKET_CENTRE') {
+      const mcSource = perms.marketCenterId ?? '';
+      const mcLookup = await pool.query<{ id: string }>(
+        `SELECT id::text FROM migration.core_market_centers WHERE source_market_center_id = $1 LIMIT 1`,
+        [mcSource]
+      );
+      const mcDbId = mcLookup.rows[0]?.id ? Number(mcLookup.rows[0].id) : null;
+
+      const mcResult = await pool.query<{ id: string }>(
+        `SELECT DISTINCT ct.id::text
+           FROM migration.core_transactions ct
+           LEFT JOIN migration.core_market_centers pmc ON pmc.id = ct.primary_market_center_id
+           LEFT JOIN migration.transaction_agents ta ON ta.transaction_id = ct.id
+           LEFT JOIN migration.core_associates ca ON ca.id = ta.associate_id
+          WHERE REGEXP_REPLACE(LOWER(TRIM(COALESCE(pmc.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($1)), '[^a-z0-9]+', '', 'g')
+             OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(ca.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($1)), '[^a-z0-9]+', '', 'g')
+             OR ($2::int IS NOT NULL AND (ct.primary_market_center_id = $2 OR ca.market_center_id = $2))`,
+        [mcSource, mcDbId]
+      );
+      visibleTransactionIds = mcResult.rows
+        .map((row) => Number(row.id))
+        .filter((id) => Number.isFinite(id));
+    }
+
+    if (visibleTransactionIds && visibleTransactionIds.length === 0) {
       return res.json({
         totals: {
           total_transactions: 0,
@@ -205,6 +326,21 @@ router.get('/summary', async (_req, res) => {
     };
 
     const reportingWindowParams = [reportingWindow.start_date, reportingWindow.end_exclusive, reportingWindow.basis];
+    const scopedIds = visibleTransactionIds;
+
+    const totalsParams: Array<string | number | number[]> = scopedIds ? [scopedIds] : [];
+    const mtdParams: Array<string | number | number[]> = scopedIds
+      ? [...reportingWindowParams, scopedIds]
+      : [...reportingWindowParams];
+    const statusParams: Array<string | number | number[]> = scopedIds ? [scopedIds] : [];
+    const typeParams: Array<string | number | number[]> = scopedIds ? [scopedIds] : [];
+    const marketParams: Array<string | number | number[]> = scopedIds
+      ? [...reportingWindowParams, scopedIds]
+      : [...reportingWindowParams];
+    const associateParams: Array<string | number | number[]> = scopedIds
+      ? [...reportingWindowParams, scopedIds]
+      : [...reportingWindowParams];
+    const closingsParams: Array<string | number | number[]> = scopedIds ? [scopedIds] : [];
 
     const [totalsResult, mtdResult, statusResult, typeResult, marketCenterResult, associateResult, closingsResult] = await Promise.all([
       pool.query<{
@@ -221,7 +357,9 @@ router.get('/summary', async (_req, res) => {
           COALESCE(AVG(COALESCE(tac.split_percentage, 0)), 0)::text AS average_split_percentage
         FROM migration.core_transactions ct
         LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_id = ct.id
-        `
+        ${scopedIds ? 'WHERE ct.id = ANY($1::int[])' : ''}
+        `,
+        totalsParams
       ),
       pool.query<{
         total_transactions: string;
@@ -240,6 +378,7 @@ router.get('/summary', async (_req, res) => {
             AND tac.effective_reporting_date < $2::date
             AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
             AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+            ${scopedIds ? 'AND tac.transaction_id = ANY($4::int[])' : ''}
         ),
         grouped_tx AS (
           SELECT
@@ -255,7 +394,7 @@ router.get('/summary', async (_req, res) => {
           COALESCE((SELECT SUM(gci_after_fees_excl_vat) FROM filtered_tac), 0)::text AS total_net_commission,
           COALESCE((SELECT AVG(COALESCE(split_percentage, 0)) FROM filtered_tac), 0)::text AS average_split_percentage
         `,
-        reportingWindowParams
+        mtdParams
       ),
       pool.query<{ label: string; count: string }>(
         `
@@ -263,9 +402,11 @@ router.get('/summary', async (_req, res) => {
           COALESCE(transaction_status, 'Unknown') AS label,
           COUNT(*)::text AS count
         FROM migration.core_transactions
+        ${scopedIds ? 'WHERE id = ANY($1::int[])' : ''}
         GROUP BY COALESCE(transaction_status, 'Unknown')
         ORDER BY COUNT(*) DESC
-        `
+        `,
+        statusParams
       ),
       pool.query<{ label: string; count: string }>(
         `
@@ -273,9 +414,11 @@ router.get('/summary', async (_req, res) => {
           COALESCE(transaction_type, 'Unknown') AS label,
           COUNT(*)::text AS count
         FROM migration.core_transactions
+        ${scopedIds ? 'WHERE id = ANY($1::int[])' : ''}
         GROUP BY COALESCE(transaction_type, 'Unknown')
         ORDER BY COUNT(*) DESC
-        `
+        `,
+        typeParams
       ),
       pool.query<{ market_center: string; total_transactions: string; total_sales_value: string; total_net_commission: string; total_gci: string }>(
         `
@@ -295,6 +438,7 @@ router.get('/summary', async (_req, res) => {
             AND tac.effective_reporting_date < $2::date
             AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
             AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+            ${scopedIds ? 'AND tac.transaction_id = ANY($4::int[])' : ''}
         ),
         per_transaction AS (
           SELECT
@@ -326,7 +470,7 @@ router.get('/summary', async (_req, res) => {
         ORDER BY grouped.total_gci::numeric DESC, grouped.total_transactions::int DESC
         LIMIT 8
         `,
-        reportingWindowParams
+        marketParams
       ),
       pool.query<{ associate_name: string; market_center: string; total_transactions: string; total_sales_value: string; total_gci: string }>(
         `
@@ -347,6 +491,7 @@ router.get('/summary', async (_req, res) => {
             AND tac.effective_reporting_date < $2::date
             AND (mc.id IS NULL OR LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1'))
             AND (ca.id IS NULL OR LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1'))
+            ${scopedIds ? 'AND tac.transaction_id = ANY($4::int[])' : ''}
         ),
         per_transaction AS (
           SELECT
@@ -369,7 +514,7 @@ router.get('/summary', async (_req, res) => {
         ORDER BY COALESCE(SUM(total_gci), 0) DESC, COUNT(*) DESC
         LIMIT 10
         `,
-        reportingWindowParams
+        associateParams
       ),
       pool.query<{ bucket: string; count: string; total_gci: string }>(
         `
@@ -387,6 +532,7 @@ router.get('/summary', async (_req, res) => {
           WHERE expected_date IS NOT NULL
             AND expected_date >= NOW()
             AND expected_date < (NOW() + INTERVAL '120 days')
+            ${scopedIds ? 'AND id = ANY($1::int[])' : ''}
         )
         SELECT
           bucket,
@@ -402,7 +548,8 @@ router.get('/summary', async (_req, res) => {
           WHEN 'Days 91-120' THEN 4
           ELSE 5
         END
-        `
+        `,
+        closingsParams
       ),
     ]);
 
@@ -467,7 +614,7 @@ router.get('/summary', async (_req, res) => {
   }
 });
 
-router.get('/', async (req, res) => {
+router.get('/', resolvePermissions, async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }
@@ -530,6 +677,72 @@ router.get('/', async (req, res) => {
     if (typeFilter.length > 0) {
       params.push(typeFilter);
       whereClauses.push(`LOWER(TRIM(COALESCE(ct.transaction_type, ''))) = LOWER(TRIM($${params.length}))`);
+    }
+
+    const perms = req.permissions!;
+    if (perms.scope === 'OWN') {
+      if (!perms.associateDbId) {
+        whereClauses.push('1 = 0');
+      } else {
+        params.push(perms.associateDbId);
+        whereClauses.push(`EXISTS (
+          SELECT 1 FROM migration.transaction_agents pta
+          WHERE pta.transaction_id = ct.id
+            AND pta.associate_id = $${params.length}
+        )`);
+      }
+    } else if (perms.scope === 'MARKET_CENTRE') {
+      const mcSourceId = perms.marketCenterId ?? '';
+      let mcDbId: number | null = null;
+      if (mcSourceId) {
+        const mcLookup = await pool.query<{ id: string }>(
+          `SELECT id::text FROM migration.core_market_centers WHERE source_market_center_id = $1 LIMIT 1`,
+          [mcSourceId]
+        );
+        mcDbId = mcLookup.rows[0]?.id ? Number(mcLookup.rows[0].id) : null;
+      }
+
+      params.push(mcSourceId);
+      const mcSourceParam = `$${params.length}`;
+      if (mcDbId !== null) {
+        params.push(mcDbId);
+        const mcDbParam = `$${params.length}`;
+        whereClauses.push(`(
+          EXISTS (
+            SELECT 1
+              FROM migration.core_market_centers pmc
+             WHERE pmc.id = ct.primary_market_center_id
+               AND REGEXP_REPLACE(LOWER(TRIM(COALESCE(pmc.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM(${mcSourceParam})), '[^a-z0-9]+', '', 'g')
+          )
+          OR ct.primary_market_center_id = ${mcDbParam}
+          OR EXISTS (
+            SELECT 1
+              FROM migration.transaction_agents pta
+              LEFT JOIN migration.core_associates pca ON pca.id = pta.associate_id
+             WHERE pta.transaction_id = ct.id
+               AND (
+                 REGEXP_REPLACE(LOWER(TRIM(COALESCE(pca.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM(${mcSourceParam})), '[^a-z0-9]+', '', 'g')
+                 OR pca.market_center_id = ${mcDbParam}
+               )
+          )
+        )`);
+      } else {
+        whereClauses.push(`(
+          EXISTS (
+            SELECT 1
+              FROM migration.core_market_centers pmc
+             WHERE pmc.id = ct.primary_market_center_id
+               AND REGEXP_REPLACE(LOWER(TRIM(COALESCE(pmc.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM(${mcSourceParam})), '[^a-z0-9]+', '', 'g')
+          )
+          OR EXISTS (
+            SELECT 1
+              FROM migration.transaction_agents pta
+              LEFT JOIN migration.core_associates pca ON pca.id = pta.associate_id
+             WHERE pta.transaction_id = ct.id
+               AND REGEXP_REPLACE(LOWER(TRIM(COALESCE(pca.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM(${mcSourceParam})), '[^a-z0-9]+', '', 'g')
+          )
+        )`);
+      }
     }
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -646,6 +859,7 @@ router.get('/', async (req, res) => {
           created_at: row.created_at,
           market_center_name: row.market_center_name,
           source_market_center_id: row.source_market_center_id,
+          can_edit: true,
           updated_at: row.updated_at,
           agents: [],
         });
@@ -693,7 +907,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', resolvePermissions, async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }
@@ -711,7 +925,7 @@ router.post('/', async (req, res) => {
   const listPrice = toNumber(req.body?.list_price);
   const gci = toNumber(req.body?.gci_excl_vat);
   const netComm = toNumber(req.body?.net_comm);
-  const totalGci = toNumber(req.body?.total_gci);
+  const totalGci = toNumber(req.body?.total_gci) ?? netComm ?? gci;
   const saleType = toText(req.body?.sale_type);
   const buyer = toText(req.body?.buyer);
   const seller = toText(req.body?.seller);
@@ -731,6 +945,38 @@ router.post('/', async (req, res) => {
   }
 
   try {
+    const perms = req.permissions!;
+
+    const sourceAssociateIds = Array.from(
+      new Set(
+        agents
+          .map((a: Record<string, unknown>) => toText(a?.source_associate_id))
+          .filter((v: string | null): v is string => !!v)
+      )
+    );
+
+    const assocRows = sourceAssociateIds.length > 0
+      ? await pool.query<{ id: string; source_associate_id: string; source_market_center_id: string | null }>(
+          `SELECT id::text, source_associate_id, source_market_center_id
+             FROM migration.core_associates
+            WHERE source_associate_id = ANY($1::text[])`,
+          [sourceAssociateIds]
+        )
+      : { rows: [] as Array<{ id: string; source_associate_id: string; source_market_center_id: string | null }> };
+
+    if (perms.scope === 'OWN') {
+      const isOwn = assocRows.rows.some((row) => row.id === perms.associateDbId);
+      if (!isOwn) {
+        return res.status(403).json({ error: 'Permission denied: agent transactions must include your own associate profile' });
+      }
+    } else if (perms.scope === 'MARKET_CENTRE') {
+      const allowedMc = normalizeKey(perms.marketCenterId);
+      const hasInScopeAgent = assocRows.rows.some((row) => normalizeKey(row.source_market_center_id) === allowedMc);
+      if (!hasInScopeAgent) {
+        return res.status(403).json({ error: 'Permission denied: transaction must include an agent from your market centre' });
+      }
+    }
+
     // Get primary market center ID from first agent (if available)
     let marketCenterId: number | null = null;
     if (agents.length > 0 && agents[0].source_associate_id) {
@@ -858,7 +1104,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', resolvePermissions, async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }
@@ -880,7 +1126,7 @@ router.put('/:id', async (req, res) => {
   const listPrice = toNumber(req.body?.list_price);
   const gci = toNumber(req.body?.gci_excl_vat);
   const netComm = toNumber(req.body?.net_comm);
-  const totalGci = toNumber(req.body?.total_gci);
+  const totalGci = toNumber(req.body?.total_gci) ?? netComm ?? gci;
   const saleType = toText(req.body?.sale_type);
   const buyer = toText(req.body?.buyer);
   const seller = toText(req.body?.seller);
@@ -898,6 +1144,42 @@ router.put('/:id', async (req, res) => {
   }
 
   try {
+    const perms = req.permissions!;
+    const hasAccess = await canAccessTransactionByScope(pool, id, perms);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Permission denied: you cannot edit this transaction' });
+    }
+
+    const sourceAssociateIds = Array.from(
+      new Set(
+        agents
+          .map((a: Record<string, unknown>) => toText(a?.source_associate_id))
+          .filter((v: string | null): v is string => !!v)
+      )
+    );
+
+    const assocRows = sourceAssociateIds.length > 0
+      ? await pool.query<{ id: string; source_associate_id: string; source_market_center_id: string | null }>(
+          `SELECT id::text, source_associate_id, source_market_center_id
+             FROM migration.core_associates
+            WHERE source_associate_id = ANY($1::text[])`,
+          [sourceAssociateIds]
+        )
+      : { rows: [] as Array<{ id: string; source_associate_id: string; source_market_center_id: string | null }> };
+
+    if (perms.scope === 'OWN') {
+      const isOwn = assocRows.rows.some((row) => row.id === perms.associateDbId);
+      if (!isOwn) {
+        return res.status(403).json({ error: 'Permission denied: agent transactions must include your own associate profile' });
+      }
+    } else if (perms.scope === 'MARKET_CENTRE') {
+      const allowedMc = normalizeKey(perms.marketCenterId);
+      const hasInScopeAgent = assocRows.rows.some((row) => normalizeKey(row.source_market_center_id) === allowedMc);
+      if (!hasInScopeAgent) {
+        return res.status(403).json({ error: 'Permission denied: transaction must include an agent from your market centre' });
+      }
+    }
+
     // First, update the transaction itself (without agent fields)
     const statusChangeUpdateSql = transactionStatus
       ? `CASE WHEN transaction_status IS DISTINCT FROM $18 THEN NOW() ELSE status_change_date END`
@@ -1010,7 +1292,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.get('/:id/calculated-summary', async (req, res) => {
+router.get('/:id/calculated-summary', resolvePermissions, async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }
@@ -1021,6 +1303,12 @@ router.get('/:id/calculated-summary', async (req, res) => {
   }
 
   try {
+    const perms = req.permissions!;
+    const hasAccess = await canAccessTransactionByScope(pool, id, perms);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Permission denied: you cannot view this transaction summary' });
+    }
+
     const result = await pool.query(
       `
       SELECT

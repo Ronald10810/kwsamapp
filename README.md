@@ -23,6 +23,20 @@ This folder is the new modern rewrite of the legacy `current-system` platform.
 2. Backend and frontend projects will be developed in their respective folders.
 3. The API will target PostgreSQL, and file uploads will target a local GCS emulator.
 
+## Test To Live Publishing
+
+- Hosted test frontend: Cloud Run service `kwsa-frontend-test`
+- Live frontend: Cloud Run service `kwsa-frontend-prod` in `us-central1` for `https://kwmapp.co.za`
+- Workflow guide: `docs/TEST_TO_LIVE_WORKFLOW.md`
+
+Useful commands:
+
+- `npm run deploy:test:frontend`
+- `npm run deploy:live:frontend`
+- `npm run release:live`
+
+On Windows PowerShell use `npm.cmd` instead of `npm`, or run `deploy-frontend-test.cmd` and `deploy-frontend-live.cmd` from the repo root.
+
 ## Next steps
 
 - Implement backend project scaffolding in `backend/`

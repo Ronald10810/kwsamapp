@@ -194,6 +194,143 @@ router.get('/me', requireAuth, (req, res) => {
 });
 
 /**
+ * GET /api/auth/contexts
+ * Returns the list of role contexts available for the authenticated user.
+ */
+router.get('/contexts', requireAuth, async (req, res) => {
+  const userEmail = req.user?.email?.trim().toLowerCase() ?? '';
+  if (!userEmail) {
+    return res.status(401).json({ error: 'Unauthorised' });
+  }
+
+  try {
+    const pool = getRequiredPgPool();
+
+    const assocResult = await pool.query<{
+      id: string;
+      full_name: string | null;
+      source_market_center_id: string | null;
+    }>(
+      `SELECT id::text, full_name, source_market_center_id
+         FROM migration.core_associates
+        WHERE LOWER(TRIM(COALESCE(kwsa_email, ''))) = $1
+           OR LOWER(TRIM(COALESCE(private_email, ''))) = $1
+           OR LOWER(TRIM(COALESCE(email, ''))) = $1
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1`,
+      [userEmail]
+    );
+
+    const assoc = assocResult.rows[0];
+    if (!assoc) {
+      return res.json({ contexts: [] });
+    }
+
+    const homeMcNameResult = assoc.source_market_center_id
+      ? await pool.query<{ name: string | null }>(
+          `SELECT name
+             FROM migration.core_market_centers
+            WHERE source_market_center_id = $1
+            LIMIT 1`,
+          [assoc.source_market_center_id]
+        )
+      : { rows: [{ name: null }] };
+
+    const [rolesResult, adminMcsResult] = await Promise.all([
+      pool.query<{ role_name: string }>(
+        `SELECT role_name
+           FROM migration.associate_roles
+          WHERE associate_id = $1`,
+        [assoc.id]
+      ),
+      pool.query<{ source_market_center_id: string; mc_name: string | null }>(
+        `SELECT aamc.source_market_center_id, mc.name AS mc_name
+           FROM migration.associate_admin_market_centers aamc
+           LEFT JOIN migration.core_market_centers mc
+             ON mc.source_market_center_id = aamc.source_market_center_id
+          WHERE aamc.associate_id = $1`,
+        [assoc.id]
+      ),
+    ]);
+
+    const normalizeRole = (role: string): string => role.trim().toUpperCase().replace(/\s+/g, '_');
+    const roles = rolesResult.rows.map((r) => normalizeRole(r.role_name));
+    const isRegionalAdmin = roles.includes('REGIONAL_ADMIN');
+    const isOfficeAdmin = roles.includes('OFFICE_ADMIN');
+    const homeMcName = homeMcNameResult.rows[0]?.name ?? null;
+    const associateId = assoc.id;
+
+    type ContextEntry = {
+      id: string;
+      label: string;
+      role: 'Regional Admin' | 'Office Admin' | 'Agent';
+      marketCenter: string | null;
+      marketCenterId: string | null;
+      associateId: string;
+    };
+
+    const contexts: ContextEntry[] = [];
+
+    if (isRegionalAdmin) {
+      contexts.push({
+        id: 'regional_admin',
+        label: 'Regional Admin',
+        role: 'Regional Admin',
+        marketCenter: null,
+        marketCenterId: null,
+        associateId,
+      });
+    }
+
+    if (isOfficeAdmin && assoc.source_market_center_id) {
+      const mcLabel = homeMcName ? `${homeMcName} (Office Admin)` : `${assoc.source_market_center_id} (Office Admin)`;
+      contexts.push({
+        id: `office_admin_${assoc.source_market_center_id}`,
+        label: mcLabel,
+        role: 'Office Admin',
+        marketCenter: homeMcName,
+        marketCenterId: assoc.source_market_center_id,
+        associateId,
+      });
+    }
+
+    for (const row of adminMcsResult.rows) {
+      const alreadyAdded = contexts.some((ctx) => ctx.id === `office_admin_${row.source_market_center_id}`);
+      if (alreadyAdded) continue;
+      const mcLabel = row.mc_name ? `${row.mc_name} (Admin)` : `${row.source_market_center_id} (Admin)`;
+      contexts.push({
+        id: `admin_${row.source_market_center_id}`,
+        label: mcLabel,
+        role: 'Office Admin',
+        marketCenter: row.mc_name,
+        marketCenterId: row.source_market_center_id,
+        associateId,
+      });
+    }
+
+    const agentLabel = assoc.full_name
+      ? `${assoc.full_name} (Agent)`
+      : homeMcName
+        ? `${homeMcName} (Agent)`
+        : 'Agent';
+    contexts.push({
+      id: 'agent',
+      label: agentLabel,
+      role: 'Agent',
+      marketCenter: homeMcName,
+      marketCenterId: assoc.source_market_center_id,
+      associateId,
+    });
+
+    return res.json({ contexts });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    logger.error({ err: error }, 'GET /api/auth/contexts failed');
+    return res.status(500).json({ error: message });
+  }
+});
+
+/**
  * POST /api/auth/logout
  * Stateless JWT – just tells the client to discard its token.
  */

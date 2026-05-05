@@ -29,13 +29,18 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
     let resolvedInit = init;
     if (isApi) {
       const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+      const activeContextId = localStorage.getItem('kwsa_active_context_id') ?? '';
       // Don't overwrite an Authorization header the caller already set
       const existingAuth = (init?.headers as Record<string, string> | undefined)?.['Authorization']
         ?? (init?.headers as Record<string, string> | undefined)?.['authorization'];
       if (token && !existingAuth) {
         resolvedInit = {
           ...init,
-          headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${token}` },
+          headers: {
+            ...(init?.headers ?? {}),
+            Authorization: `Bearer ${token}`,
+            'X-Active-Context': activeContextId,
+          },
         };
       }
     }

@@ -9,6 +9,7 @@ import TransactionsPage from './pages/Transactions';
 import AgentsPage from './pages/Agents';
 import MarketCentresPage from './pages/MarketCentres';
 import AssociatesPage from './pages/Associates';
+import NotificationsPage from './pages/Notifications';
 import ReportsPage from './pages/Reports';
 import { REPORTS } from './pages/reportsConfig';
 
@@ -30,6 +31,8 @@ function App() {
                 <Route path="/agents" element={<AgentsPage />} />
                 <Route path="/market-centres" element={<MarketCentresPage />} />
                 <Route path="/associates" element={<AssociatesPage />} />
+                <Route path="/listing-approvals" element={<Navigate to="/notifications" replace />} />
+                <Route path="/notifications" element={<NotificationsPage />} />
                 <Route path="/reports" element={<Navigate to={`/reports/${REPORTS[0].id}`} replace />} />
                 <Route path="/reports/:reportId" element={<ReportsPage />} />
               </Routes>

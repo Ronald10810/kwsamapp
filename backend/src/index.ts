@@ -13,6 +13,7 @@ import { requireAuth } from './middleware/requireAuth.js';
 import healthRoutes from './routes/health.js';
 import authRoutes from './routes/auth.js';
 import listingRoutes from './routes/listings.js';
+import notificationsRoutes from './routes/notifications.js';
 import transactionRoutes from './routes/transactions.js';
 import associateRoutes from './routes/associates.js';
 import agentsRoutes from './routes/agents.js';
@@ -21,12 +22,16 @@ import opsRoutes from './routes/ops.js';
 
 const app = express();
 
+function isLocalDevOrigin(origin: string): boolean {
+  return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+}
+
 // Middleware
 app.set('trust proxy', env.trustProxy);
 app.use(helmet());
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || env.corsOrigins.includes(origin)) {
+    if (!origin || env.corsOrigins.includes(origin) || isLocalDevOrigin(origin)) {
       return callback(null, true);
     }
 
@@ -64,6 +69,7 @@ app.get('/', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api', requireAuth);
 app.use('/api/listings', listingRoutes);
+app.use('/api/notifications', notificationsRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/associates', associateRoutes);
 app.use('/api/agents', agentsRoutes);

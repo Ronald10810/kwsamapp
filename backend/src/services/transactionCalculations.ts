@@ -13,8 +13,11 @@ type RawAgentRow = {
   split_percentage: string | null;
   transaction_status: string | null;
   transaction_type: string | null;
+  transaction_side: string | null;
   sales_price: string | null;
   list_price: string | null;
+  gci_excl_vat: string | null;
+  net_comm: string | null;
   total_gci: string | null;
   transaction_date: string | null;
   status_change_date: string | null;
@@ -185,8 +188,11 @@ async function fetchRawRows(db: Queryable): Promise<RawAgentRow[]> {
       ta.split_percentage::text,
       ct.transaction_status,
       ct.transaction_type,
+      COALESCE(NULLIF(TRIM(ct.transaction_type), ''), NULLIF(TRIM(ta.agent_role), ''), 'Unspecified') AS transaction_side,
       ct.sales_price::text,
       ct.list_price::text,
+      ct.gci_excl_vat::text,
+      ct.net_comm::text,
       ct.total_gci::text,
       ct.transaction_date::text,
       ct.status_change_date::text,
@@ -231,6 +237,19 @@ function getNormalizedSplit(raw: number, splitSum: number, count: number): numbe
   return (raw / splitSum) * 100;
 }
 
+function resolveTransactionGci(row: RawAgentRow): number {
+  const totalGci = toNumber(row.total_gci);
+  if (totalGci > 0) return totalGci;
+
+  const netComm = toNumber(row.net_comm);
+  if (netComm > 0) return netComm;
+
+  const gciExclVat = toNumber(row.gci_excl_vat);
+  if (gciExclVat > 0) return gciExclVat;
+
+  return 0;
+}
+
 function buildCalculatedRows(groups: TransactionGroup[]): CalculatedRow[] {
   const rows: CalculatedRow[] = [];
   const capProgressByCycle = new Map<string, number>();
@@ -247,7 +266,7 @@ function buildCalculatedRows(groups: TransactionGroup[]): CalculatedRow[] {
 
     for (const row of group.agents) {
       const effectiveDate = getEffectiveReportingDate(row);
-      const totalGci = Math.max(toNumber(row.total_gci), 0);
+      const totalGci = resolveTransactionGci(row);
       const salesPrice = Math.max(toNumber(row.sales_price), 0);
       const listPrice = Math.max(toNumber(row.list_price), 0);
       const rawSplit = Math.max(toNumber(row.split_percentage), 0);
@@ -285,7 +304,7 @@ function buildCalculatedRows(groups: TransactionGroup[]): CalculatedRow[] {
         is_outside_agent: outside,
         agent_name: row.associate_name,
         office_name: row.office_name,
-        transaction_side: row.transaction_type,
+        transaction_side: row.transaction_side,
         split_percentage: roundPct(splitPercentage),
         variance_sale_list_pct: roundPct(variancePct),
         sales_value_component: roundMoney(salesValueComponent),

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 import { useQuery } from '@tanstack/react-query';
 
 type AgentRow = {
@@ -102,6 +103,7 @@ type AgentFormState = {
   entegral_opt_in: boolean;
   agent_entegral_id: string;
   entegral_status: string;
+  agent_entegral_portals: string[];
   private_property_opt_in: boolean;
   private_property_status: string;
   cap: string;
@@ -214,6 +216,7 @@ function emptyForm(): AgentFormState {
     entegral_opt_in: false,
     agent_entegral_id: '',
     entegral_status: '',
+    agent_entegral_portals: [],
     private_property_opt_in: false,
     private_property_status: '',
     cap: '',
@@ -279,6 +282,7 @@ function toggleArrayValue(current: string[], value: string): string[] {
 }
 
 export default function AgentsPage() {
+  const { canCreateAssociate, canEditAssociate, isRegionalAdmin, isAgent } = useAuth();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'Active' | 'Inactive'>('Active');
@@ -418,6 +422,7 @@ export default function AgentsPage() {
         entegral_opt_in: Boolean(details.entegral_opt_in),
         agent_entegral_id: (details.agent_entegral_id as string | undefined) ?? '',
         entegral_status: (details.entegral_status as string | undefined) ?? '',
+        agent_entegral_portals: (details.agent_entegral_portals as string[] | undefined) ?? [],
         private_property_opt_in: Boolean(details.private_property_opt_in),
         private_property_status: (details.private_property_status as string | undefined) ?? '',
         cap: (details.cap as string | undefined) ?? '',
@@ -615,9 +620,11 @@ export default function AgentsPage() {
           <button className="primary-btn" type="button" onClick={() => refetch()}>
             {isFetching ? 'Refreshing...' : 'Refresh'}
           </button>
-          <button className="primary-btn" type="button" onClick={openCreateForm}>
-            Add Associate
-          </button>
+          {canCreateAssociate && (
+            <button className="primary-btn" type="button" onClick={openCreateForm}>
+              Add Associate
+            </button>
+          )}
         </div>
       </div>
 
@@ -704,9 +711,11 @@ export default function AgentsPage() {
 
                     <div className="flex items-center justify-between border-t border-slate-100 pt-2">
                       <p className="text-[11px] text-slate-400 font-mono">{item.kwuid ? `KWUID: ${item.kwuid}` : ''}</p>
-                      <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>
-                        Edit
-                      </button>
+                      {canEditAssociate(item.source_market_center_id, item.email) && (
+                        <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>
+                          Edit
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -744,9 +753,11 @@ export default function AgentsPage() {
                       <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{item.kwuid ?? '-'}</td>
                       <td className="px-4 py-2.5 text-slate-600">{item.market_center_name ?? item.source_market_center_id ?? '-'}</td>
                       <td className="px-4 py-2.5">
-                        <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>
-                          Edit
-                        </button>
+                        {canEditAssociate(item.source_market_center_id, item.email) && (
+                          <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>
+                            Edit
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -935,20 +946,49 @@ export default function AgentsPage() {
                     <label className="flex flex-col gap-1 max-w-xs"><span className="text-xs text-slate-600">Vesting Period Start Date</span><input type="date" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.vesting_period_start_date} onChange={(e) => setForm((p) => ({ ...p, vesting_period_start_date: e.target.value }))} /></label>
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      <div className="rounded-xl border border-slate-200 p-4"><p className="text-sm font-semibold text-slate-900 mb-2">Roles</p><div className="flex flex-wrap gap-2">{ROLE_OPTIONS.map((option) => <button key={option} type="button" className={`rounded-full px-3 py-1 text-xs border ${form.roles.includes(option) ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-700 border-slate-300'}`} onClick={() => setForm((p) => ({ ...p, roles: toggleArrayValue(p.roles, option) }))}>{option}</button>)}</div></div>
-                      <div className="rounded-xl border border-slate-200 p-4"><p className="text-sm font-semibold text-slate-900 mb-2">Job Titles</p><div className="flex flex-wrap gap-2">{JOB_TITLE_OPTIONS.map((option) => <button key={option} type="button" className={`rounded-full px-3 py-1 text-xs border ${form.job_titles.includes(option) ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-700 border-slate-300'}`} onClick={() => setForm((p) => ({ ...p, job_titles: toggleArrayValue(p.job_titles, option) }))}>{option}</button>)}</div></div>
+                      {!isAgent && (
+                        <div className="rounded-xl border border-slate-200 p-4">
+                          <p className="text-sm font-semibold text-slate-900 mb-2">Roles</p>
+                          <div className="flex flex-wrap gap-2">
+                            {ROLE_OPTIONS.map((option) => {
+                              const isRegionalAdminOption = option === 'Regional Admin';
+                              const disabled = isRegionalAdminOption && !isRegionalAdmin;
+                              return (
+                                <button
+                                  key={option}
+                                  type="button"
+                                  disabled={disabled}
+                                  title={disabled ? 'Only Regional Admins can assign this role' : undefined}
+                                  className={`rounded-full px-3 py-1 text-xs border transition-colors ${form.roles.includes(option) ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-700 border-slate-300'} ${disabled ? 'opacity-40 cursor-not-allowed' : 'hover:bg-slate-50'}`}
+                                  onClick={() => !disabled && setForm((p) => ({ ...p, roles: toggleArrayValue(p.roles, option) }))}
+                                >
+                                  {option}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      {!isAgent && (
+                        <div className="rounded-xl border border-slate-200 p-4">
+                          <p className="text-sm font-semibold text-slate-900 mb-2">Job Titles</p>
+                          <div className="flex flex-wrap gap-2">{JOB_TITLE_OPTIONS.map((option) => <button key={option} type="button" className={`rounded-full px-3 py-1 text-xs border ${form.job_titles.includes(option) ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-700 border-slate-300'}`} onClick={() => setForm((p) => ({ ...p, job_titles: toggleArrayValue(p.job_titles, option) }))}>{option}</button>)}</div>
+                        </div>
+                      )}
                       <div className="rounded-xl border border-slate-200 p-4"><p className="text-sm font-semibold text-slate-900 mb-2">Service Communities</p><div className="flex flex-wrap gap-2">{COMMUNITY_OPTIONS.map((option) => <button key={option} type="button" className={`rounded-full px-3 py-1 text-xs border ${form.service_communities.includes(option) ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-700 border-slate-300'}`} onClick={() => setForm((p) => ({ ...p, service_communities: toggleArrayValue(p.service_communities, option) }))}>{option}</button>)}</div></div>
-                      <div className="rounded-xl border border-slate-200 p-4 space-y-3">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900 mb-2">Admin Market Centers</p>
-                          <div className="flex flex-wrap gap-2">{(marketCenterData?.items ?? []).map((mc) => <button key={mc.source_market_center_id} type="button" className={`rounded-full px-3 py-1 text-xs border ${form.admin_market_centers.includes(mc.source_market_center_id) ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-700 border-slate-300'}`} onClick={() => setForm((p) => ({ ...p, admin_market_centers: toggleArrayValue(p.admin_market_centers, mc.source_market_center_id) }))}>{mc.name}</button>)}</div>
+                      {!isAgent && (
+                        <div className="rounded-xl border border-slate-200 p-4 space-y-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900 mb-2">Admin Market Centers</p>
+                            <div className="flex flex-wrap gap-2">{(marketCenterData?.items ?? []).map((mc) => <button key={mc.source_market_center_id} type="button" className={`rounded-full px-3 py-1 text-xs border ${form.admin_market_centers.includes(mc.source_market_center_id) ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-700 border-slate-300'}`} onClick={() => setForm((p) => ({ ...p, admin_market_centers: toggleArrayValue(p.admin_market_centers, mc.source_market_center_id) }))}>{mc.name}</button>)}</div>
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900 mb-2">Admin Teams (Source IDs)</p>
+                            <input className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Comma separated team source ids" value={form.admin_teams.join(', ')} onChange={(e) => setForm((p) => ({ ...p, admin_teams: e.target.value.split(',').map((value) => value.trim()).filter(Boolean) }))} />
+                            <p className="mt-1 text-xs text-slate-500">Team lookups are not wired yet, so this uses source IDs for now.</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900 mb-2">Admin Teams (Source IDs)</p>
-                          <input className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Comma separated team source ids" value={form.admin_teams.join(', ')} onChange={(e) => setForm((p) => ({ ...p, admin_teams: e.target.value.split(',').map((value) => value.trim()).filter(Boolean) }))} />
-                          <p className="mt-1 text-xs text-slate-500">Team lookups are not wired yet, so this uses source IDs for now.</p>
-                        </div>
-                      </div>
+                      )}
                     </div>
 
                     <div className="rounded-xl border border-slate-200 p-4">
@@ -957,9 +997,9 @@ export default function AgentsPage() {
                         <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm"><input type="checkbox" checked={form.property24_opt_in} onChange={(e) => setForm((p) => ({ ...p, property24_opt_in: e.target.checked }))} />Property24 Opt In</label>
                         <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Agent Property24 ID</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.agent_property24_id} onChange={(e) => setForm((p) => ({ ...p, agent_property24_id: e.target.value }))} /></label>
                         <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Property24 Status</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.property24_status} onChange={(e) => setForm((p) => ({ ...p, property24_status: e.target.value }))} /></label>
-                        <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm"><input type="checkbox" checked={form.entegral_opt_in} onChange={(e) => setForm((p) => ({ ...p, entegral_opt_in: e.target.checked }))} />Entergal Opt In</label>
-                        <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Agent Entergal ID</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.agent_entegral_id} onChange={(e) => setForm((p) => ({ ...p, agent_entegral_id: e.target.value }))} /></label>
-                        <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Entergal Status</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.entegral_status} onChange={(e) => setForm((p) => ({ ...p, entegral_status: e.target.value }))} /></label>
+                        <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm"><input type="checkbox" checked={form.entegral_opt_in} onChange={(e) => setForm((p) => ({ ...p, entegral_opt_in: e.target.checked }))} />Entegral Opt In</label>
+                        <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Agent Entegral ID</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.agent_entegral_id} onChange={(e) => setForm((p) => ({ ...p, agent_entegral_id: e.target.value }))} /></label>
+                        <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Entegral Status</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.entegral_status} onChange={(e) => setForm((p) => ({ ...p, entegral_status: e.target.value }))} /></label>
                         <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm"><input type="checkbox" checked={form.private_property_opt_in} onChange={(e) => setForm((p) => ({ ...p, private_property_opt_in: e.target.checked }))} />Private Property Opt In</label>
                         <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Private Property Status</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.private_property_status} onChange={(e) => setForm((p) => ({ ...p, private_property_status: e.target.value }))} /></label>
                       </div>

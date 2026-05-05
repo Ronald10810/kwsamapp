@@ -381,6 +381,40 @@ async function main(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS migration.listing_approval_requests (
+        id BIGSERIAL PRIMARY KEY,
+        listing_id BIGINT NOT NULL UNIQUE REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        submitted_by_associate_id BIGINT REFERENCES migration.core_associates(id) ON DELETE SET NULL,
+        submitted_by_name TEXT,
+        submitted_by_email TEXT,
+        submission_comment TEXT,
+        submitted_at TIMESTAMPTZ,
+        reviewed_by_associate_id BIGINT REFERENCES migration.core_associates(id) ON DELETE SET NULL,
+        reviewed_by_name TEXT,
+        reviewed_by_email TEXT,
+        review_comment TEXT,
+        reviewed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS migration.in_app_notifications (
+        id BIGSERIAL PRIMARY KEY,
+        associate_id BIGINT NOT NULL REFERENCES migration.core_associates(id) ON DELETE CASCADE,
+        notification_type TEXT NOT NULL,
+        category TEXT NOT NULL,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        entity_type TEXT,
+        entity_id BIGINT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        is_read BOOLEAN NOT NULL DEFAULT false,
+        read_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
       CREATE INDEX IF NOT EXISTS idx_associate_social_media_associate
         ON migration.associate_social_media(associate_id);
       CREATE INDEX IF NOT EXISTS idx_associate_roles_associate
@@ -399,6 +433,14 @@ async function main(): Promise<void> {
         ON migration.associate_notes(associate_id);
       CREATE INDEX IF NOT EXISTS idx_market_center_notes_market_center
         ON migration.market_center_notes(market_center_id);
+      CREATE INDEX IF NOT EXISTS idx_listing_approval_requests_listing
+        ON migration.listing_approval_requests(listing_id);
+      CREATE INDEX IF NOT EXISTS idx_listing_approval_requests_status
+        ON migration.listing_approval_requests(status);
+      CREATE INDEX IF NOT EXISTS idx_in_app_notifications_associate
+        ON migration.in_app_notifications(associate_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_in_app_notifications_category
+        ON migration.in_app_notifications(category);
     `);
   });
 

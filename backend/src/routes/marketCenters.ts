@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { getOptionalPgPool } from '../config/db.js';
 import { ensureLocalUploadDirs, resolveLocalUploadDir, storageConfig } from '../config/storage.js';
 import { uploadToGcs } from '../services/gcsStorage.js';
+import { resolvePermissions } from '../middleware/permissions.js';
 
 const router = Router();
 const pool = getOptionalPgPool();
@@ -13,8 +14,80 @@ const pool = getOptionalPgPool();
 let marketCenterColumnCache: Set<string> | null = null;
 let marketCenterNotesTableExistsCache: boolean | null = null;
 
+const REQUIRED_MARKET_CENTER_COLUMNS: Record<string, string> = {
+  company_registered_name: 'TEXT',
+  kw_office_id: 'TEXT',
+  contact_number: 'TEXT',
+  contact_email: 'TEXT',
+  has_individual_cap: 'BOOLEAN NOT NULL DEFAULT FALSE',
+  agent_default_cap: 'NUMERIC(18,2)',
+  market_center_default_split: 'NUMERIC(10,4)',
+  agent_default_split: 'NUMERIC(10,4)',
+  productivity_coach: 'TEXT',
+  property24_opt_in: 'BOOLEAN NOT NULL DEFAULT FALSE',
+  property24_auction_approved: 'BOOLEAN NOT NULL DEFAULT FALSE',
+  market_center_property24_id: 'TEXT',
+  private_property_id: 'TEXT',
+  entegral_opt_in: 'BOOLEAN NOT NULL DEFAULT FALSE',
+  entegral_url: 'TEXT',
+  entegral_portals: "TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]",
+  country: 'TEXT',
+  province: 'TEXT',
+  city: 'TEXT',
+  suburb: 'TEXT',
+  erf_number: 'TEXT',
+  unit_number: 'TEXT',
+  door_number: 'TEXT',
+  estate_name: 'TEXT',
+  street_number: 'TEXT',
+  street_name: 'TEXT',
+  postal_code: 'TEXT',
+  longitude: 'NUMERIC(10,7)',
+  latitude: 'NUMERIC(10,7)',
+  override_display_location: 'BOOLEAN NOT NULL DEFAULT FALSE',
+  display_longitude: 'NUMERIC(10,7)',
+  display_latitude: 'NUMERIC(10,7)',
+};
+
+async function ensureMarketCenterSchema(): Promise<void> {
+  if (!pool) return;
+
+  const tableExists = await pool.query<{ exists: string | null }>(
+    `SELECT to_regclass('migration.core_market_centers') AS exists`
+  );
+
+  if (!tableExists.rows[0]?.exists) return;
+
+  const existingColumnsResult = await pool.query<{ column_name: string }>(
+    `
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'migration'
+      AND table_name = 'core_market_centers'
+    `
+  );
+
+  const existingColumns = new Set(existingColumnsResult.rows.map((row) => row.column_name));
+  const missingColumnDefs = Object.entries(REQUIRED_MARKET_CENTER_COLUMNS)
+    .filter(([columnName]) => !existingColumns.has(columnName))
+    .map(([columnName, columnType]) => `ADD COLUMN IF NOT EXISTS ${columnName} ${columnType}`);
+
+  if (missingColumnDefs.length === 0) return;
+
+  await pool.query(
+    `
+    ALTER TABLE migration.core_market_centers
+    ${missingColumnDefs.join(',\n    ')}
+    `
+  );
+
+  // Refresh cache after schema changes so subsequent queries include new columns.
+  marketCenterColumnCache = null;
+}
+
 async function getMarketCenterColumns(): Promise<Set<string>> {
   if (!pool) return new Set();
+  await ensureMarketCenterSchema();
   if (marketCenterColumnCache) return marketCenterColumnCache;
 
   const result = await pool.query<{ column_name: string }>(
@@ -439,9 +512,15 @@ router.get('/:id/details', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', resolvePermissions, async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+  }
+
+  // Only Regional Admin may create new market centres
+  const perms = req.permissions!;
+  if (perms.scope !== 'GLOBAL') {
+    return res.status(403).json({ error: 'Permission denied: only Regional Admins may create market centres' });
   }
 
   const name = toText(req.body?.name);
@@ -527,7 +606,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', resolvePermissions, async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
   }
@@ -535,6 +614,25 @@ router.put('/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
     return res.status(400).json({ error: 'Invalid market center id.' });
+  }
+
+  // Enforce edit permission based on active scope
+  const perms = req.permissions!;
+  if (perms.scope !== 'GLOBAL') {
+    if (perms.scope === 'OWN') {
+      return res.status(403).json({ error: 'Permission denied: agents may not edit market centres' });
+    }
+    // MARKET_CENTRE scope: Office Admin may only edit their assigned MC
+    const targetMc = await pool.query<{ source_market_center_id: string | null }>(
+      `SELECT source_market_center_id FROM migration.core_market_centers WHERE id = $1 LIMIT 1`,
+      [id]
+    );
+    if (!targetMc.rows[0]) {
+      return res.status(404).json({ error: 'Market center not found.' });
+    }
+    if (targetMc.rows[0].source_market_center_id !== perms.marketCenterId) {
+      return res.status(403).json({ error: 'Permission denied: you may only edit your assigned market centre' });
+    }
   }
 
   const name = toText(req.body?.name);
