@@ -1,0 +1,4259 @@
+{
+  "currentDb": {
+    "db": "kwsa",
+    "schema": "public"
+  },
+  "tables": [
+    "SoftDeleteHelper",
+    "addresses",
+    "app_users",
+    "associate_business_details",
+    "associate_contact_details",
+    "associate_statuses",
+    "associate_third_party_integrations",
+    "associate_transfer_statuses",
+    "associate_transfers",
+    "associates",
+    "audit_logs",
+    "cities",
+    "cma_documents",
+    "contacts",
+    "countries",
+    "documents",
+    "email_types",
+    "icon_types",
+    "listing_associate_types",
+    "listing_associates",
+    "listing_building_area_feature_types",
+    "listing_building_area_features",
+    "listing_building_infos",
+    "listing_building_zoning_types",
+    "listing_descriptions",
+    "listing_document_types",
+    "listing_images",
+    "listing_lightstone_validation_statuses",
+    "listing_lightstone_validations",
+    "listing_loom_validation_statuses",
+    "listing_mandate_infos",
+    "listing_mandate_types",
+    "listing_marketing_url_types",
+    "listing_marketing_urls",
+    "listing_ownership_types",
+    "listing_p24_feed_item_statuses",
+    "listing_p24_feed_items",
+    "listing_price_details",
+    "listing_property_area_types",
+    "listing_property_areas",
+    "listing_property_feature_listing_sub_types",
+    "listing_property_feature_listing_types",
+    "listing_sale_or_rent_types",
+    "listing_status_tags",
+    "listing_statuses",
+    "listing_sub_types",
+    "listing_third_party_integrations",
+    "listing_types",
+    "listings",
+    "loom_user_tokens",
+    "market_center_statuses",
+    "market_centers",
+    "marketing_plan_documents",
+    "provinces",
+    "public_leads",
+    "referral_statuses",
+    "referral_types",
+    "roles",
+    "suburbs",
+    "team_statuses",
+    "teams",
+    "transaction_associate_payment_details",
+    "transaction_associate_types",
+    "transaction_associates",
+    "transaction_bonds",
+    "transaction_contact_types",
+    "transaction_contacts",
+    "transaction_descriptions",
+    "transaction_documents",
+    "transaction_financial_institutions",
+    "transaction_financing_channels",
+    "transaction_financing_types",
+    "transaction_notes",
+    "transaction_statuses",
+    "transactions",
+    "user_roles",
+    "users"
+  ],
+  "columns": [
+    {
+      "table_name": "SoftDeleteHelper",
+      "column_name": "id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "streetNumber",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "streetName",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "unitNumber",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "erfNumber",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "postalCode",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "estateName",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "doorNumber",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "suburbId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "cityId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "provinceId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "countryId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "app_users",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "app_users",
+      "column_name": "google_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "app_users",
+      "column_name": "email",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "app_users",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "app_users",
+      "column_name": "picture",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "app_users",
+      "column_name": "role",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "app_users",
+      "column_name": "is_active",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "app_users",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "app_users",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "associateId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "kwuid",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "breeNumber",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "proposedGrowthShareSponsor",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "growthShareSponsorId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "temporaryGrowthShareSponsor",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "listingApprovalRequired",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "excludeFromIndividualReports",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "vested",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "vestingStartPeriod",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "column_name": "associateId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "column_name": "email",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "column_name": "privateEmail",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "column_name": "phone",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "column_name": "fax",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_statuses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_statuses",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_third_party_integrations",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_third_party_integrations",
+      "column_name": "associateId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_third_party_integrations",
+      "column_name": "p24AgentId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_third_party_integrations",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_third_party_integrations",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfer_statuses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfer_statuses",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "associateId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "marketCenterFromId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "marketCenterToId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "teamId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "property24IdOldOffice",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "property24IdNewOffice",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "associateTransactionMove",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "transferStatusId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "errorMessage",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "whoUpdatedId",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "userId",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "firstName",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "lastName",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "nationalId",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "ffcNumber",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "statusId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "marketCenterId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "teamId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "deletedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "audit_logs",
+      "column_name": "id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "audit_logs",
+      "column_name": "userId",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "audit_logs",
+      "column_name": "action",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "audit_logs",
+      "column_name": "entity",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "audit_logs",
+      "column_name": "entityId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "audit_logs",
+      "column_name": "changes",
+      "data_type": "jsonb",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "audit_logs",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cities",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cities",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cities",
+      "column_name": "provinceId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cities",
+      "column_name": "p24Id",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "cities",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cities",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "associate_email",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "associate_db_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "property_address",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "seller_name",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "file_name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "file_url",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "seller_first_name",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "seller_last_name",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "seller_email",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "seller_phone",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "loom_file_url",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "loom_original_name",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "contacts",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "contacts",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "contacts",
+      "column_name": "email",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "contacts",
+      "column_name": "phone",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "contacts",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "contacts",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "contacts",
+      "column_name": "deletedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "countries",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "countries",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "countries",
+      "column_name": "p24Id",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "countries",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "countries",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "documents",
+      "column_name": "id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "documents",
+      "column_name": "url",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "documents",
+      "column_name": "contentType",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "documents",
+      "column_name": "size",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "documents",
+      "column_name": "orderNumber",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "documents",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "email_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "email_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "icon_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "icon_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_associate_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_associate_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_associates",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_associates",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_associates",
+      "column_name": "associateId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_associates",
+      "column_name": "isPrimary",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_associates",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_area_feature_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_area_feature_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_area_feature_types",
+      "column_name": "p24Tag",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_building_area_features",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_area_features",
+      "column_name": "buildingInfoId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_area_features",
+      "column_name": "featureId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_area_features",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_infos",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_infos",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_infos",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_infos",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_zoning_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_building_zoning_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "column_name": "propertyTitle",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "column_name": "propertyDescription",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "column_name": "shortDescription",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "column_name": "listingTypeId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_document_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_document_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_images",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_images",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_images",
+      "column_name": "documentId",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_images",
+      "column_name": "orderNumber",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_images",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_lightstone_validation_statuses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_lightstone_validation_statuses",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_lightstone_validations",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_lightstone_validations",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_lightstone_validations",
+      "column_name": "lightStonePropertyId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_lightstone_validations",
+      "column_name": "validationStatus",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_lightstone_validations",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_lightstone_validations",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_loom_validation_statuses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_loom_validation_statuses",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "mandateTypeId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "signedDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "onMarketSince",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "ratesTaxes",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "monthlyLevy",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_mandate_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_mandate_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_marketing_url_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_marketing_url_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_marketing_urls",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_marketing_urls",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_marketing_urls",
+      "column_name": "url",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_marketing_urls",
+      "column_name": "marketingUrlTypeId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_marketing_urls",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_ownership_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_ownership_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_p24_feed_item_statuses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_p24_feed_item_statuses",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "column_name": "statusId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "column_name": "jsonToFeed",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "price",
+      "data_type": "numeric",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "poa",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "noTransferDuty",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "ignoreForPriceReducedAlerts",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "repossessed",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "agentPropertyValuation",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_property_area_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_property_area_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_property_areas",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_property_areas",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_property_areas",
+      "column_name": "propertyAreaTypeId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_property_areas",
+      "column_name": "size",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_property_areas",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_property_feature_listing_sub_types",
+      "column_name": "listingPropertyFeaturesId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_property_feature_listing_sub_types",
+      "column_name": "listingSubTypesId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_property_feature_listing_types",
+      "column_name": "listingPropertyFeaturesId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_property_feature_listing_types",
+      "column_name": "listingTypesId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_sale_or_rent_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_sale_or_rent_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_status_tags",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_status_tags",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_statuses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_statuses",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_sub_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_sub_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "column_name": "property24Reference",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "column_name": "privatePropertyReference",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "column_name": "kwwReference",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "column_name": "entegralReference",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "column_name": "kwwSyncMessage",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listing_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "listingNumber",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "addressId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "marketCenterId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "statusId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "statusTagId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "saleOrRentTypeId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "mandateTypeId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "listingTypeId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "listingDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "expiryDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "reducedDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "pendingDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "withdrawnDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "occupationDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "deletedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "column_name": "user_email",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "column_name": "access_enc",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "column_name": "refresh_enc",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "column_name": "expires_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "column_name": "loom_email",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "column_name": "consent_accepted",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "market_center_statuses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "market_center_statuses",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "market_centers",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "market_centers",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "market_centers",
+      "column_name": "addressId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "market_centers",
+      "column_name": "frontdoorId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "market_centers",
+      "column_name": "statusId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "market_centers",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "market_centers",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "market_centers",
+      "column_name": "deletedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "column_name": "associate_email",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "column_name": "associate_db_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "column_name": "property_address",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "column_name": "seller_name",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "column_name": "source_cma_id",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "column_name": "file_name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "column_name": "file_url",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "provinces",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "provinces",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "provinces",
+      "column_name": "countryId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "provinces",
+      "column_name": "p24Id",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "provinces",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "provinces",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "slug",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "title",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "phone",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "email",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "whatsapp",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "photo_url",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "market_center_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "team_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "id",
+      "data_type": "bigint",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "listing_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "internal_listing_agent_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "display_context_type",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "display_context_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "public_display_contact_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "page_url",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "lead_name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "lead_phone",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "lead_email",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "message",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "slug",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "listing_number",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "title",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "short_description",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "description",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "property_type",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "sale_or_rent",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "suburb",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "city",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "province",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "price",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "bedrooms",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "bathrooms",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "garages",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "parking",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "updated_at",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "published_at",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "status",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "image_urls",
+      "data_type": "ARRAY",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "internal_listing_agent_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "market_center_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "team_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "feature_tags",
+      "data_type": "ARRAY",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_market_centres_v",
+      "column_name": "id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_market_centres_v",
+      "column_name": "slug",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_market_centres_v",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_market_centres_v",
+      "column_name": "description",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_market_centres_v",
+      "column_name": "phone",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_market_centres_v",
+      "column_name": "email",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_market_centres_v",
+      "column_name": "logo_url",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_market_centres_v",
+      "column_name": "contact_person",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_teams_v",
+      "column_name": "id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_teams_v",
+      "column_name": "slug",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_teams_v",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_teams_v",
+      "column_name": "description",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_teams_v",
+      "column_name": "lead_name",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_teams_v",
+      "column_name": "lead_photo_url",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_teams_v",
+      "column_name": "phone",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_teams_v",
+      "column_name": "email",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "public_teams_v",
+      "column_name": "market_center_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "referral_statuses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "referral_statuses",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "referral_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "referral_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "roles",
+      "column_name": "id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "roles",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "roles",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "suburbs",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "suburbs",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "suburbs",
+      "column_name": "cityId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "suburbs",
+      "column_name": "p24Id",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "suburbs",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "suburbs",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "team_statuses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "team_statuses",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "teams",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "teams",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "teams",
+      "column_name": "marketCenterId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "teams",
+      "column_name": "statusId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "teams",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "teams",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "teams",
+      "column_name": "deletedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "transactionAssociateId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "paymentAmount",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "commissionPercentage",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "paymentStatus",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "transactionGCIBeforeFees",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "productionRoyalties",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "growthShare",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "gciAfterFeesExclVAT",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "capRemaining",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "associateDollar",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "teamDollar",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "mcDollar",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associate_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associate_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "transactionId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "associateId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "marketCenterId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "teamId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "managementMarketCenterId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "transactionAssociateTypeId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "contactId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "splitPercentage",
+      "data_type": "numeric",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "outsideAgency",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "softDelete",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transactionId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "bondAmount",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "registrationNumber",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transactionFinancingTypeId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transactionFinancialInstitutionId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transactionFinancingChannelId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transferAttorneyId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "bondAttorneyId",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transactionFinancingChannelContactPersonId",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_contact_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_contact_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_contacts",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_contacts",
+      "column_name": "transactionId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_contacts",
+      "column_name": "contactId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_contacts",
+      "column_name": "transactionContactTypeId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_contacts",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "transactionId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "soldPrice",
+      "data_type": "numeric",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "contractGCIExclVAT",
+      "data_type": "numeric",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "transactionDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "varianceSaleListPricePerc",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "avgCommsPerc",
+      "data_type": "numeric",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "soldDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "expectedDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "paymentNotes",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "returnNotes",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_documents",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_documents",
+      "column_name": "transactionId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_documents",
+      "column_name": "documentId",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_documents",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_financial_institutions",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_financial_institutions",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_financial_institutions",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_financial_institutions",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_financing_channels",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_financing_channels",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_financing_types",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_financing_types",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_notes",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_notes",
+      "column_name": "transactionId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_notes",
+      "column_name": "content",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_notes",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_statuses",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transaction_statuses",
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "transactionNumber",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "listingId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "statusId",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "statusChangeDate",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "whoUpdatedId",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "whenUpdated",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "deletedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "user_roles",
+      "column_name": "userId",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "user_roles",
+      "column_name": "roleId",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "email",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "password",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "firstName",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "lastName",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "deletedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES"
+    }
+  ],
+  "fks": [
+    {
+      "table_name": "addresses",
+      "column_name": "cityId",
+      "ref_table": "cities",
+      "ref_column": "id",
+      "constraint_name": "addresses_cityId_fkey"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "countryId",
+      "ref_table": "countries",
+      "ref_column": "id",
+      "constraint_name": "addresses_countryId_fkey"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "provinceId",
+      "ref_table": "provinces",
+      "ref_column": "id",
+      "constraint_name": "addresses_provinceId_fkey"
+    },
+    {
+      "table_name": "addresses",
+      "column_name": "suburbId",
+      "ref_table": "suburbs",
+      "ref_column": "id",
+      "constraint_name": "addresses_suburbId_fkey"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "associateId",
+      "ref_table": "associates",
+      "ref_column": "id",
+      "constraint_name": "associate_business_details_associateId_fkey"
+    },
+    {
+      "table_name": "associate_business_details",
+      "column_name": "growthShareSponsorId",
+      "ref_table": "associates",
+      "ref_column": "id",
+      "constraint_name": "associate_business_details_growthShareSponsorId_fkey"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "column_name": "associateId",
+      "ref_table": "associates",
+      "ref_column": "id",
+      "constraint_name": "associate_contact_details_associateId_fkey"
+    },
+    {
+      "table_name": "associate_third_party_integrations",
+      "column_name": "associateId",
+      "ref_table": "associates",
+      "ref_column": "id",
+      "constraint_name": "associate_third_party_integrations_associateId_fkey"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "associateId",
+      "ref_table": "associates",
+      "ref_column": "id",
+      "constraint_name": "associate_transfers_associateId_fkey"
+    },
+    {
+      "table_name": "associate_transfers",
+      "column_name": "transferStatusId",
+      "ref_table": "associate_transfer_statuses",
+      "ref_column": "id",
+      "constraint_name": "associate_transfers_transferStatusId_fkey"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "marketCenterId",
+      "ref_table": "market_centers",
+      "ref_column": "id",
+      "constraint_name": "associates_marketCenterId_fkey"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "statusId",
+      "ref_table": "associate_statuses",
+      "ref_column": "id",
+      "constraint_name": "associates_statusId_fkey"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "teamId",
+      "ref_table": "teams",
+      "ref_column": "id",
+      "constraint_name": "associates_teamId_fkey"
+    },
+    {
+      "table_name": "associates",
+      "column_name": "userId",
+      "ref_table": "users",
+      "ref_column": "id",
+      "constraint_name": "associates_userId_fkey"
+    },
+    {
+      "table_name": "cities",
+      "column_name": "provinceId",
+      "ref_table": "provinces",
+      "ref_column": "id",
+      "constraint_name": "cities_provinceId_fkey"
+    },
+    {
+      "table_name": "listing_associates",
+      "column_name": "associateId",
+      "ref_table": "associates",
+      "ref_column": "id",
+      "constraint_name": "listing_associates_associateId_fkey"
+    },
+    {
+      "table_name": "listing_associates",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_associates_listingId_fkey"
+    },
+    {
+      "table_name": "listing_building_area_features",
+      "column_name": "buildingInfoId",
+      "ref_table": "listing_building_infos",
+      "ref_column": "id",
+      "constraint_name": "listing_building_area_features_buildingInfoId_fkey"
+    },
+    {
+      "table_name": "listing_building_area_features",
+      "column_name": "featureId",
+      "ref_table": "listing_building_area_feature_types",
+      "ref_column": "id",
+      "constraint_name": "listing_building_area_features_featureId_fkey"
+    },
+    {
+      "table_name": "listing_building_infos",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_building_infos_listingId_fkey"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_descriptions_listingId_fkey"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "column_name": "listingTypeId",
+      "ref_table": "listing_types",
+      "ref_column": "id",
+      "constraint_name": "listing_descriptions_listingTypeId_fkey"
+    },
+    {
+      "table_name": "listing_images",
+      "column_name": "documentId",
+      "ref_table": "documents",
+      "ref_column": "id",
+      "constraint_name": "listing_images_documentId_fkey"
+    },
+    {
+      "table_name": "listing_images",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_images_listingId_fkey"
+    },
+    {
+      "table_name": "listing_lightstone_validations",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_lightstone_validations_listingId_fkey"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_mandate_infos_listingId_fkey"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "column_name": "mandateTypeId",
+      "ref_table": "listing_mandate_types",
+      "ref_column": "id",
+      "constraint_name": "listing_mandate_infos_mandateTypeId_fkey"
+    },
+    {
+      "table_name": "listing_marketing_urls",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_marketing_urls_listingId_fkey"
+    },
+    {
+      "table_name": "listing_marketing_urls",
+      "column_name": "marketingUrlTypeId",
+      "ref_table": "listing_marketing_url_types",
+      "ref_column": "id",
+      "constraint_name": "listing_marketing_urls_marketingUrlTypeId_fkey"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_p24_feed_items_listingId_fkey"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "column_name": "statusId",
+      "ref_table": "listing_p24_feed_item_statuses",
+      "ref_column": "id",
+      "constraint_name": "listing_p24_feed_items_statusId_fkey"
+    },
+    {
+      "table_name": "listing_price_details",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_price_details_listingId_fkey"
+    },
+    {
+      "table_name": "listing_property_areas",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_property_areas_listingId_fkey"
+    },
+    {
+      "table_name": "listing_property_areas",
+      "column_name": "propertyAreaTypeId",
+      "ref_table": "listing_property_area_types",
+      "ref_column": "id",
+      "constraint_name": "listing_property_areas_propertyAreaTypeId_fkey"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "listing_third_party_integrations_listingId_fkey"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "addressId",
+      "ref_table": "addresses",
+      "ref_column": "id",
+      "constraint_name": "listings_addressId_fkey"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "marketCenterId",
+      "ref_table": "market_centers",
+      "ref_column": "id",
+      "constraint_name": "listings_marketCenterId_fkey"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "saleOrRentTypeId",
+      "ref_table": "listing_sale_or_rent_types",
+      "ref_column": "id",
+      "constraint_name": "listings_saleOrRentTypeId_fkey"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "statusId",
+      "ref_table": "listing_statuses",
+      "ref_column": "id",
+      "constraint_name": "listings_statusId_fkey"
+    },
+    {
+      "table_name": "listings",
+      "column_name": "statusTagId",
+      "ref_table": "listing_status_tags",
+      "ref_column": "id",
+      "constraint_name": "listings_statusTagId_fkey"
+    },
+    {
+      "table_name": "market_centers",
+      "column_name": "addressId",
+      "ref_table": "addresses",
+      "ref_column": "id",
+      "constraint_name": "market_centers_addressId_fkey"
+    },
+    {
+      "table_name": "market_centers",
+      "column_name": "statusId",
+      "ref_table": "market_center_statuses",
+      "ref_column": "id",
+      "constraint_name": "market_centers_statusId_fkey"
+    },
+    {
+      "table_name": "provinces",
+      "column_name": "countryId",
+      "ref_table": "countries",
+      "ref_column": "id",
+      "constraint_name": "provinces_countryId_fkey"
+    },
+    {
+      "table_name": "suburbs",
+      "column_name": "cityId",
+      "ref_table": "cities",
+      "ref_column": "id",
+      "constraint_name": "suburbs_cityId_fkey"
+    },
+    {
+      "table_name": "teams",
+      "column_name": "marketCenterId",
+      "ref_table": "market_centers",
+      "ref_column": "id",
+      "constraint_name": "teams_marketCenterId_fkey"
+    },
+    {
+      "table_name": "teams",
+      "column_name": "statusId",
+      "ref_table": "team_statuses",
+      "ref_column": "id",
+      "constraint_name": "teams_statusId_fkey"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "column_name": "transactionAssociateId",
+      "ref_table": "transaction_associates",
+      "ref_column": "id",
+      "constraint_name": "transaction_associate_payment_details_transactionAssociate_fkey"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "associateId",
+      "ref_table": "associates",
+      "ref_column": "id",
+      "constraint_name": "transaction_associates_associateId_fkey"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "contactId",
+      "ref_table": "contacts",
+      "ref_column": "id",
+      "constraint_name": "transaction_associates_contactId_fkey"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "transactionAssociateTypeId",
+      "ref_table": "transaction_associate_types",
+      "ref_column": "id",
+      "constraint_name": "transaction_associates_transactionAssociateTypeId_fkey"
+    },
+    {
+      "table_name": "transaction_associates",
+      "column_name": "transactionId",
+      "ref_table": "transactions",
+      "ref_column": "id",
+      "constraint_name": "transaction_associates_transactionId_fkey"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "bondAttorneyId",
+      "ref_table": "contacts",
+      "ref_column": "id",
+      "constraint_name": "transaction_bonds_bondAttorneyId_fkey"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transactionFinancialInstitutionId",
+      "ref_table": "transaction_financial_institutions",
+      "ref_column": "id",
+      "constraint_name": "transaction_bonds_transactionFinancialInstitutionId_fkey"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transactionFinancingChannelId",
+      "ref_table": "transaction_financing_channels",
+      "ref_column": "id",
+      "constraint_name": "transaction_bonds_transactionFinancingChannelId_fkey"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transactionFinancingTypeId",
+      "ref_table": "transaction_financing_types",
+      "ref_column": "id",
+      "constraint_name": "transaction_bonds_transactionFinancingTypeId_fkey"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transactionId",
+      "ref_table": "transactions",
+      "ref_column": "id",
+      "constraint_name": "transaction_bonds_transactionId_fkey"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "column_name": "transferAttorneyId",
+      "ref_table": "contacts",
+      "ref_column": "id",
+      "constraint_name": "transaction_bonds_transferAttorneyId_fkey"
+    },
+    {
+      "table_name": "transaction_contacts",
+      "column_name": "contactId",
+      "ref_table": "contacts",
+      "ref_column": "id",
+      "constraint_name": "transaction_contacts_contactId_fkey"
+    },
+    {
+      "table_name": "transaction_contacts",
+      "column_name": "transactionContactTypeId",
+      "ref_table": "transaction_contact_types",
+      "ref_column": "id",
+      "constraint_name": "transaction_contacts_transactionContactTypeId_fkey"
+    },
+    {
+      "table_name": "transaction_contacts",
+      "column_name": "transactionId",
+      "ref_table": "transactions",
+      "ref_column": "id",
+      "constraint_name": "transaction_contacts_transactionId_fkey"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "column_name": "transactionId",
+      "ref_table": "transactions",
+      "ref_column": "id",
+      "constraint_name": "transaction_descriptions_transactionId_fkey"
+    },
+    {
+      "table_name": "transaction_documents",
+      "column_name": "documentId",
+      "ref_table": "documents",
+      "ref_column": "id",
+      "constraint_name": "transaction_documents_documentId_fkey"
+    },
+    {
+      "table_name": "transaction_documents",
+      "column_name": "transactionId",
+      "ref_table": "transactions",
+      "ref_column": "id",
+      "constraint_name": "transaction_documents_transactionId_fkey"
+    },
+    {
+      "table_name": "transaction_notes",
+      "column_name": "transactionId",
+      "ref_table": "transactions",
+      "ref_column": "id",
+      "constraint_name": "transaction_notes_transactionId_fkey"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "listingId",
+      "ref_table": "listings",
+      "ref_column": "id",
+      "constraint_name": "transactions_listingId_fkey"
+    },
+    {
+      "table_name": "transactions",
+      "column_name": "statusId",
+      "ref_table": "transaction_statuses",
+      "ref_column": "id",
+      "constraint_name": "transactions_statusId_fkey"
+    },
+    {
+      "table_name": "user_roles",
+      "column_name": "roleId",
+      "ref_table": "roles",
+      "ref_column": "id",
+      "constraint_name": "user_roles_roleId_fkey"
+    },
+    {
+      "table_name": "user_roles",
+      "column_name": "userId",
+      "ref_table": "users",
+      "ref_column": "id",
+      "constraint_name": "user_roles_userId_fkey"
+    }
+  ],
+  "indexes": [
+    {
+      "table_name": "SoftDeleteHelper",
+      "index_name": "SoftDeleteHelper_pkey",
+      "indexdef": "CREATE UNIQUE INDEX \"SoftDeleteHelper_pkey\" ON public.\"SoftDeleteHelper\" USING btree (id)"
+    },
+    {
+      "table_name": "addresses",
+      "index_name": "addresses_cityId_idx",
+      "indexdef": "CREATE INDEX \"addresses_cityId_idx\" ON public.addresses USING btree (\"cityId\")"
+    },
+    {
+      "table_name": "addresses",
+      "index_name": "addresses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX addresses_pkey ON public.addresses USING btree (id)"
+    },
+    {
+      "table_name": "addresses",
+      "index_name": "addresses_suburbId_idx",
+      "indexdef": "CREATE INDEX \"addresses_suburbId_idx\" ON public.addresses USING btree (\"suburbId\")"
+    },
+    {
+      "table_name": "addresses",
+      "index_name": "idx_addresses_suburb_street",
+      "indexdef": "CREATE INDEX idx_addresses_suburb_street ON public.addresses USING btree (\"suburbId\", \"streetNumber\", \"streetName\")"
+    },
+    {
+      "table_name": "app_users",
+      "index_name": "app_users_email_key",
+      "indexdef": "CREATE UNIQUE INDEX app_users_email_key ON public.app_users USING btree (email)"
+    },
+    {
+      "table_name": "app_users",
+      "index_name": "app_users_google_id_key",
+      "indexdef": "CREATE UNIQUE INDEX app_users_google_id_key ON public.app_users USING btree (google_id)"
+    },
+    {
+      "table_name": "app_users",
+      "index_name": "app_users_pkey",
+      "indexdef": "CREATE UNIQUE INDEX app_users_pkey ON public.app_users USING btree (id)"
+    },
+    {
+      "table_name": "associate_business_details",
+      "index_name": "associate_business_details_associateId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"associate_business_details_associateId_key\" ON public.associate_business_details USING btree (\"associateId\")"
+    },
+    {
+      "table_name": "associate_business_details",
+      "index_name": "associate_business_details_pkey",
+      "indexdef": "CREATE UNIQUE INDEX associate_business_details_pkey ON public.associate_business_details USING btree (id)"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "index_name": "associate_contact_details_associateId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"associate_contact_details_associateId_key\" ON public.associate_contact_details USING btree (\"associateId\")"
+    },
+    {
+      "table_name": "associate_contact_details",
+      "index_name": "associate_contact_details_pkey",
+      "indexdef": "CREATE UNIQUE INDEX associate_contact_details_pkey ON public.associate_contact_details USING btree (id)"
+    },
+    {
+      "table_name": "associate_statuses",
+      "index_name": "associate_statuses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX associate_statuses_pkey ON public.associate_statuses USING btree (id)"
+    },
+    {
+      "table_name": "associate_third_party_integrations",
+      "index_name": "associate_third_party_integrations_associateId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"associate_third_party_integrations_associateId_key\" ON public.associate_third_party_integrations USING btree (\"associateId\")"
+    },
+    {
+      "table_name": "associate_third_party_integrations",
+      "index_name": "associate_third_party_integrations_pkey",
+      "indexdef": "CREATE UNIQUE INDEX associate_third_party_integrations_pkey ON public.associate_third_party_integrations USING btree (id)"
+    },
+    {
+      "table_name": "associate_transfer_statuses",
+      "index_name": "associate_transfer_statuses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX associate_transfer_statuses_pkey ON public.associate_transfer_statuses USING btree (id)"
+    },
+    {
+      "table_name": "associate_transfers",
+      "index_name": "associate_transfers_associateId_idx",
+      "indexdef": "CREATE INDEX \"associate_transfers_associateId_idx\" ON public.associate_transfers USING btree (\"associateId\")"
+    },
+    {
+      "table_name": "associate_transfers",
+      "index_name": "associate_transfers_pkey",
+      "indexdef": "CREATE UNIQUE INDEX associate_transfers_pkey ON public.associate_transfers USING btree (id)"
+    },
+    {
+      "table_name": "associate_transfers",
+      "index_name": "associate_transfers_transferStatusId_idx",
+      "indexdef": "CREATE INDEX \"associate_transfers_transferStatusId_idx\" ON public.associate_transfers USING btree (\"transferStatusId\")"
+    },
+    {
+      "table_name": "associates",
+      "index_name": "associates_marketCenterId_idx",
+      "indexdef": "CREATE INDEX \"associates_marketCenterId_idx\" ON public.associates USING btree (\"marketCenterId\")"
+    },
+    {
+      "table_name": "associates",
+      "index_name": "associates_pkey",
+      "indexdef": "CREATE UNIQUE INDEX associates_pkey ON public.associates USING btree (id)"
+    },
+    {
+      "table_name": "associates",
+      "index_name": "associates_statusId_idx",
+      "indexdef": "CREATE INDEX \"associates_statusId_idx\" ON public.associates USING btree (\"statusId\")"
+    },
+    {
+      "table_name": "associates",
+      "index_name": "associates_teamId_idx",
+      "indexdef": "CREATE INDEX \"associates_teamId_idx\" ON public.associates USING btree (\"teamId\")"
+    },
+    {
+      "table_name": "associates",
+      "index_name": "associates_userId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"associates_userId_key\" ON public.associates USING btree (\"userId\")"
+    },
+    {
+      "table_name": "audit_logs",
+      "index_name": "audit_logs_createdAt_idx",
+      "indexdef": "CREATE INDEX \"audit_logs_createdAt_idx\" ON public.audit_logs USING btree (\"createdAt\")"
+    },
+    {
+      "table_name": "audit_logs",
+      "index_name": "audit_logs_entity_idx",
+      "indexdef": "CREATE INDEX audit_logs_entity_idx ON public.audit_logs USING btree (entity)"
+    },
+    {
+      "table_name": "audit_logs",
+      "index_name": "audit_logs_pkey",
+      "indexdef": "CREATE UNIQUE INDEX audit_logs_pkey ON public.audit_logs USING btree (id)"
+    },
+    {
+      "table_name": "audit_logs",
+      "index_name": "audit_logs_userId_idx",
+      "indexdef": "CREATE INDEX \"audit_logs_userId_idx\" ON public.audit_logs USING btree (\"userId\")"
+    },
+    {
+      "table_name": "cities",
+      "index_name": "cities_p24Id_idx",
+      "indexdef": "CREATE INDEX \"cities_p24Id_idx\" ON public.cities USING btree (\"p24Id\")"
+    },
+    {
+      "table_name": "cities",
+      "index_name": "cities_p24Id_key",
+      "indexdef": "CREATE UNIQUE INDEX \"cities_p24Id_key\" ON public.cities USING btree (\"p24Id\")"
+    },
+    {
+      "table_name": "cities",
+      "index_name": "cities_pkey",
+      "indexdef": "CREATE UNIQUE INDEX cities_pkey ON public.cities USING btree (id)"
+    },
+    {
+      "table_name": "cities",
+      "index_name": "cities_provinceId_idx",
+      "indexdef": "CREATE INDEX \"cities_provinceId_idx\" ON public.cities USING btree (\"provinceId\")"
+    },
+    {
+      "table_name": "cma_documents",
+      "index_name": "cma_documents_pkey",
+      "indexdef": "CREATE UNIQUE INDEX cma_documents_pkey ON public.cma_documents USING btree (id)"
+    },
+    {
+      "table_name": "contacts",
+      "index_name": "contacts_pkey",
+      "indexdef": "CREATE UNIQUE INDEX contacts_pkey ON public.contacts USING btree (id)"
+    },
+    {
+      "table_name": "countries",
+      "index_name": "countries_p24Id_idx",
+      "indexdef": "CREATE INDEX \"countries_p24Id_idx\" ON public.countries USING btree (\"p24Id\")"
+    },
+    {
+      "table_name": "countries",
+      "index_name": "countries_p24Id_key",
+      "indexdef": "CREATE UNIQUE INDEX \"countries_p24Id_key\" ON public.countries USING btree (\"p24Id\")"
+    },
+    {
+      "table_name": "countries",
+      "index_name": "countries_pkey",
+      "indexdef": "CREATE UNIQUE INDEX countries_pkey ON public.countries USING btree (id)"
+    },
+    {
+      "table_name": "documents",
+      "index_name": "documents_pkey",
+      "indexdef": "CREATE UNIQUE INDEX documents_pkey ON public.documents USING btree (id)"
+    },
+    {
+      "table_name": "email_types",
+      "index_name": "email_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX email_types_pkey ON public.email_types USING btree (id)"
+    },
+    {
+      "table_name": "icon_types",
+      "index_name": "icon_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX icon_types_pkey ON public.icon_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_associate_types",
+      "index_name": "listing_associate_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_associate_types_pkey ON public.listing_associate_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_associates",
+      "index_name": "listing_associates_listingId_associateId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"listing_associates_listingId_associateId_key\" ON public.listing_associates USING btree (\"listingId\", \"associateId\")"
+    },
+    {
+      "table_name": "listing_associates",
+      "index_name": "listing_associates_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_associates_pkey ON public.listing_associates USING btree (id)"
+    },
+    {
+      "table_name": "listing_building_area_feature_types",
+      "index_name": "listing_building_area_feature_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_building_area_feature_types_pkey ON public.listing_building_area_feature_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_building_area_features",
+      "index_name": "listing_building_area_features_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_building_area_features_pkey ON public.listing_building_area_features USING btree (id)"
+    },
+    {
+      "table_name": "listing_building_infos",
+      "index_name": "listing_building_infos_listingId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"listing_building_infos_listingId_key\" ON public.listing_building_infos USING btree (\"listingId\")"
+    },
+    {
+      "table_name": "listing_building_infos",
+      "index_name": "listing_building_infos_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_building_infos_pkey ON public.listing_building_infos USING btree (id)"
+    },
+    {
+      "table_name": "listing_building_zoning_types",
+      "index_name": "listing_building_zoning_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_building_zoning_types_pkey ON public.listing_building_zoning_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "index_name": "listing_descriptions_listingId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"listing_descriptions_listingId_key\" ON public.listing_descriptions USING btree (\"listingId\")"
+    },
+    {
+      "table_name": "listing_descriptions",
+      "index_name": "listing_descriptions_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_descriptions_pkey ON public.listing_descriptions USING btree (id)"
+    },
+    {
+      "table_name": "listing_document_types",
+      "index_name": "listing_document_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_document_types_pkey ON public.listing_document_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_images",
+      "index_name": "listing_images_listingId_idx",
+      "indexdef": "CREATE INDEX \"listing_images_listingId_idx\" ON public.listing_images USING btree (\"listingId\")"
+    },
+    {
+      "table_name": "listing_images",
+      "index_name": "listing_images_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_images_pkey ON public.listing_images USING btree (id)"
+    },
+    {
+      "table_name": "listing_lightstone_validation_statuses",
+      "index_name": "listing_lightstone_validation_statuses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_lightstone_validation_statuses_pkey ON public.listing_lightstone_validation_statuses USING btree (id)"
+    },
+    {
+      "table_name": "listing_lightstone_validations",
+      "index_name": "listing_lightstone_validations_listingId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"listing_lightstone_validations_listingId_key\" ON public.listing_lightstone_validations USING btree (\"listingId\")"
+    },
+    {
+      "table_name": "listing_lightstone_validations",
+      "index_name": "listing_lightstone_validations_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_lightstone_validations_pkey ON public.listing_lightstone_validations USING btree (id)"
+    },
+    {
+      "table_name": "listing_loom_validation_statuses",
+      "index_name": "listing_loom_validation_statuses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_loom_validation_statuses_pkey ON public.listing_loom_validation_statuses USING btree (id)"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "index_name": "listing_mandate_infos_listingId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"listing_mandate_infos_listingId_key\" ON public.listing_mandate_infos USING btree (\"listingId\")"
+    },
+    {
+      "table_name": "listing_mandate_infos",
+      "index_name": "listing_mandate_infos_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_mandate_infos_pkey ON public.listing_mandate_infos USING btree (id)"
+    },
+    {
+      "table_name": "listing_mandate_types",
+      "index_name": "listing_mandate_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_mandate_types_pkey ON public.listing_mandate_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_marketing_url_types",
+      "index_name": "listing_marketing_url_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_marketing_url_types_pkey ON public.listing_marketing_url_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_marketing_urls",
+      "index_name": "listing_marketing_urls_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_marketing_urls_pkey ON public.listing_marketing_urls USING btree (id)"
+    },
+    {
+      "table_name": "listing_ownership_types",
+      "index_name": "listing_ownership_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_ownership_types_pkey ON public.listing_ownership_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_p24_feed_item_statuses",
+      "index_name": "listing_p24_feed_item_statuses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_p24_feed_item_statuses_pkey ON public.listing_p24_feed_item_statuses USING btree (id)"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "index_name": "listing_p24_feed_items_listingId_idx",
+      "indexdef": "CREATE INDEX \"listing_p24_feed_items_listingId_idx\" ON public.listing_p24_feed_items USING btree (\"listingId\")"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "index_name": "listing_p24_feed_items_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_p24_feed_items_pkey ON public.listing_p24_feed_items USING btree (id)"
+    },
+    {
+      "table_name": "listing_p24_feed_items",
+      "index_name": "listing_p24_feed_items_statusId_idx",
+      "indexdef": "CREATE INDEX \"listing_p24_feed_items_statusId_idx\" ON public.listing_p24_feed_items USING btree (\"statusId\")"
+    },
+    {
+      "table_name": "listing_price_details",
+      "index_name": "listing_price_details_listingId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"listing_price_details_listingId_key\" ON public.listing_price_details USING btree (\"listingId\")"
+    },
+    {
+      "table_name": "listing_price_details",
+      "index_name": "listing_price_details_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_price_details_pkey ON public.listing_price_details USING btree (id)"
+    },
+    {
+      "table_name": "listing_property_area_types",
+      "index_name": "listing_property_area_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_property_area_types_pkey ON public.listing_property_area_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_property_areas",
+      "index_name": "listing_property_areas_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_property_areas_pkey ON public.listing_property_areas USING btree (id)"
+    },
+    {
+      "table_name": "listing_property_feature_listing_sub_types",
+      "index_name": "listing_property_feature_listing_sub_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_property_feature_listing_sub_types_pkey ON public.listing_property_feature_listing_sub_types USING btree (\"listingPropertyFeaturesId\", \"listingSubTypesId\")"
+    },
+    {
+      "table_name": "listing_property_feature_listing_types",
+      "index_name": "listing_property_feature_listing_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_property_feature_listing_types_pkey ON public.listing_property_feature_listing_types USING btree (\"listingPropertyFeaturesId\", \"listingTypesId\")"
+    },
+    {
+      "table_name": "listing_sale_or_rent_types",
+      "index_name": "listing_sale_or_rent_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_sale_or_rent_types_pkey ON public.listing_sale_or_rent_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_status_tags",
+      "index_name": "listing_status_tags_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_status_tags_pkey ON public.listing_status_tags USING btree (id)"
+    },
+    {
+      "table_name": "listing_statuses",
+      "index_name": "listing_statuses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_statuses_pkey ON public.listing_statuses USING btree (id)"
+    },
+    {
+      "table_name": "listing_sub_types",
+      "index_name": "listing_sub_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_sub_types_pkey ON public.listing_sub_types USING btree (id)"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "index_name": "listing_third_party_integrations_listingId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"listing_third_party_integrations_listingId_key\" ON public.listing_third_party_integrations USING btree (\"listingId\")"
+    },
+    {
+      "table_name": "listing_third_party_integrations",
+      "index_name": "listing_third_party_integrations_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_third_party_integrations_pkey ON public.listing_third_party_integrations USING btree (id)"
+    },
+    {
+      "table_name": "listing_types",
+      "index_name": "listing_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listing_types_pkey ON public.listing_types USING btree (id)"
+    },
+    {
+      "table_name": "listings",
+      "index_name": "listings_addressId_idx",
+      "indexdef": "CREATE INDEX \"listings_addressId_idx\" ON public.listings USING btree (\"addressId\")"
+    },
+    {
+      "table_name": "listings",
+      "index_name": "listings_listingNumber_key",
+      "indexdef": "CREATE UNIQUE INDEX \"listings_listingNumber_key\" ON public.listings USING btree (\"listingNumber\")"
+    },
+    {
+      "table_name": "listings",
+      "index_name": "listings_marketCenterId_idx",
+      "indexdef": "CREATE INDEX \"listings_marketCenterId_idx\" ON public.listings USING btree (\"marketCenterId\")"
+    },
+    {
+      "table_name": "listings",
+      "index_name": "listings_pkey",
+      "indexdef": "CREATE UNIQUE INDEX listings_pkey ON public.listings USING btree (id)"
+    },
+    {
+      "table_name": "listings",
+      "index_name": "listings_statusId_idx",
+      "indexdef": "CREATE INDEX \"listings_statusId_idx\" ON public.listings USING btree (\"statusId\")"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "index_name": "loom_user_tokens_email_idx",
+      "indexdef": "CREATE INDEX loom_user_tokens_email_idx ON public.loom_user_tokens USING btree (user_email)"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "index_name": "loom_user_tokens_pkey",
+      "indexdef": "CREATE UNIQUE INDEX loom_user_tokens_pkey ON public.loom_user_tokens USING btree (id)"
+    },
+    {
+      "table_name": "loom_user_tokens",
+      "index_name": "loom_user_tokens_user_email_key",
+      "indexdef": "CREATE UNIQUE INDEX loom_user_tokens_user_email_key ON public.loom_user_tokens USING btree (user_email)"
+    },
+    {
+      "table_name": "market_center_statuses",
+      "index_name": "market_center_statuses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX market_center_statuses_pkey ON public.market_center_statuses USING btree (id)"
+    },
+    {
+      "table_name": "market_centers",
+      "index_name": "market_centers_addressId_idx",
+      "indexdef": "CREATE INDEX \"market_centers_addressId_idx\" ON public.market_centers USING btree (\"addressId\")"
+    },
+    {
+      "table_name": "market_centers",
+      "index_name": "market_centers_pkey",
+      "indexdef": "CREATE UNIQUE INDEX market_centers_pkey ON public.market_centers USING btree (id)"
+    },
+    {
+      "table_name": "market_centers",
+      "index_name": "market_centers_statusId_idx",
+      "indexdef": "CREATE INDEX \"market_centers_statusId_idx\" ON public.market_centers USING btree (\"statusId\")"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "index_name": "marketing_plan_documents_pkey",
+      "indexdef": "CREATE UNIQUE INDEX marketing_plan_documents_pkey ON public.marketing_plan_documents USING btree (id)"
+    },
+    {
+      "table_name": "provinces",
+      "index_name": "provinces_countryId_idx",
+      "indexdef": "CREATE INDEX \"provinces_countryId_idx\" ON public.provinces USING btree (\"countryId\")"
+    },
+    {
+      "table_name": "provinces",
+      "index_name": "provinces_p24Id_idx",
+      "indexdef": "CREATE INDEX \"provinces_p24Id_idx\" ON public.provinces USING btree (\"p24Id\")"
+    },
+    {
+      "table_name": "provinces",
+      "index_name": "provinces_p24Id_key",
+      "indexdef": "CREATE UNIQUE INDEX \"provinces_p24Id_key\" ON public.provinces USING btree (\"p24Id\")"
+    },
+    {
+      "table_name": "provinces",
+      "index_name": "provinces_pkey",
+      "indexdef": "CREATE UNIQUE INDEX provinces_pkey ON public.provinces USING btree (id)"
+    },
+    {
+      "table_name": "public_leads",
+      "index_name": "public_leads_pkey",
+      "indexdef": "CREATE UNIQUE INDEX public_leads_pkey ON public.public_leads USING btree (id)"
+    },
+    {
+      "table_name": "referral_statuses",
+      "index_name": "referral_statuses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX referral_statuses_pkey ON public.referral_statuses USING btree (id)"
+    },
+    {
+      "table_name": "referral_types",
+      "index_name": "referral_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX referral_types_pkey ON public.referral_types USING btree (id)"
+    },
+    {
+      "table_name": "roles",
+      "index_name": "roles_name_key",
+      "indexdef": "CREATE UNIQUE INDEX roles_name_key ON public.roles USING btree (name)"
+    },
+    {
+      "table_name": "roles",
+      "index_name": "roles_pkey",
+      "indexdef": "CREATE UNIQUE INDEX roles_pkey ON public.roles USING btree (id)"
+    },
+    {
+      "table_name": "suburbs",
+      "index_name": "suburbs_cityId_idx",
+      "indexdef": "CREATE INDEX \"suburbs_cityId_idx\" ON public.suburbs USING btree (\"cityId\")"
+    },
+    {
+      "table_name": "suburbs",
+      "index_name": "suburbs_p24Id_idx",
+      "indexdef": "CREATE INDEX \"suburbs_p24Id_idx\" ON public.suburbs USING btree (\"p24Id\")"
+    },
+    {
+      "table_name": "suburbs",
+      "index_name": "suburbs_p24Id_key",
+      "indexdef": "CREATE UNIQUE INDEX \"suburbs_p24Id_key\" ON public.suburbs USING btree (\"p24Id\")"
+    },
+    {
+      "table_name": "suburbs",
+      "index_name": "suburbs_pkey",
+      "indexdef": "CREATE UNIQUE INDEX suburbs_pkey ON public.suburbs USING btree (id)"
+    },
+    {
+      "table_name": "team_statuses",
+      "index_name": "team_statuses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX team_statuses_pkey ON public.team_statuses USING btree (id)"
+    },
+    {
+      "table_name": "teams",
+      "index_name": "teams_marketCenterId_idx",
+      "indexdef": "CREATE INDEX \"teams_marketCenterId_idx\" ON public.teams USING btree (\"marketCenterId\")"
+    },
+    {
+      "table_name": "teams",
+      "index_name": "teams_pkey",
+      "indexdef": "CREATE UNIQUE INDEX teams_pkey ON public.teams USING btree (id)"
+    },
+    {
+      "table_name": "teams",
+      "index_name": "teams_statusId_idx",
+      "indexdef": "CREATE INDEX \"teams_statusId_idx\" ON public.teams USING btree (\"statusId\")"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "index_name": "transaction_associate_payment_details_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_associate_payment_details_pkey ON public.transaction_associate_payment_details USING btree (id)"
+    },
+    {
+      "table_name": "transaction_associate_payment_details",
+      "index_name": "transaction_associate_payment_details_transactionAssociateI_key",
+      "indexdef": "CREATE UNIQUE INDEX \"transaction_associate_payment_details_transactionAssociateI_key\" ON public.transaction_associate_payment_details USING btree (\"transactionAssociateId\")"
+    },
+    {
+      "table_name": "transaction_associate_types",
+      "index_name": "transaction_associate_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_associate_types_pkey ON public.transaction_associate_types USING btree (id)"
+    },
+    {
+      "table_name": "transaction_associates",
+      "index_name": "transaction_associates_associateId_idx",
+      "indexdef": "CREATE INDEX \"transaction_associates_associateId_idx\" ON public.transaction_associates USING btree (\"associateId\")"
+    },
+    {
+      "table_name": "transaction_associates",
+      "index_name": "transaction_associates_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_associates_pkey ON public.transaction_associates USING btree (id)"
+    },
+    {
+      "table_name": "transaction_associates",
+      "index_name": "transaction_associates_transactionId_idx",
+      "indexdef": "CREATE INDEX \"transaction_associates_transactionId_idx\" ON public.transaction_associates USING btree (\"transactionId\")"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "index_name": "transaction_bonds_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_bonds_pkey ON public.transaction_bonds USING btree (id)"
+    },
+    {
+      "table_name": "transaction_bonds",
+      "index_name": "transaction_bonds_transactionId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"transaction_bonds_transactionId_key\" ON public.transaction_bonds USING btree (\"transactionId\")"
+    },
+    {
+      "table_name": "transaction_contact_types",
+      "index_name": "transaction_contact_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_contact_types_pkey ON public.transaction_contact_types USING btree (id)"
+    },
+    {
+      "table_name": "transaction_contacts",
+      "index_name": "transaction_contacts_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_contacts_pkey ON public.transaction_contacts USING btree (id)"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "index_name": "transaction_descriptions_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_descriptions_pkey ON public.transaction_descriptions USING btree (id)"
+    },
+    {
+      "table_name": "transaction_descriptions",
+      "index_name": "transaction_descriptions_transactionId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"transaction_descriptions_transactionId_key\" ON public.transaction_descriptions USING btree (\"transactionId\")"
+    },
+    {
+      "table_name": "transaction_documents",
+      "index_name": "transaction_documents_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_documents_pkey ON public.transaction_documents USING btree (id)"
+    },
+    {
+      "table_name": "transaction_financial_institutions",
+      "index_name": "transaction_financial_institutions_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_financial_institutions_pkey ON public.transaction_financial_institutions USING btree (id)"
+    },
+    {
+      "table_name": "transaction_financing_channels",
+      "index_name": "transaction_financing_channels_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_financing_channels_pkey ON public.transaction_financing_channels USING btree (id)"
+    },
+    {
+      "table_name": "transaction_financing_types",
+      "index_name": "transaction_financing_types_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_financing_types_pkey ON public.transaction_financing_types USING btree (id)"
+    },
+    {
+      "table_name": "transaction_notes",
+      "index_name": "transaction_notes_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_notes_pkey ON public.transaction_notes USING btree (id)"
+    },
+    {
+      "table_name": "transaction_statuses",
+      "index_name": "transaction_statuses_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transaction_statuses_pkey ON public.transaction_statuses USING btree (id)"
+    },
+    {
+      "table_name": "transactions",
+      "index_name": "transactions_listingId_idx",
+      "indexdef": "CREATE INDEX \"transactions_listingId_idx\" ON public.transactions USING btree (\"listingId\")"
+    },
+    {
+      "table_name": "transactions",
+      "index_name": "transactions_pkey",
+      "indexdef": "CREATE UNIQUE INDEX transactions_pkey ON public.transactions USING btree (id)"
+    },
+    {
+      "table_name": "transactions",
+      "index_name": "transactions_statusId_idx",
+      "indexdef": "CREATE INDEX \"transactions_statusId_idx\" ON public.transactions USING btree (\"statusId\")"
+    },
+    {
+      "table_name": "transactions",
+      "index_name": "transactions_transactionNumber_key",
+      "indexdef": "CREATE UNIQUE INDEX \"transactions_transactionNumber_key\" ON public.transactions USING btree (\"transactionNumber\")"
+    },
+    {
+      "table_name": "user_roles",
+      "index_name": "user_roles_pkey",
+      "indexdef": "CREATE UNIQUE INDEX user_roles_pkey ON public.user_roles USING btree (\"userId\", \"roleId\")"
+    },
+    {
+      "table_name": "users",
+      "index_name": "users_email_idx",
+      "indexdef": "CREATE INDEX users_email_idx ON public.users USING btree (email)"
+    },
+    {
+      "table_name": "users",
+      "index_name": "users_email_key",
+      "indexdef": "CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)"
+    },
+    {
+      "table_name": "users",
+      "index_name": "users_pkey",
+      "indexdef": "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)"
+    }
+  ],
+  "extensions": [
+    {
+      "extname": "pg_trgm",
+      "extversion": "1.6"
+    },
+    {
+      "extname": "plpgsql",
+      "extversion": "1.0"
+    }
+  ],
+  "urlColumns": [
+    {
+      "table_name": "cma_documents",
+      "column_name": "file_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "cma_documents",
+      "column_name": "loom_file_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "documents",
+      "column_name": "url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "listing_images",
+      "column_name": "documentId",
+      "data_type": "text"
+    },
+    {
+      "table_name": "listing_marketing_urls",
+      "column_name": "marketingUrlTypeId",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "listing_marketing_urls",
+      "column_name": "url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "marketing_plan_documents",
+      "column_name": "file_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "public_agents_v",
+      "column_name": "photo_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "public_leads",
+      "column_name": "page_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "public_listings_v",
+      "column_name": "image_urls",
+      "data_type": "ARRAY"
+    },
+    {
+      "table_name": "public_market_centres_v",
+      "column_name": "logo_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "public_teams_v",
+      "column_name": "lead_photo_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "transaction_documents",
+      "column_name": "documentId",
+      "data_type": "text"
+    }
+  ],
+  "urlCounts": [
+    {
+      "table": "cma_documents",
+      "column": "file_url",
+      "nonNullCount": "8"
+    },
+    {
+      "table": "cma_documents",
+      "column": "loom_file_url",
+      "nonNullCount": "3"
+    },
+    {
+      "table": "documents",
+      "column": "url",
+      "nonNullCount": "2826651"
+    },
+    {
+      "table": "listing_images",
+      "column": "documentId",
+      "nonNullCount": "2489338"
+    },
+    {
+      "table": "listing_marketing_urls",
+      "column": "marketingUrlTypeId",
+      "nonNullCount": "9883"
+    },
+    {
+      "table": "listing_marketing_urls",
+      "column": "url",
+      "nonNullCount": "9883"
+    },
+    {
+      "table": "marketing_plan_documents",
+      "column": "file_url",
+      "nonNullCount": "3"
+    },
+    {
+      "table": "public_agents_v",
+      "column": "photo_url",
+      "nonNullCount": "0"
+    },
+    {
+      "table": "public_leads",
+      "column": "page_url",
+      "nonNullCount": "0"
+    },
+    {
+      "table": "public_listings_v",
+      "column": "image_urls",
+      "nonNullCount": "124866"
+    },
+    {
+      "table": "public_market_centres_v",
+      "column": "logo_url",
+      "nonNullCount": "0"
+    },
+    {
+      "table": "public_teams_v",
+      "column": "lead_photo_url",
+      "nonNullCount": "0"
+    },
+    {
+      "table": "transaction_documents",
+      "column": "documentId",
+      "nonNullCount": "80599"
+    }
+  ]
+}
