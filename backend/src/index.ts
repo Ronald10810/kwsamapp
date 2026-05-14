@@ -6,10 +6,12 @@ import 'express-async-errors';
 import pinoHttp from 'pino-http';
 import { env } from './config/env.js';
 import { closeSharedPgPool } from './config/db.js';
+import { closePublicReadOnlyPgPool } from './config/publicDb.js';
 import { storageConfig } from './config/storage.js';
 import { logger } from './config/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { requireAuth } from './middleware/requireAuth.js';
+import { requireAuthNoAssociate } from './middleware/requireAuth.js';
 import healthRoutes from './routes/health.js';
 import authRoutes from './routes/auth.js';
 import listingRoutes from './routes/listings.js';
@@ -19,6 +21,17 @@ import associateRoutes from './routes/associates.js';
 import agentsRoutes from './routes/agents.js';
 import marketCentersRoutes from './routes/marketCenters.js';
 import opsRoutes from './routes/ops.js';
+import reportsRoutes from './routes/reports.js';
+import teamsRoutes from './routes/teams.js';
+import cmaRoutes from './routes/cma.js';
+import marketingRoutes from './routes/marketing.js';
+import loomRoutes from './routes/loom.js';
+import listingTransferRoutes from './routes/listingTransfer.js';
+import agentDeregistrationRoutes from './routes/agentDeregistration.js';
+import mcDocumentHubRoutes from './routes/mcDocumentHub.js';
+import publicRoutes from './routes/public.js';
+
+import rentalsRoutes from './routes/rentals.js';
 
 const app = express();
 
@@ -47,6 +60,7 @@ app.use(pinoHttp({ logger }));
 
 // Health check
 app.use('/health', healthRoutes);
+app.use('/api/public', publicRoutes);
 
 // Root endpoint for quick local verification
 app.get('/', (_req, res) => {
@@ -65,6 +79,9 @@ app.get('/', (_req, res) => {
   });
 });
 
+// LOOM routes - use special auth that doesn't require associate status
+app.use('/api/loom', requireAuthNoAssociate, loomRoutes);
+
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api', requireAuth);
@@ -75,6 +92,14 @@ app.use('/api/associates', associateRoutes);
 app.use('/api/agents', agentsRoutes);
 app.use('/api/market-centers', marketCentersRoutes);
 app.use('/api/ops', opsRoutes);
+app.use('/api/reports', reportsRoutes);
+app.use('/api/teams', teamsRoutes);
+app.use('/api/cma', cmaRoutes);
+app.use('/api/marketing', marketingRoutes);
+app.use('/api/listing-transfer', listingTransferRoutes);
+app.use('/api/agent-deregistration', agentDeregistrationRoutes);
+app.use('/api/mc-document-hub', mcDocumentHubRoutes);
+app.use('/api/rentals', rentalsRoutes);
 
 // Error handling (must be last)
 app.use(errorHandler);
@@ -120,6 +145,7 @@ async function shutdown(signal: string): Promise<void> {
 
     try {
       await closeSharedPgPool();
+      await closePublicReadOnlyPgPool();
     } catch (poolError) {
       logger.error({ err: poolError }, 'Error while closing PostgreSQL pool');
       process.exitCode = 1;

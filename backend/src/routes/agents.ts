@@ -4,11 +4,11 @@ import multer from 'multer';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import { recomputeAllTransactionAgentCalculations } from '../services/transactionCalculations.js';
+import sharp from 'sharp';
+import { scheduleTransactionAgentRecompute } from '../services/transactionRecomputeQueue.js';
 import { getOptionalPgPool } from '../config/db.js';
 import { ensureLocalUploadDirs, resolveLocalUploadDir, storageConfig } from '../config/storage.js';
 import { uploadToGcs } from '../services/gcsStorage.js';
-
 const router = Router();
 const pool = getOptionalPgPool();
 
@@ -28,17 +28,8 @@ async function ensureUploadDirs(): Promise<void> {
 // Initialize directories on module load
 await ensureUploadDirs();
 
-// Configure multer storage — use memory storage when GCS is enabled
-const imageStorageEngine = storageConfig.localUploadsEnabled
-  ? multer.diskStorage({
-      destination: imagesDir,
-      filename: (_req, file, cb) => {
-        const uniqueSuffix = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
-        const ext = path.extname(file.originalname);
-        cb(null, `image-${uniqueSuffix}${ext}`);
-      },
-    })
-  : multer.memoryStorage();
+// Image uploads must be processed by Sharp before persisting, so keep them in memory.
+const imageStorageEngine = multer.memoryStorage();
 
 const documentStorageEngine = storageConfig.localUploadsEnabled
   ? multer.diskStorage({
@@ -53,12 +44,13 @@ const documentStorageEngine = storageConfig.localUploadsEnabled
 
 const uploadImage = multer({
   storage: imageStorageEngine,
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB - aligned with portal requirements
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
+    // Portal requirement: JPEG only
+    if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg') {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'));
+      cb(new Error('Only JPEG images are allowed. Please convert your image to JPEG format.'));
     }
   },
 });
@@ -75,6 +67,62 @@ const uploadDocument = multer({
     }
   },
 });
+
+// Helper function to compress and validate agent image (1080x1080px JPEG, max 2MB for portals)
+async function processAgentImage(inputBuffer: Buffer): Promise<{ buffer: Buffer; width: number; height: number; size: number }> {
+  const maxDimension = 1080;
+  const maxFileSize = 2 * 1024 * 1024; // 2MB
+
+  try {
+    // Get image metadata
+    const metadata = await sharp(inputBuffer).metadata();
+    const width = metadata.width ?? 0;
+    const height = metadata.height ?? 0;
+
+    if (width === 0 || height === 0) {
+      throw new Error('Invalid image dimensions');
+    }
+
+    // Check if image needs resizing to square
+    let pipeline = sharp(inputBuffer);
+
+    // If not square, resize and add white background to make it square
+    if (width !== height) {
+      const size = Math.max(width, height);
+      pipeline = pipeline
+        .resize(size, size, {
+          fit: 'contain',
+          background: { r: 255, g: 255, b: 255, alpha: 1 },
+        });
+    }
+
+    // Resize to 1080x1080 if larger
+    if (width > maxDimension || height > maxDimension) {
+      pipeline = pipeline.resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true });
+    }
+
+    // Convert to JPEG with high quality but compressed for portals
+    const compressedBuffer = await pipeline
+      .jpeg({ quality: 85, progressive: true })
+      .toBuffer();
+
+    if (compressedBuffer.length > maxFileSize) {
+      throw new Error(`Compressed image exceeds 2MB limit (${(compressedBuffer.length / 1024 / 1024).toFixed(2)}MB). Please use a lower resolution image.`);
+    }
+
+    return {
+      buffer: compressedBuffer,
+      width: maxDimension,
+      height: maxDimension,
+      size: compressedBuffer.length,
+    };
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Image processing failed: ${error.message}`);
+    }
+    throw error;
+  }
+}
 
 async function runUploadMiddleware(req: unknown, res: unknown, middleware: unknown): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -327,10 +375,14 @@ router.get('/me/home', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorised' });
   }
 
+  const activeContextId = (req.headers['x-active-context'] as string | undefined)?.trim().toLowerCase() ?? '';
+  const isTeamContext = /^(lead_agent|team_agent|team_admin)(_\d+)?$/.test(activeContextId);
+
   try {
     const associateResult = await pool.query<{
       id: string;
       source_associate_id: string;
+      kwuid: string | null;
       full_name: string | null;
       status_name: string | null;
       listing_approval_required: boolean;
@@ -339,11 +391,14 @@ router.get('/me/home', async (req, res) => {
       email: string | null;
       source_market_center_id: string | null;
       source_team_id: string | null;
+      team_id: string | null;
+      team_name: string | null;
     }>(
       `
       SELECT
         a.id::text,
         a.source_associate_id,
+        a.kwuid,
         a.full_name,
         a.status_name,
         a.listing_approval_required,
@@ -351,8 +406,11 @@ router.get('/me/home', async (req, res) => {
         a.private_email,
         a.email,
         a.source_market_center_id,
-        a.source_team_id
+        a.source_team_id,
+        ct.id::text AS team_id,
+        ct.name AS team_name
       FROM migration.core_associates a
+      LEFT JOIN migration.core_teams ct ON ct.source_team_id = a.source_team_id
       WHERE LOWER(TRIM(COALESCE(a.kwsa_email, ''))) = $1
          OR LOWER(TRIM(COALESCE(a.private_email, ''))) = $1
          OR LOWER(TRIM(COALESCE(a.email, ''))) = $1
@@ -382,6 +440,8 @@ router.get('/me/home', async (req, res) => {
         generated_at: new Date().toISOString(),
         email: userEmail,
         associate: null,
+        cap_type: 'individual',
+        team_name: null,
         cap: {
           period_start_date: null,
           period_end_date: null,
@@ -399,75 +459,227 @@ router.get('/me/home', async (req, res) => {
     }
 
     const associateId = Number(associate.id);
+    const teamId = associate.team_id ? Number(associate.team_id) : null;
+    const useTeamCap = isTeamContext && teamId !== null && associate.source_team_id;
 
-    let capRows: Array<{
-      cap_cycle_start_date: string | null;
-      cap_cycle_end_date: string | null;
-      cap_amount: string;
-      cap_remaining: string;
-    }> = [];
+    // ── TEAM CAP BRANCH ────────────────────────────────────────────────────
+    if (useTeamCap) {
+      const [teamCapResult, teamAchievedResult, listingCountResult, listingsResult, txStatusResult] = await Promise.all([
+        pool.query<{
+          cap_year: string | null;
+          team_cap_amount: string | null;
+        }>(
+          `
+          SELECT cap_year::text, team_cap_amount::text
+          FROM migration.team_caps
+          WHERE team_id = $1
+          ORDER BY cap_year DESC NULLS LAST
+          LIMIT 1
+          `,
+          [teamId]
+        ),
+        pool.query<{ team_cap_achieved: string }>(
+          `
+          SELECT COALESCE(SUM(tac.team_dollar), 0)::text AS team_cap_achieved
+          FROM migration.transaction_agent_calculations tac
+          INNER JOIN migration.core_associates ca ON ca.id = tac.associate_id
+          WHERE ca.source_team_id = $1
+            AND tac.is_registered = true
+            AND EXTRACT(YEAR FROM tac.effective_reporting_date) = $2
+          `,
+          [associate.source_team_id, new Date().getFullYear()]
+        ),
+        pool.query<{ total: string }>(
+          `
+          SELECT COUNT(DISTINCT la.listing_id)::text AS total
+          FROM migration.listing_agents la
+          INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
+          WHERE la.associate_id = $1
+            AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+          `,
+          [associateId]
+        ),
+        pool.query<{
+          id: string;
+          source_listing_id: string | null;
+          listing_number: string | null;
+          status_name: string | null;
+          listing_status_tag: string | null;
+          address_line: string | null;
+          suburb: string | null;
+          city: string | null;
+          price: string | null;
+        }>(
+          `
+          SELECT
+            cl.id::text,
+            cl.source_listing_id,
+            cl.listing_number,
+            cl.status_name,
+            cl.listing_status_tag,
+            cl.address_line,
+            cl.suburb,
+            cl.city,
+            cl.price::text
+          FROM migration.listing_agents la
+          INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
+          WHERE la.associate_id = $1
+            AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+          ORDER BY cl.updated_at DESC, cl.id DESC
+          LIMIT 25
+          `,
+          [associateId]
+        ),
+        pool.query<{
+          status_key: string;
+          total_transactions: string;
+          total_gci: string;
+        }>(
+          `
+          SELECT
+            LOWER(TRIM(COALESCE(ct.transaction_status, ''))) AS status_key,
+            COUNT(DISTINCT ct.id)::text AS total_transactions,
+            COALESCE(SUM(COALESCE(tac.gci_after_fees_excl_vat, ct.total_gci, 0)), 0)::text AS total_gci
+          FROM migration.transaction_agents ta
+          INNER JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
+          LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
+          WHERE ta.associate_id = $1
+            AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) IN ('start', 'working', 'submitted', 'pending', 'registered')
+          GROUP BY LOWER(TRIM(COALESCE(ct.transaction_status, '')))
+          `,
+          [associateId]
+        ),
+      ]);
 
-    try {
-      const capResult = await pool.query<{
+      const teamCapAmount = Number(teamCapResult.rows[0]?.team_cap_amount ?? 0) || 0;
+      const teamCapAchieved = Number(teamAchievedResult.rows[0]?.team_cap_achieved ?? 0) || 0;
+      const teamCapRemaining = Math.max(teamCapAmount - teamCapAchieved, 0);
+      const teamProgressPct = teamCapAmount > 0 ? Math.min((teamCapAchieved / teamCapAmount) * 100, 100) : 0;
+      const capYear = teamCapResult.rows[0]?.cap_year ? Number(teamCapResult.rows[0].cap_year) : new Date().getFullYear();
+
+      const statusMap = new Map(
+        statusDefaults.map((entry) => [entry.status.toLowerCase(), entry] as const)
+      );
+      for (const row of txStatusResult.rows) {
+        const current = statusMap.get(row.status_key);
+        if (!current) continue;
+        current.total_transactions = Number(row.total_transactions ?? 0);
+        current.total_gci = Number(row.total_gci ?? 0);
+      }
+
+      return res.json({
+        generated_at: new Date().toISOString(),
+        email: userEmail,
+        associate,
+        cap_type: 'team',
+        team_name: associate.team_name ?? null,
+        cap: {
+          period_start_date: `${capYear}-01-01`,
+          period_end_date: `${capYear}-12-31`,
+          total_cap_amount: teamCapAmount,
+          cap_achieved: teamCapAchieved,
+          cap_remaining: teamCapRemaining,
+          progress_pct: Number(teamProgressPct.toFixed(2)),
+        },
+        active_listings: {
+          total: Number(listingCountResult.rows[0]?.total ?? 0),
+          items: listingsResult.rows,
+        },
+        transactions_by_status: HOME_TRANSACTION_STATUSES.map((status) => statusMap.get(status.toLowerCase())!),
+      });
+    }
+    // ── END TEAM CAP BRANCH ────────────────────────────────────────────────
+
+    const [capResult, listingCountResult, listingsResult, txStatusResult] = await Promise.all([
+      pool.query<{
         cap_cycle_start_date: string | null;
         cap_cycle_end_date: string | null;
         cap_amount: string;
         cap_remaining: string;
       }>(
         `
-        WITH cycle_candidates AS (
+        WITH cap_base AS (
           SELECT
-            tac.cap_cycle_start_date,
-            tac.cap_cycle_end_date,
-            MAX(tac.cap_amount) AS cap_amount,
-            MAX(tac.effective_reporting_date) AS latest_effective_date,
+            ca.id AS associate_id,
+            ca.cap_date,
+            GREATEST(COALESCE(ca.cap, 0), 0)::numeric(18,2) AS associate_cap_amount,
             CASE
-              WHEN tac.cap_cycle_start_date IS NOT NULL
-               AND tac.cap_cycle_end_date IS NOT NULL
-               AND CURRENT_DATE BETWEEN tac.cap_cycle_start_date AND tac.cap_cycle_end_date
-                THEN 1
-              ELSE 0
-            END AS current_cycle_rank
+              WHEN ca.cap_date IS NULL THEN NULL::date
+              ELSE make_date(
+                EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                EXTRACT(MONTH FROM ca.cap_date)::int,
+                EXTRACT(DAY FROM ca.cap_date)::int
+              )
+            END AS anniversary_this_year
+          FROM migration.core_associates ca
+          WHERE ca.id = $1
+        ),
+        cycle_windows AS (
+          SELECT
+            cb.associate_id,
+            cb.associate_cap_amount,
+            CASE
+              WHEN cb.cap_date IS NULL THEN NULL::date
+              WHEN cb.anniversary_this_year >= CURRENT_DATE THEN cb.anniversary_this_year
+              ELSE (cb.anniversary_this_year + INTERVAL '1 year')::date
+            END AS next_cap_date
+          FROM cap_base cb
+        ),
+        latest_caps AS (
+          SELECT
+            tac.associate_id,
+            COALESCE(tac.cap_amount, 0) AS cap_amount,
+            COALESCE(tac.cap_remaining, 0) AS cap_remaining,
+            ROW_NUMBER() OVER (
+              PARTITION BY tac.associate_id
+              ORDER BY tac.effective_reporting_date DESC NULLS LAST, tac.updated_at DESC, tac.id DESC
+            ) AS rn
           FROM migration.transaction_agent_calculations tac
           WHERE tac.associate_id = $1
-          GROUP BY tac.cap_cycle_start_date, tac.cap_cycle_end_date
         ),
-        chosen_cycle AS (
-          SELECT *
-          FROM cycle_candidates
-          ORDER BY current_cycle_rank DESC,
-                   COALESCE(cap_cycle_end_date, latest_effective_date) DESC NULLS LAST,
-                   latest_effective_date DESC NULLS LAST
-          LIMIT 1
+        latest_cycle_registered_caps AS (
+          SELECT
+            tac.associate_id,
+            COALESCE(tac.cap_amount, 0) AS cap_amount,
+            COALESCE(tac.cap_remaining, 0) AS cap_remaining,
+            ROW_NUMBER() OVER (
+              PARTITION BY tac.associate_id
+              ORDER BY tac.effective_reporting_date DESC NULLS LAST, tac.updated_at DESC, tac.id DESC
+            ) AS rn
+          FROM migration.transaction_agent_calculations tac
+          INNER JOIN cycle_windows cw ON cw.associate_id = tac.associate_id
+          WHERE tac.associate_id = $1
+            AND tac.is_registered = true
+            AND cw.next_cap_date IS NOT NULL
+            AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
+            AND tac.effective_reporting_date::date < cw.next_cap_date
         )
         SELECT
-          tac.cap_cycle_start_date::text,
-          tac.cap_cycle_end_date::text,
-          COALESCE(tac.cap_amount, 0)::text AS cap_amount,
-          COALESCE(tac.cap_remaining, 0)::text AS cap_remaining
-        FROM migration.transaction_agent_calculations tac
-        INNER JOIN chosen_cycle c
-          ON tac.cap_cycle_start_date IS NOT DISTINCT FROM c.cap_cycle_start_date
-         AND tac.cap_cycle_end_date IS NOT DISTINCT FROM c.cap_cycle_end_date
-        WHERE tac.associate_id = $1
-        ORDER BY tac.effective_reporting_date DESC NULLS LAST,
-                 tac.updated_at DESC,
-                 tac.id DESC
+          CASE
+            WHEN cw.next_cap_date IS NULL THEN NULL
+            ELSE (cw.next_cap_date - INTERVAL '1 year')::date::text
+          END AS cap_cycle_start_date,
+          CASE
+            WHEN cw.next_cap_date IS NULL THEN NULL
+            ELSE (cw.next_cap_date - INTERVAL '1 day')::date::text
+          END AS cap_cycle_end_date,
+          GREATEST(COALESCE(lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)::text AS cap_amount,
+          GREATEST(
+            COALESCE(
+              lrc.cap_remaining,
+              COALESCE(lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0)
+            ),
+            0
+          )::text AS cap_remaining
+        FROM migration.core_associates ca
+        LEFT JOIN cycle_windows cw ON cw.associate_id = ca.id
+        LEFT JOIN latest_caps lc ON lc.associate_id = ca.id AND lc.rn = 1
+        LEFT JOIN latest_cycle_registered_caps lrc ON lrc.associate_id = ca.id AND lrc.rn = 1
+        WHERE ca.id = $1
         LIMIT 1
         `,
         [associateId]
-      );
-      capRows = capResult.rows;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.toLowerCase().includes('cap_cycle_start_date')) {
-        console.warn('GET /api/agents/me/home: cap-cycle columns missing, returning cap defaults');
-      } else {
-        throw error;
-      }
-    }
-
-    const [listingCountResult, listingsResult, txStatusResult] = await Promise.all([
+      ),
       pool.query<{ total: string }>(
         `
         SELECT COUNT(DISTINCT la.listing_id)::text AS total
@@ -530,7 +742,7 @@ router.get('/me/home', async (req, res) => {
       ),
     ]);
 
-    const capRow = capRows[0];
+    const capRow = capResult.rows[0];
     const capAmount = Number(capRow?.cap_amount ?? 0) || 0;
     const capRemaining = Number(capRow?.cap_remaining ?? 0) || 0;
     const capAchieved = Math.max(capAmount - capRemaining, 0);
@@ -550,6 +762,8 @@ router.get('/me/home', async (req, res) => {
       generated_at: new Date().toISOString(),
       email: userEmail,
       associate,
+      cap_type: 'individual',
+      team_name: associate.team_name ?? null,
       cap: {
         period_start_date: capRow?.cap_cycle_start_date ?? null,
         period_end_date: capRow?.cap_cycle_end_date ?? null,
@@ -867,13 +1081,13 @@ router.post('/', async (req, res) => {
   const excludeFromIndividualReports = toBool(body.exclude_from_individual_reports);
 
   const property24OptIn = toBool(body.property24_opt_in);
-  const agentProperty24Id = toText(body.agent_property24_id);
-  const property24Status = toText(body.property24_status);
+  const agentProperty24Id = null;
+  const property24Status = property24OptIn ? 'Pending registration' : 'Not opted in';
   const entegralOptIn = toBool(body.entegral_opt_in);
-  const agentEntegralId = toText(body.agent_entegral_id);
-  const entegralStatus = toText(body.entegral_status);
+  const agentEntegralId = null;
+  const entegralStatus = entegralOptIn ? 'Pending registration' : 'Not opted in';
   const privatePropertyOptIn = toBool(body.private_property_opt_in);
-  const privatePropertyStatus = toText(body.private_property_status);
+  const privatePropertyStatus = privatePropertyOptIn ? 'Pending activation' : 'Not opted in';
 
   const cap = toNumber(body.cap);
   const manualCap = toNumber(body.manual_cap);
@@ -999,10 +1213,8 @@ router.post('/', async (req, res) => {
 
     const associateId = Number(insert.rows[0].id);
     await saveCollections(client, associateId, body);
-    await recomputeAllTransactionAgentCalculations(client);
-
     await client.query('COMMIT');
-    return res.status(201).json({ id: insert.rows[0].id, source_associate_id: sourceAssociateId });
+    res.status(201).json({ id: insert.rows[0].id, source_associate_id: sourceAssociateId });
   } catch (error) {
     await client.query('ROLLBACK');
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -1010,6 +1222,10 @@ router.post('/', async (req, res) => {
   } finally {
     client.release();
   }
+
+  // Fire background recalculation after response — do not block the save.
+  scheduleTransactionAgentRecompute('agents-create');
+  return;
 });
 
 router.put('/:id', async (req, res) => {
@@ -1145,9 +1361,8 @@ router.put('/:id', async (req, res) => {
     }
 
     await saveCollections(client, id, body);
-  await recomputeAllTransactionAgentCalculations(client);
     await client.query('COMMIT');
-    return res.json({ id: result.rows[0].id });
+    res.json({ id: result.rows[0].id });
   } catch (error) {
     await client.query('ROLLBACK');
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -1155,6 +1370,10 @@ router.put('/:id', async (req, res) => {
   } finally {
     client.release();
   }
+
+  // Fire background recalculation after response is sent — do not block the save.
+  scheduleTransactionAgentRecompute('agents-update');
+  return;
 });
 
 router.post('/:id/upload-image', async (req, res, next) => {
@@ -1180,18 +1399,35 @@ router.post('/:id/upload-image', async (req, res, next) => {
   }
 
   try {
+    const rawImageBuffer = req.file.buffer?.length
+      ? req.file.buffer
+      : (req.file.path ? await fs.readFile(req.file.path) : null);
+
+    if (!rawImageBuffer) {
+      return res.status(400).json({ error: 'Could not read uploaded image data.' });
+    }
+
+    // Process and compress the image to portal specifications (1080x1080 JPEG, max 2MB)
+    const processedImage = await processAgentImage(rawImageBuffer);
+    const filename = `agent-profile-${id}-${Date.now()}.jpg`;
+
     let imageUrl: string;
 
     if (isGcs) {
       const { publicUrl } = await uploadToGcs(
-        req.file.buffer,
-        req.file.originalname,
+        processedImage.buffer,
+        filename,
         'image',
-        req.file.mimetype
+        'image/jpeg'
       );
       imageUrl = publicUrl;
     } else {
-      imageUrl = `/uploads/images/${req.file.filename}`;
+      // Write compressed image to disk
+      if (storageConfig.localUploadsEnabled) {
+        const outputPath = path.join(imagesDir, filename);
+        await fs.writeFile(outputPath, processedImage.buffer);
+      }
+      imageUrl = `/uploads/images/${filename}`;
     }
 
     // Update the image_url in the database
@@ -1201,18 +1437,16 @@ router.post('/:id/upload-image', async (req, res, next) => {
     );
 
     if (result.rowCount === 0) {
-      if (!isGcs && req.file.path) {
-        await fs.unlink(req.file.path).catch(() => undefined);
-      }
       return res.status(404).json({ error: 'Associate not found.' });
     }
 
-    return res.json({ image_url: imageUrl });
+    return res.json({
+      image_url: imageUrl,
+      message: `Image successfully processed and optimized for portals (1080x1080px JPEG, ${(processedImage.size / 1024).toFixed(0)}KB)`,
+    });
   } catch (error) {
-    if (!isGcs && req.file.path) {
-      await fs.unlink(req.file.path).catch(() => undefined);
-    }
     const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[agents] Image upload/processing error for associate ${id}:`, message);
     return res.status(500).json({ error: message });
   }
 });

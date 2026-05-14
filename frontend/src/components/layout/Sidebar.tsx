@@ -1,7 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import { REPORTS } from '../../pages/reportsConfig';
+import { useAuth } from '../../contexts/AuthContext';
+
+interface SidebarProps {
+  isOpen?: boolean;
+  onClose?: () => void;
+}
 
 type NavIconName =
   | 'home'
@@ -9,10 +15,12 @@ type NavIconName =
   | 'associates'
   | 'marketCentres'
   | 'listings'
+  | 'rentals'
   | 'transactions'
-  | 'approvals'
-  | 'notifications'
-  | 'reports';
+  | 'teams'
+  | 'reports'
+  | 'aiTools'
+  | 'loom';
 
 function NavIcon({ name }: { name: NavIconName }) {
   const base = 'h-4 w-4 text-white/90';
@@ -60,6 +68,14 @@ function NavIcon({ name }: { name: NavIconName }) {
           <rect x="9" y="13" width="6" height="8" rx="1" stroke="currentColor" strokeWidth="1.7" />
         </svg>
       );
+    case 'rentals':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
+          <path d="M3 10.5 12 4l9 6.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M5.5 9.5V21h13V9.5" stroke="currentColor" strokeWidth="1.7" />
+          <path d="M9.5 15h5M9.5 18h5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+        </svg>
+      );
     case 'transactions':
       return (
         <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
@@ -69,18 +85,15 @@ function NavIcon({ name }: { name: NavIconName }) {
           <path d="m11 14-3 3 3 3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
-    case 'approvals':
+    case 'teams':
       return (
         <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
-          <path d="M5 4h14v16H5z" stroke="currentColor" strokeWidth="1.7" />
-          <path d="m8 12 2.5 2.5L16 9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
-    case 'notifications':
-      return (
-        <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
-          <path d="M12 4a4 4 0 0 0-4 4v2.5c0 1.2-.5 2.4-1.4 3.2L5 15h14l-1.6-1.3a4.2 4.2 0 0 1-1.4-3.2V8a4 4 0 0 0-4-4Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
-          <path d="M10 18a2 2 0 0 0 4 0" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          <circle cx="12" cy="7" r="3" stroke="currentColor" strokeWidth="1.7" />
+          <path d="M5 19c0-3 3-5 7-5s7 2 7 5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          <circle cx="19" cy="8" r="2" stroke="currentColor" strokeWidth="1.7" />
+          <circle cx="5" cy="8" r="2" stroke="currentColor" strokeWidth="1.7" />
+          <path d="M21 18c-.5-1.5-1.8-2.5-3.5-2.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          <path d="M3 18c.5-1.5 1.8-2.5 3.5-2.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
         </svg>
       );
     case 'reports':
@@ -90,12 +103,32 @@ function NavIcon({ name }: { name: NavIconName }) {
           <path d="M8 15v3M12 11v7M16 13v5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
         </svg>
       );
+    case 'aiTools':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
+          <path d="M6 2h9l4 4v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.7" />
+          <path d="M14 2v5h5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          <path d="M9 12h6M9 15h4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          <circle cx="10" cy="9" r="1.5" fill="currentColor" />
+        </svg>
+      );
+    case 'loom':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={base} aria-hidden="true">
+          <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.7" />
+          <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.7" />
+          <path d="M12 4v2M12 18v2M4 12h2M18 12h2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+        </svg>
+      );
   }
 }
 
-export default function Sidebar() {
+export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
+  const { isOfficeAdmin, isRegionalAdmin } = useAuth();
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const isActive = (path: string) => location.pathname === path;
   const isReportsRoute = location.pathname.startsWith('/reports');
@@ -107,6 +140,11 @@ export default function Sidebar() {
     }
   }, [isReportsRoute]);
 
+  // Auto-close drawer on navigation (mobile)
+  useEffect(() => {
+    onCloseRef.current?.();
+  }, [location.pathname]);
+
   function handleReportsClick(): void {
     setReportsOpen((prev) => !prev);
     if (!isReportsRoute) {
@@ -114,21 +152,64 @@ export default function Sidebar() {
     }
   }
 
+  const isAdminRole = isOfficeAdmin || isRegionalAdmin;
+
   const links = [
-    { path: '/home', label: 'Home', icon: 'home' as NavIconName },
+    // MC Admin Tools — first for admin roles
+    ...(isAdminRole ? [{ path: '/mc-admin-tools', label: 'MC Admin Tools', icon: 'dashboard' as NavIconName }] : []),
+    // Home — first for agent roles
+    ...(!isAdminRole ? [{ path: '/home', label: 'Home', icon: 'home' as NavIconName }] : []),
+    // Dashboard — everyone
     { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' as NavIconName },
     { path: '/agents', label: 'Associates', icon: 'associates' as NavIconName },
-    { path: '/market-centres', label: 'Market centres', icon: 'marketCentres' as NavIconName },
+    { path: '/teams', label: 'Teams', icon: 'teams' as NavIconName },
+    { path: '/market-centres', label: 'Market Centres', icon: 'marketCentres' as NavIconName },
     { path: '/listings', label: 'Listings', icon: 'listings' as NavIconName },
+    { path: '/rentals', label: 'Rentals', icon: 'rentals' as NavIconName },
     { path: '/transactions', label: 'Transactions', icon: 'transactions' as NavIconName },
-    { path: '/listing-approvals', label: 'Listing approvals', icon: 'approvals' as NavIconName },
-    { path: '/notifications', label: 'Notifications', icon: 'notifications' as NavIconName },
+    { path: '/ai-tools', label: 'AI Tools', icon: 'aiTools' as NavIconName },
+    { path: '/loom', label: 'Property Intelligence', icon: 'loom' as NavIconName },
   ];
 
   return (
-    <aside className="sidebar-shell sticky top-0 h-screen w-72 overflow-y-auto px-6 pb-6 pt-3 text-white border-r border-red-900/30">
-      <div className="mb-7">
-        <div className="-mt-2 mb-2 h-24 overflow-hidden">
+    <>
+      {/* Mobile backdrop overlay */}
+      <div
+        className={clsx(
+          'fixed inset-0 bg-black/50 z-40 transition-opacity duration-300 lg:hidden',
+          isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        )}
+        onClick={onClose}
+        aria-hidden="true"
+      />
+
+      {/* Sidebar — fixed overlay on mobile, sticky in-flow on desktop */}
+      <aside
+        className={clsx(
+          'sidebar-shell overflow-y-auto px-6 pb-6 pt-3 text-white border-r border-red-900/30',
+          'transition-transform duration-300 ease-in-out',
+          // Mobile: fixed drawer
+          'fixed top-0 left-0 h-full w-72 z-50',
+          isOpen ? 'translate-x-0' : '-translate-x-full',
+          // Desktop: sticky in-flow, always visible
+          'lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:z-auto'
+        )}
+      >
+        {/* Mobile close button */}
+        <div className="flex items-center justify-end lg:hidden -mr-2 mb-1 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+            aria-label="Close menu"
+          >
+            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
+              <path d="M18 6 6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </div>
+      <div className="mb-3">
+        <div className="-mt-2 mb-1 h-24 overflow-hidden">
           <img
             src="https://static.wixstatic.com/media/cd2dff_661d95737ba4452d9c15f33d43643f72~mv2.png"
             alt="KWSA"
@@ -136,11 +217,10 @@ export default function Sidebar() {
             loading="lazy"
           />
         </div>
-        <h1 className="text-3xl font-semibold tracking-tight">Console</h1>
-        <p className="mt-3 text-sm text-red-100/80 leading-6">KWSA Listing Platform for Millionaire Real Estate Agents</p>
+        <p className="text-sm text-red-100/80 leading-6">KWSA Listing Platform for Millionaire Real Estate Agents</p>
       </div>
 
-      <nav className="space-y-2">
+      <nav className="space-y-2 mt-6">
         {links.map((link) => (
           <Link
             key={link.path}
@@ -203,10 +283,8 @@ export default function Sidebar() {
         </div>
       </nav>
 
-      <div className="mt-10 pt-6 border-t border-red-900/40 text-xs text-red-100/75 leading-6">
-        <p>Environment: Development</p>
-        <p>Data Engine: Pipeline v2</p>
-      </div>
+
     </aside>
+    </>
   );
 }

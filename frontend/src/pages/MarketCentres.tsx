@@ -2,6 +2,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 
+function msUntilNextFourAm(): number {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(4, 0, 0, 0);
+
+  if (next.getTime() <= now.getTime()) {
+    next.setDate(next.getDate() + 1);
+  }
+
+  return next.getTime() - now.getTime();
+}
+
 type MarketCentreRow = {
   id: string;
   source_market_center_id: string;
@@ -236,14 +248,82 @@ function toValue(value: string | null | undefined): string {
   return value ?? '';
 }
 
-function renderLogo(url: string | null | undefined, name: string): JSX.Element {
-  const color = mcColor(name || 'Keller Williams');
-  if (url) {
-    return <img src={url} alt={name} className="h-14 w-14 rounded-xl object-cover shadow ring-2 ring-white" />;
+function formatTelHref(value: string): string {
+  return value.replace(/[^\d+]/g, '');
+}
+
+function BadgeIcon({ kind }: { kind: 'active' | 'agents' | 'teams' | 'city' | 'phone' | 'email' | 'id' }) {
+  if (kind === 'active') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+        <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.7" />
+        <path d="m8.8 12.4 2.1 2.1 4.3-4.3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
+  if (kind === 'agents') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+        <circle cx="9" cy="9" r="3" stroke="currentColor" strokeWidth="1.7" />
+        <path d="M4.5 18a4.5 4.5 0 0 1 9 0" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+        <circle cx="17" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  if (kind === 'teams') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+        <circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.7" />
+        <circle cx="16" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.7" />
+        <circle cx="12" cy="16" r="2.5" stroke="currentColor" strokeWidth="1.7" />
+        <path d="M10.1 9.5 11 13M13.9 9.5 13 13M10.2 17h3.6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  if (kind === 'city') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+        <path d="M12 20s6-5.1 6-10a6 6 0 1 0-12 0c0 4.9 6 10 6 10Z" stroke="currentColor" strokeWidth="1.7" />
+        <circle cx="12" cy="10" r="2.2" stroke="currentColor" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  if (kind === 'phone') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+        <path d="M7 4.8h3L11.2 8l-1.7 1.7a13 13 0 0 0 4.8 4.8L16 12.8l3.2 1.2v3A2 2 0 0 1 20 19a15 15 0 0 1-15-15 2 2 0 0 1 2-2.2Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
+  if (kind === 'email') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+        <rect x="4" y="6" width="16" height="12" rx="2" stroke="currentColor" strokeWidth="1.7" />
+        <path d="m5 8 7 5 7-5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
   }
 
   return (
-    <div className={`h-14 w-14 rounded-xl flex items-center justify-center text-white font-bold text-xl shrink-0 ${color}`}>
+    <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+      <path d="M5 8h14M5 12h14M5 16h10" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function renderLogo(url: string | null | undefined, name: string): JSX.Element {
+  const color = mcColor(name || 'Keller Williams');
+  if (url) {
+    return <img src={url} alt={name} className="h-14 w-14 rounded-xl border border-slate-200 bg-white object-cover p-0.5 shadow ring-2 ring-white" />;
+  }
+
+  return (
+    <div className={`h-14 w-14 rounded-xl border border-white/70 flex items-center justify-center text-white font-bold text-xl shrink-0 shadow ring-2 ring-white ${color}`}>
       {mcInitial(name || 'K')}
     </div>
   );
@@ -267,7 +347,7 @@ export default function MarketCentresPage() {
   const [pendingLogoFile, setPendingLogoFile] = useState<File | null>(null);
   const [pendingLogoPreviewUrl, setPendingLogoPreviewUrl] = useState<string | null>(null);
 
-  const { data, isLoading, isFetching, isError, refetch } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['market-centres', page, search, statusFilter],
     queryFn: () => {
       const offset = (page - 1) * PAGE_SIZE;
@@ -280,6 +360,8 @@ export default function MarketCentresPage() {
       });
     },
     placeholderData: (prev) => prev,
+    refetchInterval: () => msUntilNextFourAm(),
+    refetchOnWindowFocus: false,
   });
 
   useEffect(() => {
@@ -475,16 +557,12 @@ export default function MarketCentresPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="page-title">Market Centres</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
-            {isLoading ? 'Loading...' : `${(data?.total ?? 0).toLocaleString()} market centres in migration database`}
-          </p>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex rounded-lg border border-slate-300 overflow-hidden text-sm">
             <button type="button" onClick={() => { setView('card'); setPage(1); }} className={`px-3 py-1.5 ${view === 'card' ? 'bg-red-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>Cards</button>
             <button type="button" onClick={() => { setView('list'); setPage(1); }} className={`px-3 py-1.5 border-l border-slate-300 ${view === 'list' ? 'bg-red-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>List</button>
           </div>
-          <button className="primary-btn" type="button" onClick={() => refetch()}>{isFetching ? 'Refreshing...' : 'Refresh'}</button>
           {canCreateMarketCenter && (
             <button className="primary-btn" type="button" onClick={openCreateForm}>Add Market Centre</button>
           )}
@@ -684,11 +762,21 @@ export default function MarketCentresPage() {
 
       <div className="surface-card p-4">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-64">
-            <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search market centre name, registered name, source ID, office ID, P24 ID or city..." className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500" />
-          </div>
-          <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value as 'Active' | 'Inactive'); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"><option value="Active">Active</option><option value="Inactive">Inactive</option></select>
-          <span className="text-xs text-slate-500 whitespace-nowrap">Page {page} of {totalPages}</span>
+          <input
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            placeholder="Search market centre name, registered name, source ID, office ID, P24 ID or city..."
+            className="w-full md:max-w-md rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+          />
+          <select
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value as 'Active' | 'Inactive'); setPage(1); }}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+          >
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+          </select>
+          <span className="text-xs text-slate-500">Page {page} of {totalPages}</span>
         </div>
       </div>
 
@@ -704,32 +792,68 @@ export default function MarketCentresPage() {
               ))
             : filteredItems.map((item) => {
                 const statusLabel = decodeStatus(item.status_name);
+                const registeredName = (item.company_registered_name ?? '').trim();
+                const city = (item.city ?? '').trim();
+                const phone = (item.contact_number ?? '').trim();
+                const email = (item.contact_email ?? '').trim();
+                const p24Id = (item.market_center_property24_id ?? '').trim();
                 return (
-                  <div key={item.id} className="surface-card overflow-hidden hover:shadow-md transition-shadow">
+                  <div key={item.id} className="surface-card group overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
                     <div className={`h-1.5 ${mcColor(item.name)}`} />
                     <div className="p-5 flex flex-col gap-3">
                       <div className="flex items-start gap-3">
                         {renderLogo(item.logo_image_url, item.name)}
                         <div className="flex-1 min-w-0">
                           <p className="font-semibold text-slate-900 leading-snug">{item.name}</p>
-                          <p className="text-xs text-slate-500 truncate">{item.company_registered_name ?? 'No registered name captured'}</p>
+                          {registeredName ? (
+                            <p className="text-xs text-slate-500 truncate">{registeredName}</p>
+                          ) : (
+                            <p className="mt-0.5 text-xs text-slate-400">Registered name not captured</p>
+                          )}
                           <div className="mt-1 flex items-center gap-2 flex-wrap">
-                            <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusLabel === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{statusLabel}</span>
-                            <span className="rounded-full bg-sky-100 text-sky-800 px-2 py-0.5 text-xs font-medium">{item.agent_count} active agents</span>
-                            <span className="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-xs font-medium">{item.team_count} teams</span>
+                            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${statusLabel === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}><BadgeIcon kind="active" />{statusLabel}</span>
+                            <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 text-sky-800 px-2 py-0.5 text-xs font-medium"><BadgeIcon kind="agents" />{item.agent_count} active agents</span>
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-xs font-medium"><BadgeIcon kind="teams" />{item.team_count} teams</span>
                           </div>
                         </div>
                       </div>
-                      <div className="space-y-1 text-xs text-slate-600">
-                        <div>{item.city || 'City not captured'}{item.kw_office_id ? ` - ${item.kw_office_id}` : ''}</div>
-                        {item.contact_number && <div>{item.contact_number}</div>}
-                        {item.contact_email && <div className="truncate">{item.contact_email}</div>}
-                        {item.market_center_property24_id && <div>P24: {item.market_center_property24_id}</div>}
+                      <div className="space-y-1.5 text-xs text-slate-600">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-500"><BadgeIcon kind="city" /></span>
+                          {city ? (
+                            <span>{city}{item.kw_office_id ? ` - ${item.kw_office_id}` : ''}</span>
+                          ) : (
+                            <span className="text-slate-400">City not captured</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-500"><BadgeIcon kind="phone" /></span>
+                          {phone ? (
+                            <a href={`tel:${formatTelHref(phone)}`} className="truncate text-red-700 hover:text-red-800 hover:underline">{phone}</a>
+                          ) : (
+                            <span className="text-slate-400">Phone not captured</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-500"><BadgeIcon kind="email" /></span>
+                          {email ? (
+                            <a href={`mailto:${email}`} className="truncate text-red-700 hover:text-red-800 hover:underline">{email}</a>
+                          ) : (
+                            <span className="text-slate-400">Email not captured</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 text-slate-500">
+                          <span className="text-slate-500"><BadgeIcon kind="id" /></span>
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">P24: {p24Id || '-'}</span>
+                        </div>
                       </div>
                       <div className="flex items-center justify-between border-t border-slate-100 pt-2">
-                        <p className="text-[11px] text-slate-400 font-mono">{item.frontdoor_id ? `Frontdoor: ${item.frontdoor_id}` : item.source_market_center_id}</p>
+                        <p className="inline-flex items-center gap-1 text-[11px] text-slate-500 font-mono">
+                          <span className="text-slate-400"><BadgeIcon kind="id" /></span>
+                          {item.frontdoor_id ? `Frontdoor: ${item.frontdoor_id}` : `Source: ${item.source_market_center_id}`}
+                        </p>
                         {canEditMarketCenter(item.source_market_center_id) && (
-                          <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>Edit</button>
+                          <button className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>Edit Centre</button>
                         )}
                       </div>
                     </div>
@@ -759,7 +883,7 @@ export default function MarketCentresPage() {
                       <td className="px-4 py-3 text-slate-600">{item.agent_count}</td>
                       <td className="px-4 py-3 text-slate-600 text-xs">{item.city ?? '-'}<div className="text-slate-400">{item.kw_office_id ?? ''}</div></td>
                       <td className="px-4 py-3 text-slate-600 text-xs">{item.market_center_property24_id ?? '-'}<div className="text-slate-400">{item.property24_opt_in ? 'Opted in' : 'Not opted in'}</div></td>
-                      <td className="px-4 py-3">{canEditMarketCenter(item.source_market_center_id) && (<button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>Edit</button>)}</td>
+                      <td className="px-4 py-3">{canEditMarketCenter(item.source_market_center_id) && (<button className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>Edit Centre</button>)}</td>
                     </tr>
                   );
                 })}

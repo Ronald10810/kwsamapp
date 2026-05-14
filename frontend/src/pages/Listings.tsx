@@ -134,7 +134,7 @@ type MarketingUrlEntry = { url: string; url_type: string; display_name: string }
 type FeatureEntry = { feature_category: string; feature_value: string };
 type PropertyAreaEntry = { area_type: string; count: string; size: string; description: string; sub_features?: string[] };
 type NormalizedImageEntry = { file_url: string; file_name: string; media_type: string; uploaded_by: string; sort_order: number };
-type MandateDocumentEntry = { file_name: string; file_url: string; file_type?: string; uploaded_by?: string; uploaded_at?: string; sort_order?: number };
+type MandateDocumentEntry = { id?: string; file_name: string; file_url: string; file_type?: string; uploaded_by?: string; uploaded_at?: string; sort_order?: number };
 
 type ListingFormState = {
   // Listing Info
@@ -212,6 +212,9 @@ type ListingFormState = {
   rates_and_taxes: string;
   monthly_levy: string;
   occupation_date: string;
+  rental_rate: string;
+  lease_period: string;
+  deposit_requirements: string;
   mandate_type: string;
   // Property details
   erf_size: string;
@@ -471,25 +474,25 @@ const minimumPortalRequirements: PortalPublishRequirement[] = [
     isMissing: (form) => !form.price.trim() && !form.poa,
   },
   {
-    section: 'property',
+    section: 'info',
     label: 'Property Type',
     helpText: 'Portals need to know what kind of property this is (e.g. House, Apartment, Farm). Please select a property type.',
     isMissing: (form) => !form.property_type.trim(),
   },
   {
-    section: 'property',
+    section: 'info',
     label: 'Property Sub-Type',
     helpText: 'Please select a sub-type to help buyers find the right kind of property (e.g. Freehold, Sectional Title).',
     isMissing: (form) => !form.property_sub_type.trim(),
   },
   {
-    section: 'property',
+    section: 'info',
     label: 'Listing Headline',
     helpText: 'Add a short, catchy headline for this listing — this is what buyers see first on the portals.',
     isMissing: (form) => !form.property_title.trim(),
   },
   {
-    section: 'property',
+    section: 'info',
     label: 'Property Description',
     helpText: 'Write a description of the property. This tells buyers what makes it special and is required by all portals.',
     isMissing: (form) => !form.property_description.trim(),
@@ -817,7 +820,7 @@ const emptyForm: ListingFormState = {
   feed_to_entegral: false, entegral_reference_id: '', entegral_sync_status: '',
   feed_to_property24: false, property24_ref1: '', property24_ref2: '', property24_sync_status: '',
   signed_date: '', on_market_since_date: '', rates_and_taxes: '', monthly_levy: '',
-  occupation_date: '', mandate_type: 'Sole Mandate',
+  occupation_date: '', rental_rate: '', lease_period: '', deposit_requirements: '', mandate_type: 'Sole Mandate',
   erf_size: '', floor_area: '', construction_date: '', height_restriction: '', out_building_size: '', zoning_type: '',
   is_furnished: false, pet_friendly: false, has_standalone_building: false, has_flatlet: false,
   has_backup_water: false, wheelchair_accessible: false, has_generator: false,
@@ -881,7 +884,6 @@ export default function Listings() {
   const [previewDetail, setPreviewDetail] = useState<Record<string, unknown> | null>(null);
   const [previewImageIdx, setPreviewImageIdx] = useState(0);
   const [previewExpandedDescription, setPreviewExpandedDescription] = useState(false);
-
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<ListingSection>('info');
@@ -901,6 +903,7 @@ export default function Listings() {
   const [entegralResult, setEntegralResult] = useState<{ success: boolean; message: string; reference_id?: string | null; details?: unknown } | null>(null);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [isUploadingDocs, setIsUploadingDocs] = useState(false);
+  const [isDeletingDoc, setIsDeletingDoc] = useState<string | null>(null);
   const [isGeneratingNumber, setIsGeneratingNumber] = useState(false);
   const preloadedImagesRef = useRef<Set<string>>(new Set());
   const openedFromReviewParamRef = useRef<string | null>(null);
@@ -928,7 +931,7 @@ export default function Listings() {
 
   const activeContextId = activeContext?.id ?? 'no-context';
 
-  const { data, isLoading, isError, isFetching, refetch } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['listings', activeContextId, page, search, statusFilter, saleOrRentFilter, queryFilters],
     queryFn: () => fetchListings(page, search, statusFilter, saleOrRentFilter, queryFilters),
   });
@@ -1072,12 +1075,14 @@ export default function Listings() {
   const activeAgents = activeAgentsData?.items ?? [];
 
   // Fetch whether the current agent requires admin approval before publish
-  const { data: homeData } = useQuery<{ associate?: { listing_approval_required?: boolean } }>({
+  const { data: homeData } = useQuery<{ associate?: { listing_approval_required?: boolean; kwuid?: string | null } }>({
     queryKey: ['listings-home-approval-required', activeContextId],
     queryFn: async () => {
-      const res = await fetch('/api/agents/me/home');
+      const res = await fetch('/api/agents/me/home', {
+        headers: activeContextId ? { 'X-Active-Context': activeContextId } : undefined,
+      });
       if (!res.ok) return {};
-      return res.json() as Promise<{ associate?: { listing_approval_required?: boolean } }>;
+      return res.json() as Promise<{ associate?: { listing_approval_required?: boolean; kwuid?: string | null } }>;
     },
     staleTime: 60000,
   });
@@ -1201,7 +1206,7 @@ export default function Listings() {
   // Sub-type options based on selected property type
   const subTypeOptions = useMemo(() => {
     if (!options || !form.property_type) return [];
-    return options.property_sub_types[form.property_type] ?? [];
+    return options.property_sub_types?.[form.property_type] ?? [];
   }, [options, form.property_type]);
 
   const getDescriptiveFeatureOptions = (propertyType: string, propertySubType: string): string[] => {
@@ -1729,6 +1734,9 @@ export default function Listings() {
         rates_and_taxes: s('rates_and_taxes'),
         monthly_levy: s('monthly_levy'),
         occupation_date: toInputDate(s('occupation_date')),
+        rental_rate: s('rental_rate'),
+        lease_period: s('lease_period'),
+        deposit_requirements: s('deposit_requirements'),
         mandate_type: s('mandate_type') || 'Sole Mandate',
         erf_size: firstNonEmpty(
           listing.erf_size,
@@ -1803,6 +1811,7 @@ export default function Listings() {
         commercial_boardrooms_tv_port: Boolean(ci.boardrooms_tv_port),
         commercial_boardrooms_wifi: Boolean(ci.boardrooms_wifi),
         agents: (() => {
+          const validRoles = ['Primary', 'Secondary', 'Third', 'Fourth', 'Referral'];
           const loaded: AgentEntry[] = Array.isArray(listing.agents) ? (listing.agents as AgentEntry[]) : [];
           if (loaded.length === 0 && (isAgent || isOfficeAdmin) && activeContext?.associateId) {
             const me = activeAgents.find((a) => a.id === activeContext.associateId);
@@ -1815,7 +1824,10 @@ export default function Listings() {
               sort_order: 0,
             }];
           }
-          return loaded;
+          return loaded.map((a) => ({
+            ...a,
+            agent_role: a.is_primary ? 'Primary' : (validRoles.includes(a.agent_role) ? a.agent_role : 'Secondary'),
+          }));
         })(),
         contacts: Array.isArray(listing.contacts) ? (listing.contacts as ContactEntry[]) : [],
         show_times: Array.isArray(listing.show_times) ? (listing.show_times as ShowTimeEntry[]) : [],
@@ -2146,6 +2158,20 @@ export default function Listings() {
       setFormError(error instanceof Error ? error.message : 'Image upload failed');
     } finally {
       setIsUploadingImages(false);
+    }
+  }
+
+  async function deleteMandateDocument(docId: string): Promise<void> {
+    if (!editingId) return;
+    setIsDeletingDoc(docId);
+    try {
+      const res = await fetch(`/api/listings/${editingId}/mandate-documents/${docId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Delete failed');
+      setForm((p) => ({ ...p, mandate_documents: p.mandate_documents.filter((d) => d.id !== docId) }));
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Delete failed');
+    } finally {
+      setIsDeletingDoc(null);
     }
   }
 
@@ -2517,18 +2543,16 @@ export default function Listings() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="page-title">Listing Management</h1>
           <p className="mt-1 text-sm text-slate-500">Manage listings, images, mandate information and portal feeds.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-slate-300 overflow-hidden text-sm">
             <button type="button" onClick={() => setView('card')} className={`px-3 py-1.5 ${view === 'card' ? 'bg-black text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>Cards</button>
             <button type="button" onClick={() => setView('list')} className={`px-3 py-1.5 border-l border-slate-300 ${view === 'list' ? 'bg-black text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>List</button>
           </div>
-          <span className="status-chip info">{data?.total ?? 0} total</span>
-          <button className="primary-btn" type="button" onClick={() => void refetch()}>{isFetching ? 'Refreshing...' : 'Refresh'}</button>
           {canCreateListing && (
             <button className="primary-btn" type="button" onClick={openCreateForm}>Add Listing</button>
           )}
@@ -2538,12 +2562,12 @@ export default function Listings() {
       {/* Workspace Modal */}
       {isFormOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm">
-          <div className="absolute inset-6 rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+          <div className="absolute inset-2 sm:inset-4 lg:inset-6 rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
             {/* Modal Header */}
-            <div className="border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+            <div className="border-b border-slate-200 px-4 py-4 sm:px-6 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-500">Listing Workspace</p>
-                <h2 className="text-2xl font-semibold text-slate-900 flex items-center gap-3">
+                <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 flex flex-wrap items-center gap-3">
                   {form.listing_number ? (
                     <span className="rounded-md bg-red-50 px-2 py-0.5 text-base font-bold text-red-700 border border-red-200">{form.listing_number}</span>
                   ) : (
@@ -2555,7 +2579,7 @@ export default function Listings() {
                   <span className="mt-0.5 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">Draft</span>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
                 <button
                   className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
                   type="button"
@@ -2598,36 +2622,38 @@ export default function Listings() {
               </div>
             </div>
 
-            <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
               {/* Sidebar Navigation */}
-              <aside className="w-56 border-r border-slate-200 bg-slate-50 p-3 space-y-1 shrink-0">
-                {([
-                  ['info', 'Listing Info'],
-                  ['address', 'Address & Validation'],
-                  ['marketing', 'Marketing'],
-                  ['images', 'Images'],
-                  ['mandate', 'Mandate'],
-                  ['property', 'Property Details'],
-                ] as [ListingSection, string][]).map(([key, label]) => {
-                  const sectionHasError = publishValidationErrors.some((e) => e.section === key);
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setActiveSection(key)}
-                      className={`w-full rounded-lg px-3 py-2 text-left text-sm font-medium flex items-center justify-between gap-2 ${activeSection === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'}`}
-                    >
-                      <span>{label}</span>
-                      {sectionHasError && (
-                        <span className={`w-2 h-2 rounded-full shrink-0 ${activeSection === key ? 'bg-white' : 'bg-amber-500'}`} title="This section has required fields missing" />
-                      )}
-                    </button>
-                  );
-                })}
+              <aside className="w-full shrink-0 border-b border-slate-200 bg-slate-50 p-2 sm:p-3 lg:w-56 lg:border-b-0 lg:border-r">
+                <div className="flex gap-1 overflow-x-auto scrollbar-none lg:block lg:space-y-1">
+                  {([
+                    ['info', 'Listing Info'],
+                    ['address', 'Address & Validation'],
+                    ['marketing', 'Marketing'],
+                    ['images', 'Images'],
+                    ['mandate', 'Mandate'],
+                    ['property', 'Property Details'],
+                  ] as [ListingSection, string][]).map(([key, label]) => {
+                    const sectionHasError = publishValidationErrors.some((e) => e.section === key);
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setActiveSection(key)}
+                        className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm font-medium flex items-center justify-between gap-2 lg:w-full ${activeSection === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'}`}
+                      >
+                        <span>{label}</span>
+                        {sectionHasError && (
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${activeSection === key ? 'bg-white' : 'bg-amber-500'}`} title="This section has required fields missing" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
               </aside>
 
               {/* Content Panel */}
-              <div className="flex-1 overflow-auto p-6 space-y-6">
+              <div className="flex-1 overflow-auto p-4 sm:p-6 space-y-6">
                 {isLoadingDetails && <p className="text-sm text-slate-500">Loading listing details...</p>}
                 {formSuccess && <p className="text-sm text-green-700 rounded-lg bg-green-50 p-3 border border-green-200">{formSuccess}</p>}
                 {formError && <p className="text-sm text-amber-700 rounded-lg bg-amber-50 p-3 border border-amber-200">{formError}</p>}
@@ -2787,7 +2813,8 @@ export default function Listings() {
                         const isRental = (form.sale_or_rent ?? '').toLowerCase().includes('rent');
                         // Portal mapping hints — vary by sale vs rental
                         const STATUS_TAG_HINTS: Record<string, string> = isRental ? {
-                          'For Sale':          'P24: To Rent (active) · KWW: For Rent · PP: To Let',
+                          'To Rent':           'P24: Active (To Let) · KWW: For Rent · PP: To Let',
+                          'For Sale':          'P24: Active (To Let) · KWW: For Rent · PP: To Let',
                           'Reduced':           'P24: Reduced banner · KWW: For Rent · PP: To Let',
                           'Under Offer':       'P24: Pending banner · KWW: Pending · PP: Pending Offer',
                           'Sold':              'P24: Sold · KWW: Sold · PP: Sold',
@@ -2806,7 +2833,11 @@ export default function Listings() {
                           'Approval Declined': 'Internal only — listing blocked from publishing',
                         };
                         const currentHint = STATUS_TAG_HINTS[form.listing_status_tag] ?? null;
-                        const tagChoices = options?.listing_status_tags ?? ['For Sale', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'];
+                        const baseTagChoices = options?.listing_status_tags ?? ['For Sale', 'To Rent', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'];
+                        // For rental listings: show To Rent + non-sale tags; hide For Sale as primary choice
+                        const tagChoices = isRental
+                          ? baseTagChoices.filter((t) => t !== 'For Sale')
+                          : baseTagChoices.filter((t) => t !== 'To Rent');
                         return (
                           <label className="flex flex-col gap-1">
                             <span className="text-xs font-medium text-slate-600">Listing Status Tag</span>
@@ -3223,6 +3254,27 @@ export default function Listings() {
                       {sel('Mandate Type', 'mandate_type', options?.mandate_types ?? [])}
                     </div>
 
+                    {/* Rental-specific fields */}
+                    {(['procurement rental', 'management rental'].includes((form.sale_or_rent ?? '').toLowerCase().trim())) && (
+                      <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 space-y-3">
+                        <h4 className="text-sm font-semibold text-amber-800">Rental Details</h4>
+                        <p className="text-xs text-amber-700">These fields apply to To Rent listings and feed directly to Property24 and Private Property portals.</p>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                          {sel('Rental Rate', 'rental_rate', [
+                            'R0 - R2 500', 'R2 500 - R5 000', 'R5 000 - R7 500', 'R7 500 - R10 000',
+                            'R10 000 - R15 000', 'R15 000 - R20 000', 'R20 000 - R25 000',
+                            'R25 000 - R30 000', 'R30 000 - R35 000', 'R35 000 - R40 000',
+                            'R40 000 - R50 000', 'R50 000+',
+                          ])}
+                          {inp('Lease Period', 'lease_period', { placeholder: '1 to 12 Months' })}
+                          {inp('Deposit Requirements', 'deposit_requirements', { placeholder: '1 Month Deposit' })}
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          The <strong>Occupation Date</strong> above is used as the &quot;Available From&quot; date on portal listings.
+                        </p>
+                      </div>
+                    )}
+
                     {/* Listing Agents */}
                     <div className="border-t pt-4 space-y-3">
                       <h4 className="text-base font-semibold text-slate-800">Listing Agents</h4>
@@ -3252,13 +3304,57 @@ export default function Listings() {
                     {/* Mandate Documents */}
                     <div className="border-t pt-4 space-y-3">
                       <h4 className="text-base font-semibold text-slate-800">Mandate Documents</h4>
+
+                      {/* Existing documents list */}
+                      {form.mandate_documents.length > 0 && (
+                        <div className="space-y-2">
+                          {form.mandate_documents
+                            .slice()
+                            .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+                            .map((doc, index) => (
+                              <div
+                                key={doc.id ?? `${doc.file_url}-${index}`}
+                                className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                              >
+                                <span className="flex-1 truncate text-slate-800 font-medium" title={doc.file_name || doc.file_url}>
+                                  {doc.file_name || `Document ${index + 1}`}
+                                </span>
+                                <a
+                                  href={doc.file_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="shrink-0 rounded border border-slate-300 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                                >
+                                  View
+                                </a>
+                                <a
+                                  href={doc.file_url}
+                                  download={doc.file_name || true}
+                                  className="shrink-0 rounded border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                                >
+                                  Download
+                                </a>
+                                <button
+                                  type="button"
+                                  disabled={isDeletingDoc === (doc.id ?? '')}
+                                  onClick={() => { if (doc.id) void deleteMandateDocument(doc.id); }}
+                                  className="shrink-0 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                                >
+                                  {isDeletingDoc === (doc.id ?? '') ? '...' : 'Delete'}
+                                </button>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+
                       {editingId ? (
                         <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center">
                           <label className="cursor-pointer rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-100 inline-block">
-                            {isUploadingDocs ? 'Uploading...' : 'Upload Documents'}
+                            {isUploadingDocs ? 'Uploading...' : '+ Upload Documents'}
                             <input type="file" multiple className="hidden" disabled={isUploadingDocs}
                               onChange={(e) => { void uploadMandateDocuments(e.target.files); e.currentTarget.value = ''; }} />
                           </label>
+                          <p className="mt-2 text-xs text-slate-400">PDF, images or any file. Multiple files allowed.</p>
                         </div>
                       ) : (
                         <p className="text-xs text-slate-500">Save the listing first, then upload mandate documents.</p>
@@ -3904,16 +4000,18 @@ export default function Listings() {
                           <p className="break-all text-center">{item.primary_agent_email || item.primary_contact_email || '-'}</p>
                         </div>
                         <div className="mt-4">
-                          <button
-                            type="button"
-                            className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 shadow-sm hover:bg-slate-100"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openPreview(item);
-                            }}
-                          >
-                            View Details
-                          </button>
+                          <div className="space-y-2">
+                            <button
+                              type="button"
+                              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 shadow-sm hover:bg-slate-100"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openPreview(item);
+                              }}
+                            >
+                              View Details
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </aside>

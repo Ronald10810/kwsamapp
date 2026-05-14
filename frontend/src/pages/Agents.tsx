@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useQuery } from '@tanstack/react-query';
 
@@ -57,6 +57,10 @@ type AssociateDetailsResponse = {
   document_notes?: NoteRecord[];
   [key: string]: unknown;
 };
+
+function formatTelHref(value: string): string {
+  return value.replace(/[^\d+]/g, '');
+}
 
 type SocialMediaItem = {
   platform: string;
@@ -130,8 +134,21 @@ type MarketCenterOption = {
 };
 
 type TeamOption = {
+  id?: string;
   source_team_id: string;
   name: string;
+  source_market_center_id?: string | null;
+  team_cap_amount?: string | null;
+  commission_split_to_team?: string | null;
+  manual_cap?: boolean | null;
+  cap_year?: number | null;
+};
+
+type TeamCapDetail = {
+  team_cap_amount: string | null;
+  commission_split_to_team: string | null;
+  manual_cap: boolean;
+  cap_year: number | null;
 };
 
 const PAGE_SIZE = 20;
@@ -155,6 +172,8 @@ const JOB_TITLE_OPTIONS = [
 ];
 const COMMUNITY_OPTIONS = ['Agent', 'ALC', 'DEI', 'Luxury', 'Rainbow', 'RALC', 'YP'];
 const DOCUMENT_TYPE_OPTIONS = ['ID Document', 'BSA Document', 'FFC Document', 'Employment Contract'];
+const TEAM_MEMBERSHIP_TITLES = ['Team Admin', 'Team Agent', 'Lead Agent', 'Agent'];
+const TEAM_DEPENDENT_TITLES = ['Team Admin', 'Team Agent', 'Lead Agent'];
 
 function normalizeAgentStatus(value: string | null): 'Active' | 'Inactive' | 'Unknown' {
   const normalized = (value ?? '').trim().toLowerCase();
@@ -297,10 +316,11 @@ export default function AgentsPage() {
   const [form, setForm] = useState<AgentFormState>(emptyForm());
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [pendingImagePreviewUrl, setPendingImagePreviewUrl] = useState<string | null>(null);
+  const previousSourceTeamIdRef = useRef<string>('');
 
   const pageSize = view === 'card' ? CARD_PAGE_SIZE : PAGE_SIZE;
 
-  const { data, isLoading, isFetching, isError, refetch } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['agents', page, search, view, statusFilter],
     queryFn: () => {
       const offset = (page - 1) * pageSize;
@@ -324,9 +344,26 @@ export default function AgentsPage() {
       }),
   });
 
-  // Team options placeholder — teams are edited via source IDs for now
-  const _unusedTeamQuery = { data: { items: [] as TeamOption[] } };
-  void _unusedTeamQuery;
+  const { data: allTeamOptionsData } = useQuery({
+    queryKey: ['team-options-for-associates-all'],
+    queryFn: () =>
+      fetch('/api/teams/options').then(async (r) => {
+        if (!r.ok) throw new Error('Unable to load team options');
+        return r.json() as Promise<{ items: TeamOption[] }>;
+      }),
+  });
+
+  const { data: teamOptionsData } = useQuery({
+    queryKey: ['team-options-for-associate-form', form.source_market_center_id],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (form.source_market_center_id) params.set('source_market_center_id', form.source_market_center_id);
+      return fetch(`/api/teams/options?${params.toString()}`).then(async (r) => {
+        if (!r.ok) throw new Error('Unable to load team options');
+        return r.json() as Promise<{ items: TeamOption[] }>;
+      });
+    },
+  });
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil((data?.total ?? 0) / pageSize)), [data?.total, pageSize]);
   const filteredItems = useMemo(() => {
@@ -344,6 +381,68 @@ export default function AgentsPage() {
       }
     };
   }, [pendingImagePreviewUrl]);
+
+  const selectedTeamOption = useMemo(() => {
+    const sourceTeamId = form.source_team_id;
+    if (!sourceTeamId) return null;
+    const filteredMatch = (teamOptionsData?.items ?? []).find((t) => t.source_team_id === sourceTeamId);
+    if (filteredMatch) return filteredMatch;
+    return (allTeamOptionsData?.items ?? []).find((t) => t.source_team_id === sourceTeamId) ?? null;
+  }, [form.source_team_id, teamOptionsData?.items, allTeamOptionsData?.items]);
+
+  const { data: selectedTeamDetail } = useQuery({
+    queryKey: ['team-detail-cap', selectedTeamOption?.id],
+    queryFn: () =>
+      fetch(`/api/teams/${selectedTeamOption!.id}`).then(async (r) => {
+        if (!r.ok) throw new Error('Unable to load team detail');
+        return r.json() as Promise<{ name: string; cap: TeamCapDetail | null }>;
+      }),
+    enabled: Boolean(selectedTeamOption?.id),
+    staleTime: 30_000,
+  });
+
+  const teamCap: TeamCapDetail | null =
+    selectedTeamDetail?.cap ??
+    (selectedTeamOption
+      ? {
+          team_cap_amount: selectedTeamOption.team_cap_amount ?? null,
+          commission_split_to_team: selectedTeamOption.commission_split_to_team ?? null,
+          manual_cap: selectedTeamOption.manual_cap ?? false,
+          cap_year: selectedTeamOption.cap_year ?? null,
+        }
+      : null);
+
+  const hasValidTeamMembershipTitle = useMemo(
+    () => form.job_titles.some((title) => TEAM_MEMBERSHIP_TITLES.includes(title)),
+    [form.job_titles]
+  );
+
+  const showTeamTitleWarning = Boolean(form.source_team_id) && !hasValidTeamMembershipTitle;
+
+  useEffect(() => {
+    if (!form.source_team_id) return;
+    const options = teamOptionsData?.items ?? [];
+    if (options.length === 0) return;
+    const stillValid = options.some((t) => t.source_team_id === form.source_team_id);
+    if (!stillValid) {
+      setForm((p) => ({ ...p, source_team_id: '' }));
+    }
+  }, [form.source_team_id, teamOptionsData?.items]);
+
+  useEffect(() => {
+    const previousSourceTeamId = previousSourceTeamIdRef.current;
+    const currentSourceTeamId = form.source_team_id;
+
+    // When team membership is removed, clear team-only job titles to keep data clean.
+    if (previousSourceTeamId && !currentSourceTeamId) {
+      setForm((p) => ({
+        ...p,
+        job_titles: p.job_titles.filter((title) => !TEAM_DEPENDENT_TITLES.includes(title)),
+      }));
+    }
+
+    previousSourceTeamIdRef.current = currentSourceTeamId;
+  }, [form.source_team_id]);
 
   function openCreateForm(): void {
     if (pendingImagePreviewUrl) {
@@ -474,16 +573,55 @@ export default function AgentsPage() {
   async function handleImageUpload(file: File | undefined): Promise<void> {
     if (!file) return;
     setFormError(null);
-    if (pendingImagePreviewUrl) {
-      URL.revokeObjectURL(pendingImagePreviewUrl);
-    }
-    const previewUrl = URL.createObjectURL(file);
-    setPendingImageFile(file);
-    setPendingImagePreviewUrl(previewUrl);
 
-    // Upload happens on Save for both create and edit to keep one consistent flow.
-    // We keep the persisted image_url unchanged until upload succeeds.
-    return;
+    // Client-side validation for portal requirements
+    // Portals require: JPEG format, 1080x1080px recommended, max 2MB
+    if (file.type !== 'image/jpeg') {
+      setFormError('Image must be in JPEG format. Please convert your image and try again.');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      // Allow slightly larger files; backend will compress them
+      setFormError(
+        `Image is too large (${(file.size / 1024 / 1024).toFixed(1)}MB). ` +
+        'Please use a smaller image (under 5MB). It will be automatically optimized to portal specifications.'
+      );
+      return;
+    }
+
+    // Validate image dimensions (warn if not square or too small)
+    const img = new Image();
+    img.onload = () => {
+      const { width, height } = img;
+      if (width < 500 || height < 500) {
+        setFormError(
+          `Image is too small (${width}x${height}px). Please use an image at least 500x500px. ` +
+          '(Recommended: 1080x1080px for best portal display)'
+        );
+        URL.revokeObjectURL(img.src);
+        return;
+      }
+      if (width !== height) {
+        setFormError(
+          `Image is not square (${width}x${height}px). It will be automatically cropped/padded ` +
+          'to 1080x1080px square for portal compatibility.'
+        );
+      }
+      // Validation passed, set the file
+      if (pendingImagePreviewUrl) {
+        URL.revokeObjectURL(pendingImagePreviewUrl);
+      }
+      const previewUrl = URL.createObjectURL(file);
+      setPendingImageFile(file);
+      setPendingImagePreviewUrl(previewUrl);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => {
+      setFormError('Invalid image file. Please try another image.');
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(file);
   }
 
   async function handleDocumentUpload(index: number, file: File | undefined): Promise<void> {
@@ -523,6 +661,12 @@ export default function AgentsPage() {
   async function saveAgent(): Promise<void> {
     if (isImageUploading) {
       setFormError('Please wait for the image upload to finish before saving.');
+      return;
+    }
+
+    if (form.source_team_id && !hasValidTeamMembershipTitle) {
+      setFormError('To assign a team, Job Titles must include Team Admin, Team Agent, Lead Agent, or Agent.');
+      setActiveSection('kw');
       return;
     }
 
@@ -590,11 +734,8 @@ export default function AgentsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="page-title">Associates</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
-            {isLoading ? 'Loading...' : `${(data?.total ?? 0).toLocaleString()} associates in migration database`}
-          </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-slate-300 overflow-hidden text-sm">
             <button
               type="button"
@@ -617,9 +758,6 @@ export default function AgentsPage() {
               List
             </button>
           </div>
-          <button className="primary-btn" type="button" onClick={() => refetch()}>
-            {isFetching ? 'Refreshing...' : 'Refresh'}
-          </button>
           {canCreateAssociate && (
             <button className="primary-btn" type="button" onClick={openCreateForm}>
               Add Associate
@@ -694,8 +832,24 @@ export default function AgentsPage() {
                       </div>
                     </div>
                     <div className="text-xs text-slate-600 space-y-1">
-                      <p>{item.email ?? '-'}</p>
-                      <p>{item.mobile_number ?? '-'}</p>
+                      <p>
+                        {item.email ? (
+                          <a href={`mailto:${item.email}`} className="text-red-700 hover:text-red-800 hover:underline">
+                            {item.email}
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </p>
+                      <p>
+                        {item.mobile_number ? (
+                          <a href={`tel:${formatTelHref(item.mobile_number)}`} className="text-red-700 hover:text-red-800 hover:underline">
+                            {item.mobile_number}
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </p>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 border-t border-slate-100 pt-3">
@@ -745,8 +899,24 @@ export default function AgentsPage() {
                   return (
                     <tr key={item.id} className="hover:bg-slate-50">
                       <td className="px-4 py-2.5 font-medium">{agentDisplayName(item)}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{item.email ?? '-'}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{item.mobile_number ?? '-'}</td>
+                      <td className="px-4 py-2.5 text-slate-600">
+                        {item.email ? (
+                          <a href={`mailto:${item.email}`} className="text-red-700 hover:text-red-800 hover:underline">
+                            {item.email}
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-600">
+                        {item.mobile_number ? (
+                          <a href={`tel:${formatTelHref(item.mobile_number)}`} className="text-red-700 hover:text-red-800 hover:underline">
+                            {item.mobile_number}
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
                       <td className="px-4 py-2.5">
                         <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}>{statusLabel}</span>
                       </td>
@@ -794,15 +964,15 @@ export default function AgentsPage() {
 
       {isFormOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm">
-          <div className="absolute inset-6 rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
-            <div className="border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+          <div className="absolute inset-2 sm:inset-4 lg:inset-6 rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+            <div className="border-b border-slate-200 px-4 py-4 sm:px-6 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-500">Associate Workspace</p>
-                <h2 className="text-2xl font-semibold text-slate-900">
+                <h2 className="text-xl sm:text-2xl font-semibold text-slate-900">
                   {editingId ? `${form.first_name || ''} ${form.last_name || ''}`.trim() || 'Edit Associate' : 'New Associate'}
                 </h2>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
                 <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" type="button" onClick={() => setIsFormOpen(false)}>
                   Cancel
                 </button>
@@ -812,29 +982,31 @@ export default function AgentsPage() {
               </div>
             </div>
 
-            <div className="flex min-h-0 flex-1">
-              <aside className="w-64 border-r border-slate-200 bg-slate-50 p-3 space-y-2">
-                {[
-                  ['personal', 'Personal Details'],
-                  ['kw', 'KW Details'],
-                  ['commission', 'Commission'],
-                  ['dates', 'Dates'],
-                  ['documents', 'Documents'],
-                ].map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setActiveSection(key as AssociateSection)}
-                    className={`w-full rounded-lg px-3 py-2 text-left text-sm font-medium ${
-                      activeSection === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
+            <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+              <aside className="w-full border-b border-slate-200 bg-slate-50 p-2 sm:p-3 lg:w-64 lg:border-b-0 lg:border-r">
+                <div className="flex gap-2 overflow-x-auto scrollbar-none lg:block lg:space-y-2">
+                  {[
+                    ['personal', 'Personal Details'],
+                    ['kw', 'KW Details'],
+                    ['commission', 'Commission'],
+                    ['dates', 'Dates'],
+                    ['documents', 'Documents'],
+                  ].map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setActiveSection(key as AssociateSection)}
+                      className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm font-medium lg:w-full ${
+                        activeSection === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </aside>
 
-              <div className="flex-1 overflow-auto p-6 space-y-6">
+              <div className="flex-1 overflow-auto p-4 sm:p-6 space-y-6">
                 {isLoadingDetails && <p className="text-sm text-slate-500">Loading associate details...</p>}
                 {formError && <p className="text-sm text-amber-700">{formError}</p>}
 
@@ -852,12 +1024,17 @@ export default function AgentsPage() {
                       <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Mobile Number (xxxxxxxxxx)</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="e.g. 0658339187" value={form.mobile_number} onChange={(e) => setForm((p) => ({ ...p, mobile_number: e.target.value.replace(/\s/g, '') }))} /></label>
                       <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Office Number (xxxxxxxxxx)</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="e.g. 0123451414" value={form.office_number} onChange={(e) => setForm((p) => ({ ...p, office_number: e.target.value.replace(/\s/g, '') }))} /></label>
                       <div className="flex flex-col gap-1 md:col-span-2">
-                        <span className="text-xs text-slate-600">Associate Image</span>
+                        <div className="space-y-1">
+                          <span className="text-xs text-slate-600">Associate Image</span>
+                          <p className="text-xs text-slate-500">
+                            📋 <strong>Portal Requirements:</strong> JPEG format, 1080×1080px (or larger, will auto-optimize), max 2MB
+                          </p>
+                        </div>
                         <div className="flex gap-2 items-end">
                           <div className="flex-1">
                             <input
                               type="file"
-                              accept="image/*"
+                              accept="image/jpeg"
                               className="rounded-lg border border-slate-300 px-3 py-2 text-sm w-full"
                               onChange={(e) => void handleImageUpload(e.currentTarget.files?.[0])
                               }
@@ -930,7 +1107,7 @@ export default function AgentsPage() {
                     <h3 className="text-lg font-semibold text-slate-900">KW Details</h3>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                       <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Market Center</span><select className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.source_market_center_id} onChange={(e) => setForm((p) => ({ ...p, source_market_center_id: e.target.value }))}><option value="">Select</option>{(marketCenterData?.items ?? []).map((mc) => <option key={mc.source_market_center_id} value={mc.source_market_center_id}>{mc.name}</option>)}</select></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Team</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.source_team_id} onChange={(e) => setForm((p) => ({ ...p, source_team_id: e.target.value }))} placeholder="Team source id" /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Team</span><select className={`rounded-lg border px-3 py-2 text-sm ${showTeamTitleWarning ? 'border-red-400 bg-red-50' : 'border-slate-300'}`} value={form.source_team_id} onChange={(e) => setForm((p) => ({ ...p, source_team_id: e.target.value }))}><option value="">No team</option>{(teamOptionsData?.items ?? []).map((t) => <option key={t.source_team_id} value={t.source_team_id}>{t.name}</option>)}</select><span className="text-[11px] text-slate-500">Shows active teams for the selected market centre.</span>{showTeamTitleWarning && <span className="text-[11px] font-semibold text-red-600">Select at least one Job Title: Team Admin, Team Agent, Lead Agent, or Agent.</span>}</label>
                       <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Growth Share Sponsor</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.growth_share_sponsor} onChange={(e) => setForm((p) => ({ ...p, growth_share_sponsor: e.target.value }))} /></label>
                       <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Temporary Growth Share Sponsor</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.temporary_growth_share_sponsor} onChange={(e) => setForm((p) => ({ ...p, temporary_growth_share_sponsor: e.target.value }))} /></label>
                       <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">KWUID</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.kwuid} onChange={(e) => setForm((p) => ({ ...p, kwuid: e.target.value }))} /></label>
@@ -984,7 +1161,7 @@ export default function AgentsPage() {
                           </div>
                           <div>
                             <p className="text-sm font-semibold text-slate-900 mb-2">Admin Teams (Source IDs)</p>
-                            <input className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Comma separated team source ids" value={form.admin_teams.join(', ')} onChange={(e) => setForm((p) => ({ ...p, admin_teams: e.target.value.split(',').map((value) => value.trim()).filter(Boolean) }))} />
+                            <div className="flex flex-wrap gap-2">{(allTeamOptionsData?.items ?? []).map((t) => <button key={t.source_team_id} type="button" className={`rounded-full px-3 py-1 text-xs border ${form.admin_teams.includes(t.source_team_id) ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-700 border-slate-300'}`} onClick={() => setForm((p) => ({ ...p, admin_teams: toggleArrayValue(p.admin_teams, t.source_team_id) }))}>{t.name}</button>)}</div>
                             <p className="mt-1 text-xs text-slate-500">Team lookups are not wired yet, so this uses source IDs for now.</p>
                           </div>
                         </div>
@@ -1010,13 +1187,32 @@ export default function AgentsPage() {
                 {activeSection === 'commission' && (
                   <section className="space-y-4">
                     <h3 className="text-lg font-semibold text-slate-900">Commission</h3>
+                    {form.source_team_id && (
+                      <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+                        Individual commission fields are read-only while this associate is assigned to a team.
+                      </div>
+                    )}
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Total Cap Amount</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.cap} onChange={(e) => setForm((p) => ({ ...p, cap: e.target.value }))} /></label>
-                      <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm self-end"><input type="checkbox" checked={form.manual_cap} onChange={(e) => setForm((p) => ({ ...p, manual_cap: e.target.checked }))} />Manual Cap Override</label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Agent Split %</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.agent_split} onChange={(e) => setForm((p) => ({ ...p, agent_split: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Projected CO$</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.projected_cos} onChange={(e) => setForm((p) => ({ ...p, projected_cos: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Projected Cap</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.projected_cap} onChange={(e) => setForm((p) => ({ ...p, projected_cap: e.target.value }))} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Total Cap Amount</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.cap} onChange={(e) => setForm((p) => ({ ...p, cap: e.target.value }))} readOnly={Boolean(form.source_team_id)} disabled={Boolean(form.source_team_id)} /></label>
+                      <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm self-end"><input type="checkbox" checked={form.manual_cap} onChange={(e) => setForm((p) => ({ ...p, manual_cap: e.target.checked }))} disabled={Boolean(form.source_team_id)} />Manual Cap Override</label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Agent Split %</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.agent_split} onChange={(e) => setForm((p) => ({ ...p, agent_split: e.target.value }))} readOnly={Boolean(form.source_team_id)} disabled={Boolean(form.source_team_id)} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Projected CO$</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.projected_cos} onChange={(e) => setForm((p) => ({ ...p, projected_cos: e.target.value }))} readOnly={Boolean(form.source_team_id)} disabled={Boolean(form.source_team_id)} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Projected Cap</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.projected_cap} onChange={(e) => setForm((p) => ({ ...p, projected_cap: e.target.value }))} readOnly={Boolean(form.source_team_id)} disabled={Boolean(form.source_team_id)} /></label>
                     </div>
+                    {form.source_team_id && (
+                      <div className="rounded-xl border border-slate-200 p-4">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-semibold text-slate-900">Team Cap</p>
+                          <p className="text-xs text-slate-500">{selectedTeamOption?.name ?? form.source_team_id}</p>
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-4">
+                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Team Cap Amount</span><input className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm" value={teamCap?.team_cap_amount ?? ''} readOnly /></label>
+                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Team Split (%)</span><input className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm" value={teamCap?.commission_split_to_team ?? ''} readOnly /></label>
+                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Manual Cap Override</span><input className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm" value={teamCap?.manual_cap ? 'Yes' : 'No'} readOnly /></label>
+                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Cap Year</span><input className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm" value={teamCap?.cap_year ? String(teamCap.cap_year) : ''} readOnly /></label>
+                        </div>
+                      </div>
+                    )}
                     <div className="rounded-xl border border-slate-200 p-4">
                       <div className="flex items-center justify-between"><p className="text-sm font-semibold">Commission Notes</p><button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => setForm((p) => ({ ...p, commission_notes: [...p.commission_notes, ''] }))}>Add Note</button></div>
                       <div className="mt-3 space-y-2">{form.commission_notes.map((note, index) => <div key={index} className="flex gap-2"><textarea className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" rows={2} value={note} onChange={(e) => setForm((p) => ({ ...p, commission_notes: p.commission_notes.map((item, i) => i === index ? e.target.value : item) }))} /><button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => setForm((p) => ({ ...p, commission_notes: p.commission_notes.filter((_, i) => i !== index) }))}>Remove</button></div>)}</div>

@@ -120,6 +120,7 @@ export const env = {
   uploadsPublicBaseUrl: normalizeString(process.env.UPLOADS_PUBLIC_BASE_URL),
   logLevel: normalizeLogLevel(process.env.LOG_LEVEL, 'info'),
   trustProxy: parseBoolean(process.env.TRUST_PROXY, nodeEnv === 'production'),
+  appTimeZone: normalizeString(process.env.APP_TIME_ZONE) ?? 'Africa/Johannesburg',
   enforceLocalUatDb,
   corsOrigins: parseList(process.env.CORS_ORIGIN, ['http://localhost:5173']),
   preserveCoreEdits: parseBoolean(process.env.PRESERVE_CORE_EDITS, false),
@@ -129,6 +130,9 @@ export const env = {
   database: {
     client: databaseClient,
     url: databaseUrl,
+  },
+  publicDatabase: {
+    url: normalizeString(process.env.PUBLIC_DATABASE_URL),
   },
   storage: {
     backend: storageBackend,
@@ -158,10 +162,30 @@ export const env = {
     apiKey: normalizeString(process.env.KWW_API_KEY),
     apiSecret: normalizeString(process.env.KWW_API_SECRET),
   },
+  openai: {
+    apiKey: normalizeString(process.env.OPENAI_API_KEY),
+    model: normalizeString(process.env.OPENAI_MODEL) ?? 'gpt-4o',
+  },
   entegral: {
     baseUrl: normalizeString(process.env.ENTEGRAL_BASE_URL),
     globalAuth: normalizeString(process.env.ENTEGRAL_GLOBAL_AUTH),
     sourceId: normalizeString(process.env.ENTEGRAL_SOURCE_ID) ?? '6',
+  },
+  frontdoor: {
+    enabled: parseBoolean(process.env.FRONTDOOR_ENABLED, false),
+    baseUrl: normalizeString(process.env.FRONTDOOR_BASE_URL) ?? '',
+    email: normalizeString(process.env.FRONTDOOR_EMAIL) ?? '',
+    password: normalizeString(process.env.FRONTDOOR_PASSWORD) ?? '',
+  },
+  loom: {
+    idpUrl: normalizeString(process.env.LOOM_IDP_URL) ?? 'https://id.loom.co.za',
+    apiBaseUrl: normalizeString(process.env.LOOM_API_BASE_URL) ?? 'https://api.loom.co.za/api/services/app',
+    clientId: normalizeString(process.env.LOOM_CLIENT_ID) ?? '',
+    clientSecret: normalizeString(process.env.LOOM_CLIENT_SECRET) ?? '',
+    callbackUrl: normalizeString(process.env.LOOM_CALLBACK_URL) ?? '',
+    integrationEmail: normalizeString(process.env.LOOM_INTEGRATION_EMAIL) ?? '',
+    clientIdentifier: normalizeString(process.env.LOOM_CLIENT_IDENTIFIER) ?? '', // loaded from .env at startup
+    tokenEncryptionKey: normalizeString(process.env.LOOM_TOKEN_ENCRYPTION_KEY) ?? 'kwsa-loom-dev-key',
   },
 } as const;
 
