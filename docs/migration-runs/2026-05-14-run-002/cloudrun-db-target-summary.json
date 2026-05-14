@@ -1,0 +1,26 @@
+﻿[
+    {
+        "service":  "kwsa-backend-test",
+        "region":  "africa-south1",
+        "cloudSql":  "kwsa-mapp:africa-south1:kwsa-postgres",
+        "dbSecret":  "kwsa-backend-test-db-url",
+        "dbSecretVersion":  "latest",
+        "dbName":  "kwsa_uat"
+    },
+    {
+        "service":  "kwsa-backend-prod",
+        "region":  "africa-south1",
+        "cloudSql":  "kwsa-mapp:africa-south1:kwsa-postgres",
+        "dbSecret":  "DATABASE_URL",
+        "dbSecretVersion":  "3",
+        "dbName":  "kwsa_uat"
+    },
+    {
+        "service":  "kwsa-public-api-uat",
+        "region":  "africa-south1",
+        "cloudSql":  "none",
+        "dbSecret":  "kwsa-public-api-db-url",
+        "dbSecretVersion":  "latest",
+        "dbName":  "kwsa_uat"
+    }
+]

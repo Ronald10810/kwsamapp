@@ -1,0 +1,1017 @@
+﻿[
+  {
+    "apiVersion": "serving.knative.dev/v1",
+    "kind": "Service",
+    "metadata": {
+      "annotations": {
+        "run.googleapis.com/build-enable-automatic-updates": "false",
+        "run.googleapis.com/build-id": "5a7d2fd4-b0b7-48e3-a83c-180f812eecab",
+        "run.googleapis.com/build-image-uri": "africa-south1-docker.pkg.dev/kwsa-mapp/cloud-run-source-deploy/kwsa-backend-prod",
+        "run.googleapis.com/build-name": "projects/768625368107/locations/africa-south1/builds/5a7d2fd4-b0b7-48e3-a83c-180f812eecab",
+        "run.googleapis.com/build-source-location": "gs://run-sources-kwsa-mapp-africa-south1/services/kwsa-backend-prod/1778678220.751063-2bd496d90a0544b3a6fed4c81263f14e.zip#1778678225657275",
+        "run.googleapis.com/client-name": "gcloud",
+        "run.googleapis.com/client-version": "565.0.0",
+        "run.googleapis.com/ingress": "all",
+        "run.googleapis.com/ingress-status": "all",
+        "run.googleapis.com/maxScale": "3",
+        "run.googleapis.com/operation-id": "b37da70a-d3de-42d1-b38c-b000c2a6d2d0",
+        "run.googleapis.com/urls": "[\"https://kwsa-backend-prod-768625368107.africa-south1.run.app\",\"https://kwsa-backend-prod-hvz5ax66zq-bq.a.run.app\"]",
+        "serving.knative.dev/creator": "kwsamapp@gmail.com",
+        "serving.knative.dev/lastModifier": "kwsamapp@gmail.com"
+      },
+      "creationTimestamp": "2026-04-29T14:03:10.184408Z",
+      "generation": 94,
+      "labels": {
+        "cloud.googleapis.com/location": "africa-south1",
+        "run.googleapis.com/satisfiesPzs": "true"
+      },
+      "name": "kwsa-backend-prod",
+      "namespace": "768625368107",
+      "resourceVersion": "AAZRstU4QIA",
+      "selfLink": "/apis/serving.knative.dev/v1/namespaces/768625368107/services/kwsa-backend-prod",
+      "uid": "ae0f6e72-b927-4455-ac5b-761d8f215da7"
+    },
+    "spec": {
+      "template": {
+        "metadata": {
+          "annotations": {
+            "autoscaling.knative.dev/maxScale": "3",
+            "autoscaling.knative.dev/minScale": "1",
+            "run.googleapis.com/client-name": "gcloud",
+            "run.googleapis.com/client-version": "565.0.0",
+            "run.googleapis.com/cloudsql-instances": "kwsa-mapp:africa-south1:kwsa-postgres",
+            "run.googleapis.com/startup-cpu-boost": "true"
+          },
+          "labels": {
+            "client.knative.dev/nonce": "grdktxlyfu",
+            "run.googleapis.com/startupProbeType": "Default"
+          }
+        },
+        "spec": {
+          "containerConcurrency": 80,
+          "containers": [
+            {
+              "env": [
+                {
+                  "name": "NODE_ENV",
+                  "value": "production"
+                },
+                {
+                  "name": "LOG_LEVEL",
+                  "value": "warn"
+                },
+                {
+                  "name": "CORS_ORIGIN",
+                  "value": "https://kwmapp.co.za,https://uat.kwmapp.co.za,https://kwsa-frontend-test-768625368107.africa-south1.run.app"
+                },
+                {
+                  "name": "TRUST_PROXY",
+                  "value": "true"
+                },
+                {
+                  "name": "DB_CLIENT",
+                  "value": "postgres"
+                },
+                {
+                  "name": "STORAGE_BACKEND",
+                  "value": "gcs"
+                },
+                {
+                  "name": "GCS_BUCKET_NAME",
+                  "value": "kwsa-mapp-uploads"
+                },
+                {
+                  "name": "GOOGLE_CLIENT_ID",
+                  "value": "768625368107-oficd2i4fn505g3lf7dt6sjmlv77b109.apps.googleusercontent.com"
+                },
+                {
+                  "name": "GOOGLE_CLOUD_PROJECT",
+                  "value": "kwsa-mapp"
+                },
+                {
+                  "name": "OPENAI_MODEL",
+                  "value": "gpt-5"
+                },
+                {
+                  "name": "PROPERTY24_BASE_URL",
+                  "value": "https://api.property24.com/listing/v51/"
+                },
+                {
+                  "name": "PROPERTY24_LISTINGS_ENDPOINT",
+                  "value": "listings"
+                },
+                {
+                  "name": "PROPERTY24_DEFAULT_AGENCY_ID",
+                  "value": "37061"
+                },
+                {
+                  "name": "PRIVATE_PROPERTY_BASE_URL",
+                  "value": "https://services.privateproperty.co.za/AgentImport/AgentImport.asmx"
+                },
+                {
+                  "name": "KWW_BASE_URL",
+                  "value": "https://partners.api.kw.com/v2/listings"
+                },
+                {
+                  "name": "ENTEGRAL_BASE_URL",
+                  "value": "http://sync.entegral.net/api"
+                },
+                {
+                  "name": "ENTEGRAL_SOURCE_ID",
+                  "value": "6"
+                },
+                {
+                  "name": "LOOM_IDP_URL",
+                  "value": "https://id.loom.co.za"
+                },
+                {
+                  "name": "LOOM_API_BASE_URL",
+                  "value": "https://api.loom.co.za/api/services/app"
+                },
+                {
+                  "name": "LOOM_CLIENT_ID",
+                  "value": "KWSA.Integration"
+                },
+                {
+                  "name": "LOOM_CLIENT_SECRET",
+                  "value": "1461A907-F9A3-494A-B505-1847CCE05901"
+                },
+                {
+                  "name": "LOOM_CLIENT_IDENTIFIER",
+                  "value": "EB838B60-5E9F-430C-894D-C16EE49EE8BA"
+                },
+                {
+                  "name": "LOOM_INTEGRATION_EMAIL",
+                  "value": "integration@kwsa.co.za"
+                },
+                {
+                  "name": "LOOM_CALLBACK_URL",
+                  "value": "https://kwsa-backend-prod-768625368107.africa-south1.run.app/api/loom/auth/callback"
+                },
+                {
+                  "name": "LOOM_TOKEN_ENCRYPTION_KEY",
+                  "value": "74f1ad8ee11be6fde60f47a3959031f68a7d9196594a591ed787d96e8f4af099"
+                },
+                {
+                  "name": "DATABASE_URL",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "3",
+                      "name": "DATABASE_URL"
+                    }
+                  }
+                },
+                {
+                  "name": "PROPERTY24_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "PROPERTY24_API_KEY"
+                    }
+                  }
+                },
+                {
+                  "name": "PRIVATE_PROPERTY_USERNAME",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "PRIVATE_PROPERTY_USERNAME"
+                    }
+                  }
+                },
+                {
+                  "name": "PRIVATE_PROPERTY_PASSWORD",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "PRIVATE_PROPERTY_PASSWORD"
+                    }
+                  }
+                },
+                {
+                  "name": "PRIVATE_PROPERTY_PASSWORD_ALT",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "PRIVATE_PROPERTY_PASSWORD_ALT"
+                    }
+                  }
+                },
+                {
+                  "name": "PRIVATE_PROPERTY_BRANCH_GUID",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "PRIVATE_PROPERTY_BRANCH_GUID"
+                    }
+                  }
+                },
+                {
+                  "name": "KWW_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "KWW_API_KEY"
+                    }
+                  }
+                },
+                {
+                  "name": "KWW_API_SECRET",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "KWW_API_SECRET"
+                    }
+                  }
+                },
+                {
+                  "name": "OPENAI_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "OPENAI_API_KEY"
+                    }
+                  }
+                },
+                {
+                  "name": "ENTEGRAL_GLOBAL_AUTH",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "ENTEGRAL_GLOBAL_AUTH"
+                    }
+                  }
+                }
+              ],
+              "image": "africa-south1-docker.pkg.dev/kwsa-mapp/cloud-run-source-deploy/kwsa-backend-prod@sha256:fd683cb9f71cb557c4cbf8567bc0b9b05fbf48419d4dba26160119b90bcac225",
+              "ports": [
+                {
+                  "containerPort": 8080,
+                  "name": "http1"
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "cpu": "1000m",
+                  "memory": "512Mi"
+                }
+              },
+              "startupProbe": {
+                "failureThreshold": 1,
+                "periodSeconds": 240,
+                "tcpSocket": {
+                  "port": 8080
+                },
+                "timeoutSeconds": 240
+              }
+            }
+          ],
+          "serviceAccountName": "768625368107-compute@developer.gserviceaccount.com",
+          "timeoutSeconds": 300
+        }
+      },
+      "traffic": [
+        {
+          "percent": 100,
+          "revisionName": "kwsa-backend-prod-00086-q8t"
+        }
+      ]
+    },
+    "status": {
+      "address": {
+        "url": "https://kwsa-backend-prod-hvz5ax66zq-bq.a.run.app"
+      },
+      "conditions": [
+        {
+          "lastTransitionTime": "2026-05-13T13:19:43.457531Z",
+          "status": "True",
+          "type": "Ready"
+        },
+        {
+          "lastTransitionTime": "2026-05-13T13:19:43.487847Z",
+          "reason": "Retired",
+          "status": "True",
+          "type": "ConfigurationsReady"
+        },
+        {
+          "lastTransitionTime": "2026-05-12T17:04:32.219270Z",
+          "status": "True",
+          "type": "RoutesReady"
+        }
+      ],
+      "latestCreatedRevisionName": "kwsa-backend-prod-00089-xpr",
+      "latestReadyRevisionName": "kwsa-backend-prod-00086-q8t",
+      "observedGeneration": 94,
+      "traffic": [
+        {
+          "percent": 100,
+          "revisionName": "kwsa-backend-prod-00086-q8t"
+        }
+      ],
+      "url": "https://kwsa-backend-prod-hvz5ax66zq-bq.a.run.app"
+    }
+  },
+  {
+    "apiVersion": "serving.knative.dev/v1",
+    "kind": "Service",
+    "metadata": {
+      "annotations": {
+        "run.googleapis.com/build-enable-automatic-updates": "false",
+        "run.googleapis.com/build-id": "2ca5478e-dc93-4352-9728-e0cadf4273fe",
+        "run.googleapis.com/build-image-uri": "africa-south1-docker.pkg.dev/kwsa-mapp/cloud-run-source-deploy/kwsa-backend-test",
+        "run.googleapis.com/build-name": "projects/768625368107/locations/africa-south1/builds/2ca5478e-dc93-4352-9728-e0cadf4273fe",
+        "run.googleapis.com/build-source-location": "gs://run-sources-kwsa-mapp-africa-south1/services/kwsa-backend-test/1778674542.907753-c65046811ecd48509aeb692148ffd049.zip#1778674543329828",
+        "run.googleapis.com/client-name": "gcloud",
+        "run.googleapis.com/client-version": "565.0.0",
+        "run.googleapis.com/ingress": "all",
+        "run.googleapis.com/ingress-status": "all",
+        "run.googleapis.com/maxScale": "3",
+        "run.googleapis.com/operation-id": "0ce0456c-8b5a-4845-8183-9597471fed65",
+        "run.googleapis.com/urls": "[\"https://kwsa-backend-test-768625368107.africa-south1.run.app\",\"https://kwsa-backend-test-hvz5ax66zq-bq.a.run.app\"]",
+        "serving.knative.dev/creator": "kwsamapp@gmail.com",
+        "serving.knative.dev/lastModifier": "kwsamapp@gmail.com"
+      },
+      "creationTimestamp": "2026-04-23T14:18:43.894615Z",
+      "generation": 61,
+      "labels": {
+        "cloud.googleapis.com/location": "africa-south1",
+        "run.googleapis.com/satisfiesPzs": "true"
+      },
+      "name": "kwsa-backend-test",
+      "namespace": "768625368107",
+      "resourceVersion": "AAZRsfpogVU",
+      "selfLink": "/apis/serving.knative.dev/v1/namespaces/768625368107/services/kwsa-backend-test",
+      "uid": "0d486254-089a-4dba-b2c4-45bcdf06fbeb"
+    },
+    "spec": {
+      "template": {
+        "metadata": {
+          "annotations": {
+            "autoscaling.knative.dev/maxScale": "3",
+            "run.googleapis.com/client-name": "gcloud",
+            "run.googleapis.com/client-version": "565.0.0",
+            "run.googleapis.com/cloudsql-instances": "kwsa-mapp:africa-south1:kwsa-postgres",
+            "run.googleapis.com/startup-cpu-boost": "true"
+          },
+          "labels": {
+            "client.knative.dev/nonce": "akrzkuxbsa",
+            "run.googleapis.com/startupProbeType": "Default"
+          }
+        },
+        "spec": {
+          "containerConcurrency": 80,
+          "containers": [
+            {
+              "env": [
+                {
+                  "name": "NODE_ENV",
+                  "value": "production"
+                },
+                {
+                  "name": "LOG_LEVEL",
+                  "value": "info"
+                },
+                {
+                  "name": "CORS_ORIGIN",
+                  "value": "https://kwmapp.co.za,https://uat.kwmapp.co.za,http://localhost:5173,http://localhost:5174,http://localhost:5177"
+                },
+                {
+                  "name": "TRUST_PROXY",
+                  "value": "true"
+                },
+                {
+                  "name": "DB_CLIENT",
+                  "value": "postgres"
+                },
+                {
+                  "name": "STORAGE_BACKEND",
+                  "value": "gcs"
+                },
+                {
+                  "name": "GOOGLE_CLIENT_ID",
+                  "value": "768625368107-oficd2i4fn505g3lf7dt6sjmlv77b109.apps.googleusercontent.com"
+                },
+                {
+                  "name": "GOOGLE_CLOUD_PROJECT",
+                  "value": "kwsa-mapp"
+                },
+                {
+                  "name": "GCS_BUCKET_NAME",
+                  "value": "kwsa-mapp-uploads"
+                },
+                {
+                  "name": "OPENAI_MODEL",
+                  "value": "gpt-5"
+                },
+                {
+                  "name": "PROPERTY24_BASE_URL",
+                  "value": "https://api.property24.com/listing/v51/"
+                },
+                {
+                  "name": "PROPERTY24_LISTINGS_ENDPOINT",
+                  "value": "listings"
+                },
+                {
+                  "name": "PROPERTY24_DEFAULT_AGENCY_ID",
+                  "value": "37061"
+                },
+                {
+                  "name": "PRIVATE_PROPERTY_BASE_URL",
+                  "value": "https://services.privateproperty.co.za/AgentImport/AgentImport.asmx"
+                },
+                {
+                  "name": "KWW_BASE_URL",
+                  "value": "https://partners.api.kw.com/v2/listings"
+                },
+                {
+                  "name": "ENTEGRAL_BASE_URL",
+                  "value": "http://sync.entegral.net/api"
+                },
+                {
+                  "name": "ENTEGRAL_SOURCE_ID",
+                  "value": "6"
+                },
+                {
+                  "name": "LOOM_IDP_URL",
+                  "value": "https://id-qa.loom.co.za"
+                },
+                {
+                  "name": "LOOM_API_BASE_URL",
+                  "value": "https://api-qa.loom.co.za/api/services/app"
+                },
+                {
+                  "name": "LOOM_CLIENT_ID",
+                  "value": "Keller.Williams.Integration"
+                },
+                {
+                  "name": "LOOM_CALLBACK_URL",
+                  "value": "https://kwsa-backend-test-hvz5ax66zq-bq.a.run.app/api/loom/auth/callback"
+                },
+                {
+                  "name": "LOOM_INTEGRATION_EMAIL",
+                  "value": "integration@kwsa.co.za"
+                },
+                {
+                  "name": "LOOM_CLIENT_IDENTIFIER",
+                  "value": "4B4FBC24-4EB3-4FA8-ACFA-5FD6001D1EAE"
+                },
+                {
+                  "name": "DATABASE_URL",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "kwsa-backend-test-db-url"
+                    }
+                  }
+                },
+                {
+                  "name": "PROPERTY24_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "PROPERTY24_API_KEY"
+                    }
+                  }
+                },
+                {
+                  "name": "PRIVATE_PROPERTY_USERNAME",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "PRIVATE_PROPERTY_USERNAME"
+                    }
+                  }
+                },
+                {
+                  "name": "PRIVATE_PROPERTY_PASSWORD",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "PRIVATE_PROPERTY_PASSWORD"
+                    }
+                  }
+                },
+                {
+                  "name": "PRIVATE_PROPERTY_PASSWORD_ALT",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "PRIVATE_PROPERTY_PASSWORD_ALT"
+                    }
+                  }
+                },
+                {
+                  "name": "PRIVATE_PROPERTY_BRANCH_GUID",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "PRIVATE_PROPERTY_BRANCH_GUID"
+                    }
+                  }
+                },
+                {
+                  "name": "KWW_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "KWW_API_KEY"
+                    }
+                  }
+                },
+                {
+                  "name": "KWW_API_SECRET",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "KWW_API_SECRET"
+                    }
+                  }
+                },
+                {
+                  "name": "ENTEGRAL_GLOBAL_AUTH",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "ENTEGRAL_GLOBAL_AUTH"
+                    }
+                  }
+                },
+                {
+                  "name": "OPENAI_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "OPENAI_API_KEY"
+                    }
+                  }
+                },
+                {
+                  "name": "LOOM_CLIENT_SECRET",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "LOOM_CLIENT_SECRET"
+                    }
+                  }
+                },
+                {
+                  "name": "LOOM_TOKEN_ENCRYPTION_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "LOOM_TOKEN_ENCRYPTION_KEY"
+                    }
+                  }
+                }
+              ],
+              "image": "africa-south1-docker.pkg.dev/kwsa-mapp/cloud-run-source-deploy/kwsa-backend-test@sha256:af78f2206f27176dd31f1d1bfc66f12052516fa382fdbfb5ce1dc207fdcae142",
+              "name": "kwsa-backend-test-1",
+              "ports": [
+                {
+                  "containerPort": 8080,
+                  "name": "http1"
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "cpu": "1000m",
+                  "memory": "512Mi"
+                }
+              },
+              "startupProbe": {
+                "failureThreshold": 1,
+                "periodSeconds": 240,
+                "tcpSocket": {
+                  "port": 8080
+                },
+                "timeoutSeconds": 240
+              }
+            }
+          ],
+          "serviceAccountName": "768625368107-compute@developer.gserviceaccount.com",
+          "timeoutSeconds": 300
+        }
+      },
+      "traffic": [
+        {
+          "latestRevision": true,
+          "percent": 100
+        }
+      ]
+    },
+    "status": {
+      "address": {
+        "url": "https://kwsa-backend-test-hvz5ax66zq-bq.a.run.app"
+      },
+      "conditions": [
+        {
+          "lastTransitionTime": "2026-05-13T12:18:32.478037Z",
+          "status": "True",
+          "type": "Ready"
+        },
+        {
+          "lastTransitionTime": "2026-05-13T12:18:31.236393Z",
+          "status": "True",
+          "type": "ConfigurationsReady"
+        },
+        {
+          "lastTransitionTime": "2026-05-13T12:18:32.446264Z",
+          "status": "True",
+          "type": "RoutesReady"
+        }
+      ],
+      "latestCreatedRevisionName": "kwsa-backend-test-00061-jrz",
+      "latestReadyRevisionName": "kwsa-backend-test-00061-jrz",
+      "observedGeneration": 61,
+      "traffic": [
+        {
+          "latestRevision": true,
+          "percent": 100,
+          "revisionName": "kwsa-backend-test-00061-jrz"
+        }
+      ],
+      "url": "https://kwsa-backend-test-hvz5ax66zq-bq.a.run.app"
+    }
+  },
+  {
+    "apiVersion": "serving.knative.dev/v1",
+    "kind": "Service",
+    "metadata": {
+      "annotations": {
+        "run.googleapis.com/build-base-image": "africa-south1-docker.pkg.dev/serverless-runtimes/google-24/run/universal:public-image-next",
+        "run.googleapis.com/build-enable-automatic-updates": "false",
+        "run.googleapis.com/build-environment-variables": "{\"VITE_API_BASE_URL\":\"https://kwsa-backend-test-hvz5ax66zq-bq.a.run.app\"}",
+        "run.googleapis.com/build-id": "bf301c94-76ae-4928-a5d5-addd1eb76ddf",
+        "run.googleapis.com/build-image-uri": "africa-south1-docker.pkg.dev/kwsa-mapp/cloud-run-source-deploy/kwsa-frontend-test",
+        "run.googleapis.com/build-name": "projects/768625368107/locations/africa-south1/builds/bf301c94-76ae-4928-a5d5-addd1eb76ddf",
+        "run.googleapis.com/build-source-location": "gs://run-sources-kwsa-mapp-africa-south1/services/kwsa-frontend-test/1778326858.133966-25c7cb1746a344778d56979fe6de68bb.zip#1778326859495995",
+        "run.googleapis.com/client-name": "gcloud",
+        "run.googleapis.com/client-version": "566.0.0",
+        "run.googleapis.com/ingress": "all",
+        "run.googleapis.com/ingress-status": "all",
+        "run.googleapis.com/maxScale": "3",
+        "run.googleapis.com/operation-id": "eda4f408-38a4-4b99-afc4-9fe1a4a1c9cd",
+        "run.googleapis.com/urls": "[\"https://kwsa-frontend-test-768625368107.africa-south1.run.app\",\"https://kwsa-frontend-test-hvz5ax66zq-bq.a.run.app\"]",
+        "serving.knative.dev/creator": "kwsamapp@gmail.com",
+        "serving.knative.dev/lastModifier": "kwsamapp@gmail.com"
+      },
+      "creationTimestamp": "2026-04-23T16:12:29.217150Z",
+      "generation": 15,
+      "labels": {
+        "cloud.googleapis.com/location": "africa-south1",
+        "run.googleapis.com/satisfiesPzs": "true"
+      },
+      "name": "kwsa-frontend-test",
+      "namespace": "768625368107",
+      "resourceVersion": "AAZRYpczxyY",
+      "selfLink": "/apis/serving.knative.dev/v1/namespaces/768625368107/services/kwsa-frontend-test",
+      "uid": "263022a2-1db8-456e-87b6-765fd5556f62"
+    },
+    "spec": {
+      "template": {
+        "metadata": {
+          "annotations": {
+            "autoscaling.knative.dev/maxScale": "3",
+            "run.googleapis.com/client-name": "gcloud",
+            "run.googleapis.com/client-version": "566.0.0",
+            "run.googleapis.com/startup-cpu-boost": "true"
+          },
+          "labels": {
+            "client.knative.dev/nonce": "pzsplawhft",
+            "run.googleapis.com/startupProbeType": "Default"
+          }
+        },
+        "spec": {
+          "containerConcurrency": 80,
+          "containers": [
+            {
+              "image": "africa-south1-docker.pkg.dev/kwsa-mapp/cloud-run-source-deploy/kwsa-frontend-test@sha256:e083b2e6eb39a1e7092f08adae21091288a49a588afc9550111577976279e178",
+              "ports": [
+                {
+                  "containerPort": 3000,
+                  "name": "http1"
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "cpu": "1000m",
+                  "memory": "512Mi"
+                }
+              },
+              "startupProbe": {
+                "failureThreshold": 1,
+                "periodSeconds": 240,
+                "tcpSocket": {
+                  "port": 3000
+                },
+                "timeoutSeconds": 240
+              }
+            }
+          ],
+          "serviceAccountName": "768625368107-compute@developer.gserviceaccount.com",
+          "timeoutSeconds": 300
+        }
+      },
+      "traffic": [
+        {
+          "latestRevision": true,
+          "percent": 100
+        }
+      ]
+    },
+    "status": {
+      "address": {
+        "url": "https://kwsa-frontend-test-hvz5ax66zq-bq.a.run.app"
+      },
+      "conditions": [
+        {
+          "lastTransitionTime": "2026-05-09T11:42:01.897078Z",
+          "message": "The user-provided container failed to start and listen on the port defined provided by the PORT=3000 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.\n\nLogs URL: https://console.cloud.google.com/logs/viewer?project=kwsa-mapp&resource=cloud_run_revision/service_name/kwsa-frontend-test/revision_name/kwsa-frontend-test-00015-mg8&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22kwsa-frontend-test%22%0Aresource.labels.revision_name%3D%22kwsa-frontend-test-00015-mg8%22 \nFor more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start",
+          "reason": "HealthCheckContainerError",
+          "status": "False",
+          "type": "Ready"
+        },
+        {
+          "lastTransitionTime": "2026-05-09T13:35:45.627399Z",
+          "message": "The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.\n\nLogs URL: https://console.cloud.google.com/logs/viewer?project=kwsa-mapp&resource=cloud_run_revision/service_name/kwsa-frontend-test/revision_name/kwsa-frontend-test-00014-k94&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22kwsa-frontend-test%22%0Aresource.labels.revision_name%3D%22kwsa-frontend-test-00014-k94%22 \nFor more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start",
+          "reason": "Retired",
+          "status": "True",
+          "type": "ConfigurationsReady"
+        },
+        {
+          "lastTransitionTime": "2026-05-09T11:42:01.897078Z",
+          "message": "The user-provided container failed to start and listen on the port defined provided by the PORT=3000 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.\n\nLogs URL: https://console.cloud.google.com/logs/viewer?project=kwsa-mapp&resource=cloud_run_revision/service_name/kwsa-frontend-test/revision_name/kwsa-frontend-test-00015-mg8&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22kwsa-frontend-test%22%0Aresource.labels.revision_name%3D%22kwsa-frontend-test-00015-mg8%22 \nFor more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start",
+          "reason": "HealthCheckContainerError",
+          "status": "False",
+          "type": "RoutesReady"
+        }
+      ],
+      "latestCreatedRevisionName": "kwsa-frontend-test-00015-mg8",
+      "latestReadyRevisionName": "kwsa-frontend-test-00010-8kn",
+      "observedGeneration": 15,
+      "traffic": [
+        {
+          "latestRevision": true,
+          "percent": 100,
+          "revisionName": "kwsa-frontend-test-00010-8kn"
+        }
+      ],
+      "url": "https://kwsa-frontend-test-hvz5ax66zq-bq.a.run.app"
+    }
+  },
+  {
+    "apiVersion": "serving.knative.dev/v1",
+    "kind": "Service",
+    "metadata": {
+      "annotations": {
+        "run.googleapis.com/client-name": "gcloud",
+        "run.googleapis.com/client-version": "566.0.0",
+        "run.googleapis.com/ingress": "all",
+        "run.googleapis.com/ingress-status": "all",
+        "run.googleapis.com/maxScale": "5",
+        "run.googleapis.com/operation-id": "c8609f2f-6d99-438c-b384-e1197fe0d820",
+        "run.googleapis.com/urls": "[\"https://kwsa-public-api-uat-768625368107.africa-south1.run.app\",\"https://kwsa-public-api-uat-hvz5ax66zq-bq.a.run.app\"]",
+        "serving.knative.dev/creator": "kwsamapp@gmail.com",
+        "serving.knative.dev/lastModifier": "kwsamapp@gmail.com"
+      },
+      "creationTimestamp": "2026-05-09T11:05:34.935416Z",
+      "generation": 5,
+      "labels": {
+        "cloud.googleapis.com/location": "africa-south1",
+        "run.googleapis.com/satisfiesPzs": "true"
+      },
+      "name": "kwsa-public-api-uat",
+      "namespace": "768625368107",
+      "resourceVersion": "AAZRYM1Y4Es",
+      "selfLink": "/apis/serving.knative.dev/v1/namespaces/768625368107/services/kwsa-public-api-uat",
+      "uid": "29c8cd94-b053-4e10-8add-e612b8d66ae6"
+    },
+    "spec": {
+      "template": {
+        "metadata": {
+          "annotations": {
+            "autoscaling.knative.dev/maxScale": "5",
+            "run.googleapis.com/client-name": "gcloud",
+            "run.googleapis.com/client-version": "566.0.0",
+            "run.googleapis.com/startup-cpu-boost": "true"
+          },
+          "labels": {
+            "client.knative.dev/nonce": "hxttkeyfqu",
+            "run.googleapis.com/startupProbeType": "Default"
+          }
+        },
+        "spec": {
+          "containerConcurrency": 80,
+          "containers": [
+            {
+              "args": [
+                "tsx",
+                "apps/api/src/server.ts"
+              ],
+              "command": [
+                "npx"
+              ],
+              "env": [
+                {
+                  "name": "NODE_ENV",
+                  "value": "production"
+                },
+                {
+                  "name": "CORS_ORIGIN",
+                  "value": "https://uat.kwhomes.co.za"
+                },
+                {
+                  "name": "PUBLIC_API_BASE_URL",
+                  "value": "https://kwsa-public-api-uat-768625368107.africa-south1.run.app"
+                },
+                {
+                  "name": "DATABASE_URL",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "latest",
+                      "name": "kwsa-public-api-db-url"
+                    }
+                  }
+                }
+              ],
+              "image": "africa-south1-docker.pkg.dev/kwsa-mapp/cloud-run-source-deploy/kwsa-public-api-uat:20260509-112202",
+              "ports": [
+                {
+                  "containerPort": 4000,
+                  "name": "http1"
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "cpu": "1000m",
+                  "memory": "512Mi"
+                }
+              },
+              "startupProbe": {
+                "failureThreshold": 1,
+                "periodSeconds": 240,
+                "tcpSocket": {
+                  "port": 4000
+                },
+                "timeoutSeconds": 240
+              }
+            }
+          ],
+          "serviceAccountName": "768625368107-compute@developer.gserviceaccount.com",
+          "timeoutSeconds": 300
+        }
+      },
+      "traffic": [
+        {
+          "latestRevision": true,
+          "percent": 100
+        }
+      ]
+    },
+    "status": {
+      "address": {
+        "url": "https://kwsa-public-api-uat-hvz5ax66zq-bq.a.run.app"
+      },
+      "conditions": [
+        {
+          "lastTransitionTime": "2026-05-09T11:27:44.128075Z",
+          "status": "True",
+          "type": "Ready"
+        },
+        {
+          "lastTransitionTime": "2026-05-09T11:27:35.476357Z",
+          "status": "True",
+          "type": "ConfigurationsReady"
+        },
+        {
+          "lastTransitionTime": "2026-05-09T11:27:44.096968Z",
+          "status": "True",
+          "type": "RoutesReady"
+        }
+      ],
+      "latestCreatedRevisionName": "kwsa-public-api-uat-00005-2r5",
+      "latestReadyRevisionName": "kwsa-public-api-uat-00005-2r5",
+      "observedGeneration": 5,
+      "traffic": [
+        {
+          "latestRevision": true,
+          "percent": 100,
+          "revisionName": "kwsa-public-api-uat-00005-2r5"
+        }
+      ],
+      "url": "https://kwsa-public-api-uat-hvz5ax66zq-bq.a.run.app"
+    }
+  },
+  {
+    "apiVersion": "serving.knative.dev/v1",
+    "kind": "Service",
+    "metadata": {
+      "annotations": {
+        "run.googleapis.com/client-name": "gcloud",
+        "run.googleapis.com/client-version": "565.0.0",
+        "run.googleapis.com/ingress": "all",
+        "run.googleapis.com/ingress-status": "all",
+        "run.googleapis.com/maxScale": "3",
+        "run.googleapis.com/operation-id": "8bef6c9e-4386-4eed-a8c2-8ae6e5924e46",
+        "run.googleapis.com/urls": "[\"https://kwsa-smoketest-768625368107.africa-south1.run.app\",\"https://kwsa-smoketest-hvz5ax66zq-bq.a.run.app\"]",
+        "serving.knative.dev/creator": "kwsamapp@gmail.com",
+        "serving.knative.dev/lastModifier": "kwsamapp@gmail.com"
+      },
+      "creationTimestamp": "2026-04-23T14:02:54.972897Z",
+      "generation": 1,
+      "labels": {
+        "cloud.googleapis.com/location": "africa-south1",
+        "run.googleapis.com/satisfiesPzs": "true"
+      },
+      "name": "kwsa-smoketest",
+      "namespace": "768625368107",
+      "resourceVersion": "AAZQIRs944I",
+      "selfLink": "/apis/serving.knative.dev/v1/namespaces/768625368107/services/kwsa-smoketest",
+      "uid": "c8570e2f-a35f-43d6-8df7-955df82d6567"
+    },
+    "spec": {
+      "template": {
+        "metadata": {
+          "annotations": {
+            "run.googleapis.com/client-name": "gcloud",
+            "run.googleapis.com/client-version": "565.0.0",
+            "run.googleapis.com/startup-cpu-boost": "true"
+          },
+          "labels": {
+            "client.knative.dev/nonce": "jsmmnxzacc",
+            "run.googleapis.com/startupProbeType": "Default"
+          }
+        },
+        "spec": {
+          "containerConcurrency": 80,
+          "containers": [
+            {
+              "image": "us-docker.pkg.dev/cloudrun/container/hello",
+              "ports": [
+                {
+                  "containerPort": 8080,
+                  "name": "http1"
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "cpu": "1000m",
+                  "memory": "512Mi"
+                }
+              },
+              "startupProbe": {
+                "failureThreshold": 1,
+                "periodSeconds": 240,
+                "tcpSocket": {
+                  "port": 8080
+                },
+                "timeoutSeconds": 240
+              }
+            }
+          ],
+          "serviceAccountName": "768625368107-compute@developer.gserviceaccount.com",
+          "timeoutSeconds": 300
+        }
+      },
+      "traffic": [
+        {
+          "latestRevision": true,
+          "percent": 100
+        }
+      ]
+    },
+    "status": {
+      "address": {
+        "url": "https://kwsa-smoketest-hvz5ax66zq-bq.a.run.app"
+      },
+      "conditions": [
+        {
+          "lastTransitionTime": "2026-04-23T14:03:01.447554Z",
+          "status": "True",
+          "type": "Ready"
+        },
+        {
+          "lastTransitionTime": "2026-04-23T14:02:56.820277Z",
+          "status": "True",
+          "type": "ConfigurationsReady"
+        },
+        {
+          "lastTransitionTime": "2026-04-23T14:03:01.411778Z",
+          "status": "True",
+          "type": "RoutesReady"
+        }
+      ],
+      "latestCreatedRevisionName": "kwsa-smoketest-00001-bb9",
+      "latestReadyRevisionName": "kwsa-smoketest-00001-bb9",
+      "observedGeneration": 1,
+      "traffic": [
+        {
+          "latestRevision": true,
+          "percent": 100,
+          "revisionName": "kwsa-smoketest-00001-bb9"
+        }
+      ],
+      "url": "https://kwsa-smoketest-hvz5ax66zq-bq.a.run.app"
+    }
+  }
+]

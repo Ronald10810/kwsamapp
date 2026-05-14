@@ -1,0 +1,52 @@
+﻿[
+  {
+    "charset": "UTF8",
+    "collation": "en_US.UTF8",
+    "etag": "1e9884d706945b8c37fc09467948c1f3649fba7dbf0b99d8cc81afdaf657b1e6",
+    "instance": "kwsa-postgres",
+    "kind": "sql#database",
+    "name": "postgres",
+    "project": "kwsa-mapp",
+    "selfLink": "https://sqladmin.googleapis.com/sql/v1beta4/projects/kwsa-mapp/instances/kwsa-postgres/databases/postgres"
+  },
+  {
+    "charset": "UTF8",
+    "collation": "en_US.UTF8",
+    "etag": "7c3e6fe0fcca276aa0dfaacc609e6b86f2ad24c27065c40c36efe9191f8c06d6",
+    "instance": "kwsa-postgres",
+    "kind": "sql#database",
+    "name": "kwsa",
+    "project": "kwsa-mapp",
+    "selfLink": "https://sqladmin.googleapis.com/sql/v1beta4/projects/kwsa-mapp/instances/kwsa-postgres/databases/kwsa"
+  },
+  {
+    "charset": "UTF8",
+    "collation": "en_US.UTF8",
+    "etag": "d4c35f4c14e8459af5ad1baa796cebc9243fe9be0ba3d813199068ea1ba39b1b",
+    "instance": "kwsa-postgres",
+    "kind": "sql#database",
+    "name": "kwsa_parallel",
+    "project": "kwsa-mapp",
+    "selfLink": "https://sqladmin.googleapis.com/sql/v1beta4/projects/kwsa-mapp/instances/kwsa-postgres/databases/kwsa_parallel"
+  },
+  {
+    "charset": "UTF8",
+    "collation": "en_US.UTF8",
+    "etag": "6e539f1f2a3dcc96be8d232f1da41a8e37528034d044eb54e9c8b30d8dc3bde3",
+    "instance": "kwsa-postgres",
+    "kind": "sql#database",
+    "name": "kwsa_uat",
+    "project": "kwsa-mapp",
+    "selfLink": "https://sqladmin.googleapis.com/sql/v1beta4/projects/kwsa-mapp/instances/kwsa-postgres/databases/kwsa_uat"
+  },
+  {
+    "charset": "UTF8",
+    "collation": "en_US.UTF8",
+    "etag": "61dfb7833cbd219080c267c61b1c93d741ee51969b5b400a19d5af98d30bc61c",
+    "instance": "kwsa-postgres",
+    "kind": "sql#database",
+    "name": "kwsa_public",
+    "project": "kwsa-mapp",
+    "selfLink": "https://sqladmin.googleapis.com/sql/v1beta4/projects/kwsa-mapp/instances/kwsa-postgres/databases/kwsa_public"
+  }
+]
