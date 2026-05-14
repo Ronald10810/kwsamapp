@@ -59,9 +59,12 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 6. Promote validated dataset to kwsa_prod.
 7. Switch production DATABASE_URL only after explicit approval and checklist pass.
 
-## 6) Pre-Change Evidence Folder
-- docs/migration-runs/2026-05-13-run-001/
-  - postgres-metadata.json (current kwsa metadata snapshot)
+## 6) Pre-Change Evidence Folders
+- docs/migration-runs/2026-05-13-run-001/ — Initial inspection (postgres-metadata.json)
+- docs/migration-runs/2026-05-14-run-002/ — Approval 2: Backup/snapshot/schema exports (7661164)
+- docs/migration-runs/2026-05-14-run-003/ — Approval 3: kwsa_prod creation (54ae20e)
+- docs/migration-runs/2026-05-14-run-004/ — Approval 4: Pre-import baseline + metadata (6694df0, 05eb56e)
+- docs/migration-runs/2026-05-14-run-005/ — Approval 5: Azure import mapping & dry-run plan
 
 ## 7) Risks
 - Working tree is not clean; accidental deploy of uncommitted changes is possible.

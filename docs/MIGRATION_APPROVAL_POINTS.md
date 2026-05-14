@@ -27,10 +27,27 @@ Completed 2026-05-14:
 - Exported schema/row-count/index/constraint/FK/extension evidence for in-scope DBs.
 - No Azure import run, no data copy, no env or secret change.
 
-## Approval 5: Validation fixes allowed
-Required evidence:
-- Validation report with row/count/relationship diffs.
-- List of required transformations/defaults.
+## Approval 5: Azure import mapping, dry-run preparation, and execution plan only
+Completed: 2026-05-14
+Evidence file: docs/migration-runs/2026-05-14-run-005/AZURE_IMPORT_MAPPING_AND_DRY_RUN_PLAN.md
+
+Deliverables:
+- Azure source database details (masked secrets)
+- Current import/export scripts inventory
+- Schema mapping logic documented
+- Validation scripts identified
+- Azure source tables listed (~50 tables)
+- PostgreSQL target tables listed and impact assessed
+- Data operation types identified (INSERT ON CONFLICT DO NOTHING/UPDATE = UPSERT)
+- MAPP 2.0-only tables and columns identified and preservation plan documented
+- Risky tables flagged (listing_images ~2.6M rows, transaction_associate_payment_details, listing_documents)
+- First import target recommended: kwsa_uat (non-destructive, with Approval 4 rollback available)
+- Staging database recommendation: NO (use existing kwsa_uat)
+- Exact dry-run command plan provided (market_centers_raw sample)
+- Exact full import command sequence provided (5 command blocks)
+- Post-import validation queries provided (11 validation sets)
+- Rollback plan documented using Backup ID 1778765132025 (3 rollback levels)
+- Next approval step recommended: Approval 6 (kwsa_prod preparation)
 
 ## Approval 6: kwsa_prod preparation from validated kwsa_uat allowed
 Required evidence:

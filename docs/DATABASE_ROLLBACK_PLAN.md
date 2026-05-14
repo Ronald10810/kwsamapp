@@ -21,7 +21,10 @@ Status: Planned rollback only.
 - Snapshot of MAPP 2.0-only tables and fields
 
 ## Artifact Location
-- docs/migration-runs/YYYY-MM-DD-run-XXX/
+- docs/migration-runs/2026-05-14-run-002/ — Approval 2 backups/snapshots/schema exports
+- docs/migration-runs/2026-05-14-run-003/ — Approval 3 kwsa_prod creation evidence
+- docs/migration-runs/2026-05-14-run-004/ — Approval 4 pre-import baseline backup (ID: 1778765132025) + metadata
+- docs/migration-runs/2026-05-14-run-005/ — Approval 5 azure import mapping & dry-run plan
 - Latest baseline evidence: docs/migration-runs/2026-05-14-run-004/
 - Cloud SQL on-demand backup id: 1778765132025 (SUCCESSFUL)
 

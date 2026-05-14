@@ -73,10 +73,10 @@ Legend:
 
 ## Approval Gates
 - [x] Approval 1: Inspection docs complete
-- [x] Approval 2: Backups/snapshots/schema exports may be created
-- [x] Approval 3: kwsa_uat and kwsa_prod may be created/prepared
-- [x] Approval 4: Pre-import baseline backup/export complete (no Azure import run)
-- [ ] Approval 5: Validation fixes may be applied
+- [x] Approval 2: Backups/snapshots/schema exports completed (2026-05-14, hash 7661164)
+- [x] Approval 3: kwsa_uat and kwsa_prod created (2026-05-14, hash 54ae20e)
+- [x] Approval 4: Pre-import baseline backup/export complete (2026-05-14, backup ID 1778765132025, hash 05eb56e)
+- [x] Approval 5: Azure import mapping & dry-run plan complete (2026-05-14, docs/migration-runs/2026-05-14-run-005/)
 - [ ] Approval 6: kwsa_prod may be prepared from validated kwsa_uat
 - [ ] Approval 7: Asset migration dry-run may run
 - [ ] Approval 8: Asset migration batch run 1 may run
