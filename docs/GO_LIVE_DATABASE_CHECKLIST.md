@@ -21,7 +21,7 @@ Legend:
 - [ ] Schema comparison complete
 - [ ] Azure export/import plan complete
 - [ ] kwsa_uat created or confirmed for final cutover baseline
-- [ ] kwsa_prod created or confirmed
+- [x] kwsa_prod created or confirmed (2026-05-14, empty, no data imported)
 - [x] MAPP 2.0 custom tables identified (initial)
 - [x] MAPP 2.0 custom fields identified (initial)
 - [ ] Azure to PostgreSQL mapping approved

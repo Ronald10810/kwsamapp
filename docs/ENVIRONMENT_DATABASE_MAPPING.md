@@ -29,10 +29,11 @@ Status: Planning only; no environment variable changes applied.
 - frontend/.env.staging -> VITE_API_BASE_URL points to kwsa-backend-test service URL
 - frontend/.env and .env.local use local proxy target (localhost backend)
 
+
 ## Target Mapping (Required)
 - Local development -> kwsa_uat
 - UAT -> kwsa_uat
-- Production -> kwsa_prod
+- Production -> kwsa_prod (kwsa_prod created 2026-05-14, not yet mapped)
 
 ## Environment Variables Involved (Masked)
 - Backend:

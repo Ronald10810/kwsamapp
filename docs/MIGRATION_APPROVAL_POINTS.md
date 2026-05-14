@@ -13,10 +13,12 @@ Required evidence:
 - Backup runbook approved.
 - Target backup folder pattern approved.
 
+
 ## Approval 3: kwsa_uat and kwsa_prod creation/confirmation allowed
-Required evidence:
-- Confirm existing DBs and owners.
-- Confirm no destructive changes required.
+Completed 2026-05-14:
+- Confirmed existing DBs and owners.
+- Confirmed no destructive changes required.
+- Created empty kwsa_prod database (no import, no overwrite, no env/secret change).
 
 ## Approval 4: Azure import into staging or kwsa_uat allowed
 Required evidence:

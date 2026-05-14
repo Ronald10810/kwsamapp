@@ -9,9 +9,10 @@ Status: Planned rollback only.
 - Critical UI/API regressions.
 - Asset URL resolution failures above tolerance.
 
+
 ## Required Pre-change Artifacts (must exist before import/cutover)
 - Backup of current UAT DB
-- Backup of current prod DB
+- Backup of current prod DB (kwsa_prod created 2026-05-14, empty)
 - Backup of any active migration DB
 - Schema export per DB
 - Row counts per table per DB

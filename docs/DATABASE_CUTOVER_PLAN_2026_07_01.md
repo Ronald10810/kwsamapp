@@ -32,13 +32,14 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 - Exact database name used by Cloud Run test secret kwsa-backend-test-db-url (secret value access failed).
 - Live Azure SQL table/column inventory from sys.tables/sys.columns (not executed; credentials/approval pending).
 
+
 ## 3) Target State (Go-live)
 - Local development -> kwsa_uat
 - UAT -> kwsa_uat
 - Production (kwmapp.co.za) -> kwsa_prod
 - Final long-term DBs:
   - kwsa_uat
-  - kwsa_prod
+  - kwsa_prod (created 2026-05-14, empty, no data imported)
 
 ## 4) Non-Negotiable Constraints
 - No production deployment changes in this phase.
@@ -48,6 +49,7 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 - No bucket deletion/change in this phase.
 
 ## 5) Cutover Strategy (Planned)
+* [2026-05-14] kwsa_prod database created (empty, no import yet, Approval 3 complete)
 1. Snapshot and export all involved Cloud SQL databases (schema + data backup + row-count baselines).
 2. Generate Azure vs PostgreSQL schema diff report.
 3. Run Azure export into staging/import tables.
