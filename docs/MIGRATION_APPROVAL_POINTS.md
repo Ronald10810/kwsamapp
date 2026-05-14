@@ -20,11 +20,12 @@ Completed 2026-05-14:
 - Confirmed no destructive changes required.
 - Created empty kwsa_prod database (no import, no overwrite, no env/secret change).
 
-## Approval 4: Azure import into staging or kwsa_uat allowed
-Required evidence:
-- Schema comparison approved.
-- Mapping rules approved.
-- MAPP 2.0 preservation plan approved.
+## Approval 4: Pre-import backup/export baseline only
+Completed 2026-05-14:
+- Confirmed target DB set includes kwsa, kwsa_uat, kwsa_prod, kwsa_public, kwsa_parallel, postgres.
+- Created Cloud SQL on-demand backup for kwsa-postgres (id 1778765132025, SUCCESSFUL).
+- Exported schema/row-count/index/constraint/FK/extension evidence for in-scope DBs.
+- No Azure import run, no data copy, no env or secret change.
 
 ## Approval 5: Validation fixes allowed
 Required evidence:

@@ -1,0 +1,3 @@
+gcloud sql backups list --instance=kwsa-postgres --format=json
+Observed output before create:
+[]

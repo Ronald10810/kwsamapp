@@ -1,0 +1,159 @@
+﻿[
+  {
+    "creation_time": "2026-04-24T09:24:35+0000",
+    "default_storage_class": "STANDARD",
+    "generation": 1777022675284629644,
+    "location": "AFRICA-SOUTH1",
+    "location_type": "region",
+    "metageneration": 3,
+    "name": "kwsa-mapp-uploads",
+    "public_access_prevention": "inherited",
+    "satisfies_pzs": true,
+    "soft_delete_policy": {
+      "effectiveTime": "2026-04-24T09:24:35.511000+00:00",
+      "retentionDurationSeconds": "604800"
+    },
+    "storage_url": "gs://kwsa-mapp-uploads/",
+    "uniform_bucket_level_access": true,
+    "update_time": "2026-04-24T09:36:17+0000"
+  },
+  {
+    "acl": [
+      {
+        "entity": "project-editors-768625368107",
+        "projectTeam": {
+          "projectNumber": "768625368107",
+          "team": "editors"
+        },
+        "role": "OWNER"
+      },
+      {
+        "entity": "project-owners-768625368107",
+        "projectTeam": {
+          "projectNumber": "768625368107",
+          "team": "owners"
+        },
+        "role": "OWNER"
+      },
+      {
+        "entity": "project-viewers-768625368107",
+        "projectTeam": {
+          "projectNumber": "768625368107",
+          "team": "viewers"
+        },
+        "role": "READER"
+      }
+    ],
+    "creation_time": "2026-04-23T14:07:58+0000",
+    "default_acl": [
+      {
+        "entity": "project-owners-768625368107",
+        "projectTeam": {
+          "projectNumber": "768625368107",
+          "team": "owners"
+        },
+        "role": "OWNER"
+      },
+      {
+        "entity": "project-editors-768625368107",
+        "projectTeam": {
+          "projectNumber": "768625368107",
+          "team": "editors"
+        },
+        "role": "OWNER"
+      },
+      {
+        "entity": "project-viewers-768625368107",
+        "projectTeam": {
+          "projectNumber": "768625368107",
+          "team": "viewers"
+        },
+        "role": "READER"
+      }
+    ],
+    "default_storage_class": "STANDARD",
+    "generation": 1776953278033235540,
+    "location": "US",
+    "location_type": "multi-region",
+    "metageneration": 2,
+    "name": "kwsa-mapp_cloudbuild",
+    "public_access_prevention": "inherited",
+    "rpo": "DEFAULT",
+    "soft_delete_policy": {
+      "effectiveTime": "2026-04-23T14:07:58.391000+00:00",
+      "retentionDurationSeconds": "604800"
+    },
+    "storage_url": "gs://kwsa-mapp_cloudbuild/",
+    "uniform_bucket_level_access": false,
+    "update_time": "2026-04-24T08:17:04+0000"
+  },
+  {
+    "cors_config": [
+      {
+        "method": [
+          "GET"
+        ],
+        "origin": [
+          "https://*.cloud.google.com",
+          "https://*.corp.google.com",
+          "https://*.corp.google.com:*",
+          "https://*.cloud.google",
+          "https://*.byoid.goog"
+        ]
+      }
+    ],
+    "creation_time": "2026-04-23T13:51:19+0000",
+    "default_storage_class": "STANDARD",
+    "generation": 1776952279060812394,
+    "labels": {
+      "used-by": "cloudrun"
+    },
+    "location": "AFRICA-SOUTH1",
+    "location_type": "region",
+    "metageneration": 1,
+    "name": "run-sources-kwsa-mapp-africa-south1",
+    "public_access_prevention": "inherited",
+    "satisfies_pzs": true,
+    "soft_delete_policy": {
+      "effectiveTime": "2026-04-23T13:51:19.228000+00:00",
+      "retentionDurationSeconds": "604800"
+    },
+    "storage_url": "gs://run-sources-kwsa-mapp-africa-south1/",
+    "uniform_bucket_level_access": true,
+    "update_time": "2026-04-23T13:51:19+0000"
+  },
+  {
+    "cors_config": [
+      {
+        "method": [
+          "GET"
+        ],
+        "origin": [
+          "https://*.cloud.google.com",
+          "https://*.corp.google.com",
+          "https://*.corp.google.com:*",
+          "https://*.cloud.google",
+          "https://*.byoid.goog"
+        ]
+      }
+    ],
+    "creation_time": "2026-04-28T20:02:56+0000",
+    "default_storage_class": "STANDARD",
+    "generation": 1777406576665203190,
+    "labels": {
+      "used-by": "cloudrun"
+    },
+    "location": "US-CENTRAL1",
+    "location_type": "region",
+    "metageneration": 1,
+    "name": "run-sources-kwsa-mapp-us-central1",
+    "public_access_prevention": "inherited",
+    "soft_delete_policy": {
+      "effectiveTime": "2026-04-28T20:02:56.752000+00:00",
+      "retentionDurationSeconds": "604800"
+    },
+    "storage_url": "gs://run-sources-kwsa-mapp-us-central1/",
+    "uniform_bucket_level_access": true,
+    "update_time": "2026-04-28T20:02:56+0000"
+  }
+]

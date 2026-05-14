@@ -1,0 +1,6 @@
+gcloud sql backups create --instance=kwsa-postgres
+Output summary:
+Backing up Cloud SQL instance...done.
+Backup created successfully.
+Backup id verified from list: 1778765132025
+Status: SUCCESSFUL

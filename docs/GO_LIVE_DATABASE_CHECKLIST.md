@@ -17,10 +17,10 @@ Legend:
 
 ## Planning and Analysis
 - [x] Inspection documents complete
-- [ ] Pre-import backup complete
+- [x] Pre-import backup complete (2026-05-14 run-004; Cloud SQL on-demand backup + schema/metadata exports)
 - [ ] Schema comparison complete
 - [ ] Azure export/import plan complete
-- [ ] kwsa_uat created or confirmed for final cutover baseline
+- [x] kwsa_uat created or confirmed for final cutover baseline
 - [x] kwsa_prod created or confirmed (2026-05-14, empty, no data imported)
 - [x] MAPP 2.0 custom tables identified (initial)
 - [x] MAPP 2.0 custom fields identified (initial)
@@ -73,9 +73,9 @@ Legend:
 
 ## Approval Gates
 - [x] Approval 1: Inspection docs complete
-- [ ] Approval 2: Backups/snapshots/schema exports may be created
-- [ ] Approval 3: kwsa_uat and kwsa_prod may be created/prepared
-- [ ] Approval 4: Latest Azure import may run into staging or kwsa_uat
+- [x] Approval 2: Backups/snapshots/schema exports may be created
+- [x] Approval 3: kwsa_uat and kwsa_prod may be created/prepared
+- [x] Approval 4: Pre-import baseline backup/export complete (no Azure import run)
 - [ ] Approval 5: Validation fixes may be applied
 - [ ] Approval 6: kwsa_prod may be prepared from validated kwsa_uat
 - [ ] Approval 7: Asset migration dry-run may run

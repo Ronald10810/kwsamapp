@@ -22,6 +22,8 @@ Status: Planned rollback only.
 
 ## Artifact Location
 - docs/migration-runs/YYYY-MM-DD-run-XXX/
+- Latest baseline evidence: docs/migration-runs/2026-05-14-run-004/
+- Cloud SQL on-demand backup id: 1778765132025 (SUCCESSFUL)
 
 ## Rollback Levels
 ### Level 1: Configuration rollback

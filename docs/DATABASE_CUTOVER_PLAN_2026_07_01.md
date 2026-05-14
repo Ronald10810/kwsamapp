@@ -50,6 +50,7 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 
 ## 5) Cutover Strategy (Planned)
 * [2026-05-14] kwsa_prod database created (empty, no import yet, Approval 3 complete)
+* [2026-05-14] Pre-import baseline backup/export complete (Approval 4): Cloud SQL backup id 1778765132025 plus run-004 schema/metadata evidence.
 1. Snapshot and export all involved Cloud SQL databases (schema + data backup + row-count baselines).
 2. Generate Azure vs PostgreSQL schema diff report.
 3. Run Azure export into staging/import tables.

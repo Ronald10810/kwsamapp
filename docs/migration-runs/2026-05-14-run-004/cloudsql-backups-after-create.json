@@ -1,0 +1,17 @@
+﻿[
+  {
+    "backupKind": "SNAPSHOT",
+    "databaseVersion": "POSTGRES_18",
+    "endTime": "2026-05-14T13:27:53.864Z",
+    "enqueuedTime": "2026-05-14T13:25:32.025Z",
+    "id": "1778765132025",
+    "instance": "kwsa-postgres",
+    "kind": "sql#backupRun",
+    "location": "eu",
+    "selfLink": "https://sqladmin.googleapis.com/sql/v1beta4/projects/kwsa-mapp/instances/kwsa-postgres/backupRuns/1778765132025",
+    "startTime": "2026-05-14T13:25:32.035Z",
+    "status": "SUCCESSFUL",
+    "type": "ON_DEMAND",
+    "windowStartTime": "2026-05-14T13:25:32.025Z"
+  }
+]
