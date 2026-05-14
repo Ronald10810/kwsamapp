@@ -41,13 +41,46 @@ Deliverables:
 - Data operation types identified (INSERT ON CONFLICT DO NOTHING/UPDATE = UPSERT)
 - MAPP 2.0-only tables and columns identified and preservation plan documented
 - Risky tables flagged (listing_images ~2.6M rows, transaction_associate_payment_details, listing_documents)
-- First import target recommended: kwsa_uat (non-destructive, with Approval 4 rollback available)
-- Staging database recommendation: NO (use existing kwsa_uat)
-- Exact dry-run command plan provided (market_centers_raw sample)
-- Exact full import command sequence provided (5 command blocks)
+- First import target recommended: kwsa_import_staging (NEW SAFETY GATE per Approval 6)
+- Three-stage import flow: kwsa_import_staging → kwsa_uat → kwsa_prod
+- Dry-run command plan provided
+- Full import command sequence provided
 - Post-import validation queries provided (11 validation sets)
-- Rollback plan documented using Backup ID 1778765132025 (3 rollback levels)
-- Next approval step recommended: Approval 6 (kwsa_prod preparation)
+- Rollback plan documented
+
+## Approval 6: Create and prepare dedicated staging database (NEW SAFETY GATE)
+Completed: 2026-05-14
+Evidence file: docs/migration-runs/2026-05-14-run-006/IMPORT_STAGING_DATABASE_REPORT.md
+
+Critical Finding: kwsa_uat is currently LIVE (production, UAT, and public API all point here)
+Safety Decision: Create kwsa_import_staging for safe rehearsal before touching kwsa_uat
+
+Deliverables:
+- GCP project confirmed (kwsa-mapp)
+- Cloud SQL instance confirmed (kwsa-postgres, africa-south1)
+- Database list before creation captured (6 databases)
+- kwsa_import_staging database created (2026-05-14)
+- Database list after creation captured (7 databases)
+- kwsa_import_staging confirmed empty and accessible
+- No Azure import executed (inspection only)
+- No data loaded (preparation only)
+- No existing databases modified
+- No env vars or secrets changed
+- Three-stage import flow documented:
+  - Stage 1: Azure → kwsa_import_staging (isolated rehearsal)
+  - Stage 2: Validated kwsa_import_staging → kwsa_uat (pre-production)
+  - Stage 3: Validated kwsa_uat → kwsa_prod (production)
+- Risks and blockers documented
+- Preparation checklist for Approval 7 provided
+
+## Approval 7: Stage 1 — Execute first Azure import to kwsa_import_staging (NEXT)
+Next approval scope:
+- Export from Azure SQL to CSV files
+- Apply schema to kwsa_import_staging
+- Load staging.* tables from CSV
+- Transform and promote to public.* Prisma tables
+- Run 11 validation query sets
+- Decision: proceed to Stage 2 or retry import
 
 ## Approval 6: kwsa_prod preparation from validated kwsa_uat allowed
 Required evidence:

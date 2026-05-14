@@ -10,12 +10,20 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 - Active GCP project: kwsa-mapp
 - Primary GCP region (backend + Cloud SQL): africa-south1
 - Cloud SQL instance: kwsa-postgres
-- Cloud SQL databases found:
+- Cloud SQL databases found (Pre-Approval 6):
   - postgres
   - kwsa
   - kwsa_parallel
-  - kwsa_uat
+  - kwsa_uat (ACTIVE — prod, UAT, public API point here)
   - kwsa_public
+- Cloud SQL databases after Approval 6 (2026-05-14):
+  - postgres
+  - kwsa
+  - kwsa_import_staging (NEW — staging import target)
+  - kwsa_parallel
+  - kwsa_prod
+  - kwsa_public
+  - kwsa_uat (ACTIVE — unchanged)
 - Cloud Run services discovered:
   - kwsa-backend-prod (africa-south1, Ready=True, Cloud SQL attached)
   - kwsa-backend-test (africa-south1, Ready=True, Cloud SQL attached)
@@ -34,12 +42,15 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 
 
 ## 3) Target State (Go-live)
-- Local development -> kwsa_uat
-- UAT -> kwsa_uat
-- Production (kwmapp.co.za) -> kwsa_prod
+- **CRITICAL FINDING (Approval 2):** kwsa_uat is currently LIVE (production, UAT, and public API all point here)
+- **SAFETY DECISION (Approval 6):** Three-stage import flow to avoid production disruption
+  - Stage 1: Azure → kwsa_import_staging (isolated; safe rehearsal)
+  - Stage 2: Validated kwsa_import_staging → kwsa_uat (pre-production)
+  - Stage 3: Validated kwsa_uat → kwsa_prod (production)
 - Final long-term DBs:
-  - kwsa_uat
-  - kwsa_prod (created 2026-05-14, empty, no data imported)
+  - kwsa_import_staging (staging/rehearsal; optional cleanup after Approval 9)
+  - kwsa_uat (pre-production/backup after cutover)
+  - kwsa_prod (production, final target)
 
 ## 4) Non-Negotiable Constraints
 - No production deployment changes in this phase.
@@ -51,20 +62,40 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 ## 5) Cutover Strategy (Planned)
 * [2026-05-14] kwsa_prod database created (empty, no import yet, Approval 3 complete)
 * [2026-05-14] Pre-import baseline backup/export complete (Approval 4): Cloud SQL backup id 1778765132025 plus run-004 schema/metadata evidence.
-1. Snapshot and export all involved Cloud SQL databases (schema + data backup + row-count baselines).
-2. Generate Azure vs PostgreSQL schema diff report.
-3. Run Azure export into staging/import tables.
-4. Map into current MAPP 2.0 schema (preserve MAPP 2.0-only tables/fields).
-5. Validate counts, relationships, and key UX records in kwsa_uat.
-6. Promote validated dataset to kwsa_prod.
-7. Switch production DATABASE_URL only after explicit approval and checklist pass.
+## 5) Cutover Strategy (Three-Stage with Approval 6 Safety Update)
+
+### Stage 1: Isolated Rehearsal (Approval 7)
+1. Export from Azure SQL to CSV files
+2. Create staging schemas in kwsa_import_staging
+3. Load staging.* tables from CSV (INSERT ON CONFLICT DO NOTHING)
+4. Transform staging.* → migration.core_* (INSERT ON CONFLICT DO UPDATE)
+5. Promote migration.core_* → public.* Prisma tables
+6. Validate: row counts, orphans, duplicates, MAPP 2.0 preservation
+7. Decision: Go to Stage 2 or Fix & Retry
+
+### Stage 2: Pre-Production (Approval 8)
+1. Copy validated kwsa_import_staging schema + data to kwsa_uat OR re-import with same batch ID
+2. Smoke test UAT services (kwsa-backend-test points here)
+3. Validate: login, dashboard, listings, transactions, reports
+4. Decision: Go to Stage 3 or Rollback from Approval 4 backup
+
+### Stage 3: Production Cutover (Approval 9)
+1. Copy validated kwsa_uat schema + data to kwsa_prod OR re-import with same batch ID
+2. Final smoke test (no services point here yet)
+3. Switch production secret DATABASE_URL → kwsa_prod
+4. Verify production services healthy
+5. Monitor for 24-48 hours
+6. Decision: Commit or Rollback via secret revert
 
 ## 6) Pre-Change Evidence Folders
 - docs/migration-runs/2026-05-13-run-001/ — Initial inspection (postgres-metadata.json)
 - docs/migration-runs/2026-05-14-run-002/ — Approval 2: Backup/snapshot/schema exports (7661164)
+  - **Key Finding:** kwsa_uat is LIVE (prod/UAT/public API point here)
 - docs/migration-runs/2026-05-14-run-003/ — Approval 3: kwsa_prod creation (54ae20e)
 - docs/migration-runs/2026-05-14-run-004/ — Approval 4: Pre-import baseline + metadata (6694df0, 05eb56e)
+  - **Backup ID:** 1778765132025 (SUCCESSFUL, can restore kwsa_uat if needed)
 - docs/migration-runs/2026-05-14-run-005/ — Approval 5: Azure import mapping & dry-run plan
+- docs/migration-runs/2026-05-14-run-006/ — Approval 6: kwsa_import_staging database created (26b0ae9)
 
 ## 7) Risks
 - Working tree is not clean; accidental deploy of uncommitted changes is possible.
@@ -78,14 +109,20 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 - Move all secret-bearing values to Secret Manager references only.
 - Add explicit preflight script that blocks non-kwsa_uat local targets.
 
-## 9) Required Manual Approval Gates
-- Approval 1: inspection documents complete.
-- Approval 2: backups/snapshots/schema exports allowed.
-- Approval 3: kwsa_uat + kwsa_prod creation/confirmation allowed.
-- Approval 4: Azure import to staging/kwsa_uat allowed.
-- Approval 5: validation fixes allowed.
-- Approval 6: kwsa_prod preparation from validated kwsa_uat allowed.
-- Approval 7: asset migration dry-run allowed.
-- Approval 8: asset migration run 1 allowed.
-- Approval 9: local + UAT env switching allowed.
-- Approval 10: production env switching allowed.
+## 9) Required Manual Approval Gates (Three-Stage Flow)
+- Approval 1: inspection documents complete. ✓
+- Approval 2: backups/snapshots/schema exports completed. ✓
+- Approval 3: kwsa_uat + kwsa_prod created. ✓
+- Approval 4: pre-import baseline backup + export completed. ✓ (Backup ID: 1778765132025)
+- Approval 5: Azure import mapping & dry-run plan completed. ✓
+- **Approval 6:** kwsa_import_staging created; three-stage flow documented. ✓ (NEW SAFETY GATE)
+- **Approval 7:** Stage 1 — Execute first import to kwsa_import_staging (NEXT)
+  - Rehearsal with real Azure data; safe isolation; decision: proceed or retry
+- **Approval 8:** Stage 2 — Copy validated kwsa_import_staging → kwsa_uat
+  - Pre-production testing; decision: proceed to Stage 3 or rollback
+- **Approval 9:** Stage 3 — Copy validated kwsa_uat → kwsa_prod; switch production secret
+  - Production cutover; decision: commit or rollback via secret revert
+- **Approval 10:** (Future) Asset migration (after data is stable in kwsa_prod)
+  - GCS image/document URL resolution; portal image loading
+- **Approval 11:** (Future) Local env switching (optional)
+  - Point local dev to kwsa_prod or keep on kwsa_uat
