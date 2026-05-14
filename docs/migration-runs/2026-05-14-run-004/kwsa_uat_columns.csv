@@ -1,0 +1,1771 @@
+table_schema,table_name,column_name,ordinal_position,data_type,is_nullable
+app,rental_audit_log,id,1,bigint,NO
+app,rental_audit_log,rental_id,2,bigint,YES
+app,rental_audit_log,payment_schedule_id,3,bigint,YES
+app,rental_audit_log,transaction_id,4,text,YES
+app,rental_audit_log,action,5,text,NO
+app,rental_audit_log,old_value,6,jsonb,YES
+app,rental_audit_log,new_value,7,jsonb,YES
+app,rental_audit_log,changed_by_user_id,8,text,YES
+app,rental_audit_log,changed_at,9,timestamp with time zone,NO
+app,rental_documents,id,1,bigint,NO
+app,rental_documents,rental_id,2,bigint,NO
+app,rental_documents,document_name,3,text,NO
+app,rental_documents,document_type,4,text,NO
+app,rental_documents,file_name,5,text,YES
+app,rental_documents,file_url,6,text,YES
+app,rental_documents,storage_path,7,text,YES
+app,rental_documents,uploaded_by_user_id,8,text,YES
+app,rental_documents,uploaded_at,9,timestamp with time zone,NO
+app,rental_participants,id,1,bigint,NO
+app,rental_participants,rental_id,2,bigint,NO
+app,rental_participants,associate_id,3,text,YES
+app,rental_participants,associate_name,4,text,YES
+app,rental_participants,participant_role,5,text,NO
+app,rental_participants,split_percentage,6,numeric,NO
+app,rental_participants,gross_commission_amount,7,numeric,YES
+app,rental_participants,company_dollar_amount,8,numeric,YES
+app,rental_participants,royalty_amount,9,numeric,YES
+app,rental_participants,growth_share_amount,10,numeric,YES
+app,rental_participants,agent_net_amount,11,numeric,YES
+app,rental_participants,counts_toward_cap,12,boolean,NO
+app,rental_participants,created_at,13,timestamp with time zone,NO
+app,rental_participants,updated_at,14,timestamp with time zone,NO
+app,rental_participants,market_center_split,15,numeric,YES
+app,rental_participants,agent_split,16,numeric,YES
+app,rental_participants,agent_deal_split,17,numeric,YES
+app,rental_payment_schedule,id,1,bigint,NO
+app,rental_payment_schedule,rental_id,2,bigint,NO
+app,rental_payment_schedule,payment_sequence_number,3,integer,NO
+app,rental_payment_schedule,due_date,4,date,NO
+app,rental_payment_schedule,period_start_date,5,date,YES
+app,rental_payment_schedule,period_end_date,6,date,YES
+app,rental_payment_schedule,expected_rental_amount,7,numeric,YES
+app,rental_payment_schedule,expected_commission_amount,8,numeric,YES
+app,rental_payment_schedule,gross_commission,9,numeric,YES
+app,rental_payment_schedule,company_dollar,10,numeric,YES
+app,rental_payment_schedule,royalty,11,numeric,YES
+app,rental_payment_schedule,growth_share,12,numeric,YES
+app,rental_payment_schedule,agent_net_amount,13,numeric,YES
+app,rental_payment_schedule,payment_status,14,text,NO
+app,rental_payment_schedule,paid_date,15,timestamp with time zone,YES
+app,rental_payment_schedule,cancelled_date,16,timestamp with time zone,YES
+app,rental_payment_schedule,cancelled_reason,17,text,YES
+app,rental_payment_schedule,transaction_created,18,boolean,NO
+app,rental_payment_schedule,transaction_id,19,text,YES
+app,rental_payment_schedule,created_by_user_id,20,text,YES
+app,rental_payment_schedule,paid_by_user_id,21,text,YES
+app,rental_payment_schedule,cancelled_by_user_id,22,text,YES
+app,rental_payment_schedule,created_at,23,timestamp with time zone,NO
+app,rental_payment_schedule,updated_at,24,timestamp with time zone,NO
+app,rentals,id,1,bigint,NO
+app,rentals,rental_number,2,text,NO
+app,rentals,market_centre_id,3,text,YES
+app,rentals,market_centre_name,4,text,YES
+app,rentals,source_listing_id,5,text,YES
+app,rentals,listing_number,6,text,YES
+app,rentals,property_address,7,text,NO
+app,rentals,suburb,8,text,YES
+app,rentals,city,9,text,YES
+app,rentals,province,10,text,YES
+app,rentals,property_reference,11,text,YES
+app,rentals,property_notes,12,text,YES
+app,rentals,landlord_name,13,text,YES
+app,rentals,landlord_surname_or_company,14,text,YES
+app,rentals,landlord_id_or_reg_number,15,text,YES
+app,rentals,landlord_email,16,text,YES
+app,rentals,landlord_phone,17,text,YES
+app,rentals,landlord_alternative_phone,18,text,YES
+app,rentals,landlord_physical_address,19,text,YES
+app,rentals,landlord_postal_address,20,text,YES
+app,rentals,landlord_notes,21,text,YES
+app,rentals,tenant_name,22,text,YES
+app,rentals,tenant_surname_or_company,23,text,YES
+app,rentals,tenant_id_or_reg_number,24,text,YES
+app,rentals,tenant_email,25,text,YES
+app,rentals,tenant_phone,26,text,YES
+app,rentals,tenant_alternative_phone,27,text,YES
+app,rentals,tenant_current_address,28,text,YES
+app,rentals,tenant_notes,29,text,YES
+app,rentals,rental_type,30,text,NO
+app,rentals,rental_status,31,text,NO
+app,rentals,lease_start_date,32,date,YES
+app,rentals,lease_end_date,33,date,YES
+app,rentals,lease_signed_date,34,date,YES
+app,rentals,occupation_date,35,date,YES
+app,rentals,frequency,36,text,NO
+app,rentals,payment_due_day,37,integer,YES
+app,rentals,payment_due_rule,38,text,YES
+app,rentals,rental_amount,39,numeric,YES
+app,rentals,deposit_amount,40,numeric,YES
+app,rentals,procurement_fee_amount,41,numeric,YES
+app,rentals,management_fee_percentage,42,numeric,YES
+app,rentals,management_fee_amount,43,numeric,YES
+app,rentals,gross_commission,44,numeric,YES
+app,rentals,company_dollar,45,numeric,YES
+app,rentals,royalty,46,numeric,YES
+app,rentals,growth_share,47,numeric,YES
+app,rentals,agent_net_amount,48,numeric,YES
+app,rentals,counts_toward_cap,49,boolean,NO
+app,rentals,notes,50,text,YES
+app,rentals,created_by_user_id,51,text,YES
+app,rentals,updated_by_user_id,52,text,YES
+app,rentals,created_at,53,timestamp with time zone,NO
+app,rentals,updated_at,54,timestamp with time zone,NO
+app,rentals,cancelled_at,55,timestamp with time zone,YES
+app,rentals,cancelled_reason,56,text,YES
+app,rentals,landlord_country,57,text,YES
+app,rentals,landlord_province,58,text,YES
+app,rentals,landlord_city,59,text,YES
+app,rentals,landlord_suburb,60,text,YES
+app,rentals,landlord_street_number,61,text,YES
+app,rentals,landlord_street_name,62,text,YES
+app,rentals,tenant_country,63,text,YES
+app,rentals,tenant_province,64,text,YES
+app,rentals,tenant_city,65,text,YES
+app,rentals,tenant_suburb,66,text,YES
+app,rentals,tenant_street_number,67,text,YES
+app,rentals,tenant_street_name,68,text,YES
+migration,agent_deregistration_log,id,1,bigint,NO
+migration,agent_deregistration_log,job_id,2,text,YES
+migration,agent_deregistration_log,associate_id,3,bigint,NO
+migration,agent_deregistration_log,associate_name,4,text,YES
+migration,agent_deregistration_log,reason,5,text,YES
+migration,agent_deregistration_log,requested_by,6,text,YES
+migration,agent_deregistration_log,deregistered_at,7,timestamp with time zone,NO
+migration,agent_reactivation_log,id,1,bigint,NO
+migration,agent_reactivation_log,associate_id,2,bigint,NO
+migration,agent_reactivation_log,associate_name,3,text,YES
+migration,agent_reactivation_log,old_market_center_id,4,text,YES
+migration,agent_reactivation_log,new_market_center_id,5,text,YES
+migration,agent_reactivation_log,requested_by,6,text,YES
+migration,agent_reactivation_log,reactivated_at,7,timestamp with time zone,NO
+migration,associate_admin_market_centers,id,1,bigint,NO
+migration,associate_admin_market_centers,associate_id,2,bigint,NO
+migration,associate_admin_market_centers,source_market_center_id,3,text,YES
+migration,associate_admin_teams,id,1,bigint,NO
+migration,associate_admin_teams,associate_id,2,bigint,NO
+migration,associate_admin_teams,source_team_id,3,text,YES
+migration,associate_documents,id,1,bigint,NO
+migration,associate_documents,associate_id,2,bigint,NO
+migration,associate_documents,document_type,3,text,YES
+migration,associate_documents,document_name,4,text,YES
+migration,associate_documents,document_url,5,text,YES
+migration,associate_documents,uploaded_by,6,text,YES
+migration,associate_documents,uploaded_at,7,timestamp with time zone,NO
+migration,associate_job_titles,id,1,bigint,NO
+migration,associate_job_titles,associate_id,2,bigint,NO
+migration,associate_job_titles,job_title,3,text,YES
+migration,associate_notes,id,1,bigint,NO
+migration,associate_notes,associate_id,2,bigint,NO
+migration,associate_notes,note_type,3,text,YES
+migration,associate_notes,note_text,4,text,YES
+migration,associate_notes,created_by,5,text,YES
+migration,associate_notes,created_at,6,timestamp with time zone,NO
+migration,associate_roles,id,1,bigint,NO
+migration,associate_roles,associate_id,2,bigint,NO
+migration,associate_roles,role_name,3,text,YES
+migration,associate_service_communities,id,1,bigint,NO
+migration,associate_service_communities,associate_id,2,bigint,NO
+migration,associate_service_communities,community_name,3,text,YES
+migration,associate_social_media,id,1,bigint,NO
+migration,associate_social_media,associate_id,2,bigint,NO
+migration,associate_social_media,platform,3,text,YES
+migration,associate_social_media,url,4,text,YES
+migration,associate_social_media,sort_order,5,integer,YES
+migration,associates_prepared,source_associate_id,1,text,NO
+migration,associates_prepared,first_name,2,text,YES
+migration,associates_prepared,last_name,3,text,YES
+migration,associates_prepared,full_name,4,text,YES
+migration,associates_prepared,email,5,text,YES
+migration,associates_prepared,status_name,6,text,YES
+migration,associates_prepared,market_center_name,7,text,YES
+migration,associates_prepared,team_name,8,text,YES
+migration,associates_prepared,kwuid,9,text,YES
+migration,associates_prepared,last_seen_at,10,timestamp with time zone,YES
+migration,associates_prepared,prepared_at,11,timestamp with time zone,NO
+migration,associates_prepared,image_url,12,text,YES
+migration,associates_prepared,mobile_number,13,text,YES
+migration,associates_prepared,office_number,14,text,YES
+migration,associates_prepared,national_id,15,text,YES
+migration,associates_prepared,ffc_number,16,text,YES
+migration,associates_prepared,kwsa_email,17,text,YES
+migration,associates_prepared,private_email,18,text,YES
+migration,associates_prepared,growth_share_sponsor,19,text,YES
+migration,associates_prepared,proposed_growth_share_sponsor,20,text,YES
+migration,associates_prepared,temporary_growth_share_sponsor,21,text,YES
+migration,associates_prepared,start_date,22,date,YES
+migration,associates_prepared,end_date,23,date,YES
+migration,associates_prepared,anniversary_date,24,date,YES
+migration,associates_prepared,cap_date,25,date,YES
+migration,associates_prepared,total_cap_amount,26,numeric,YES
+migration,associates_prepared,manual_cap,27,numeric,YES
+migration,associates_prepared,agent_split,28,numeric,YES
+migration,core_associates,id,1,bigint,NO
+migration,core_associates,source_associate_id,2,text,NO
+migration,core_associates,source_market_center_id,3,text,YES
+migration,core_associates,source_team_id,4,text,YES
+migration,core_associates,market_center_id,5,bigint,YES
+migration,core_associates,team_id,6,bigint,YES
+migration,core_associates,first_name,7,text,YES
+migration,core_associates,last_name,8,text,YES
+migration,core_associates,full_name,9,text,YES
+migration,core_associates,email,10,text,YES
+migration,core_associates,status_name,11,text,YES
+migration,core_associates,kwuid,12,text,YES
+migration,core_associates,created_at,13,timestamp with time zone,NO
+migration,core_associates,updated_at,14,timestamp with time zone,NO
+migration,core_associates,national_id,15,text,YES
+migration,core_associates,ffc_number,16,text,YES
+migration,core_associates,private_email,17,text,YES
+migration,core_associates,mobile_number,18,text,YES
+migration,core_associates,office_number,19,text,YES
+migration,core_associates,proposed_growth_share_sponsor,20,text,YES
+migration,core_associates,temporary_growth_share_sponsor,21,boolean,YES
+migration,core_associates,vested,22,boolean,NO
+migration,core_associates,vesting_period_start_date,23,date,YES
+migration,core_associates,listing_approval_required,24,boolean,NO
+migration,core_associates,exclude_from_individual_reports,25,boolean,NO
+migration,core_associates,image_url,26,text,YES
+migration,core_associates,kwsa_email,27,text,YES
+migration,core_associates,property24_opt_in,28,boolean,YES
+migration,core_associates,agent_property24_id,29,text,YES
+migration,core_associates,property24_status,30,text,YES
+migration,core_associates,entegral_opt_in,31,boolean,YES
+migration,core_associates,agent_entegral_id,32,text,YES
+migration,core_associates,entegral_status,33,text,YES
+migration,core_associates,private_property_opt_in,34,boolean,YES
+migration,core_associates,private_property_status,35,text,YES
+migration,core_associates,cap,36,numeric,YES
+migration,core_associates,manual_cap,37,boolean,YES
+migration,core_associates,agent_split,38,numeric,YES
+migration,core_associates,projected_cos,39,numeric,YES
+migration,core_associates,projected_cap,40,numeric,YES
+migration,core_associates,start_date,41,date,YES
+migration,core_associates,end_date,42,date,YES
+migration,core_associates,anniversary_date,43,date,YES
+migration,core_associates,cap_date,44,date,YES
+migration,core_associates,growth_share_sponsor,45,text,YES
+migration,core_associates,agent_entegral_portals,46,ARRAY,NO
+migration,core_listings,id,1,bigint,NO
+migration,core_listings,source_listing_id,2,text,NO
+migration,core_listings,source_market_center_id,3,text,YES
+migration,core_listings,market_center_id,4,bigint,YES
+migration,core_listings,listing_number,5,text,YES
+migration,core_listings,status_name,6,text,YES
+migration,core_listings,sale_or_rent,7,text,YES
+migration,core_listings,street_number,8,text,YES
+migration,core_listings,street_name,9,text,YES
+migration,core_listings,suburb,10,text,YES
+migration,core_listings,city,11,text,YES
+migration,core_listings,province,12,text,YES
+migration,core_listings,country,13,text,YES
+migration,core_listings,price,14,numeric,YES
+migration,core_listings,expiry_date,15,date,YES
+migration,core_listings,created_at,16,timestamp with time zone,NO
+migration,core_listings,updated_at,17,timestamp with time zone,NO
+migration,core_listings,property_title,18,text,YES
+migration,core_listings,short_title,19,text,YES
+migration,core_listings,property_description,20,text,YES
+migration,core_listings,listing_images_json,21,jsonb,YES
+migration,core_listings,listing_payload,22,jsonb,YES
+migration,core_listings,agent_property_valuation,23,numeric,YES
+migration,core_listings,poa,24,boolean,NO
+migration,core_listings,no_transfer_duty,25,boolean,NO
+migration,core_listings,signed_date,26,date,YES
+migration,core_listings,on_market_since_date,27,date,YES
+migration,core_listings,rates_and_taxes,28,numeric,YES
+migration,core_listings,monthly_levy,29,numeric,YES
+migration,core_listings,mandate_type,30,text,YES
+migration,core_listings,address_line,31,text,YES
+migration,core_listings,listing_status_tag,32,text,YES
+migration,core_listings,ownership_type,33,text,YES
+migration,core_listings,property_type,34,text,YES
+migration,core_listings,property_sub_type,35,text,YES
+migration,core_listings,descriptive_feature,36,text,YES
+migration,core_listings,retirement_living,37,boolean,YES
+migration,core_listings,short_description,38,text,YES
+migration,core_listings,erf_number,39,text,YES
+migration,core_listings,unit_number,40,text,YES
+migration,core_listings,door_number,41,text,YES
+migration,core_listings,estate_name,42,text,YES
+migration,core_listings,postal_code,43,text,YES
+migration,core_listings,longitude,44,numeric,YES
+migration,core_listings,latitude,45,numeric,YES
+migration,core_listings,override_display_location,46,boolean,YES
+migration,core_listings,override_display_longitude,47,numeric,YES
+migration,core_listings,override_display_latitude,48,numeric,YES
+migration,core_listings,loom_validation_status,49,text,YES
+migration,core_listings,loom_property_id,50,text,YES
+migration,core_listings,loom_address,51,text,YES
+migration,core_listings,display_address_on_website,52,boolean,YES
+migration,core_listings,viewing_instructions,53,text,YES
+migration,core_listings,viewing_directions,54,text,YES
+migration,core_listings,feed_to_private_property,55,boolean,YES
+migration,core_listings,private_property_ref1,56,text,YES
+migration,core_listings,private_property_ref2,57,text,YES
+migration,core_listings,private_property_sync_status,58,text,YES
+migration,core_listings,feed_to_kww,59,boolean,YES
+migration,core_listings,kww_property_reference,60,text,YES
+migration,core_listings,kww_ref1,61,text,YES
+migration,core_listings,kww_ref2,62,text,YES
+migration,core_listings,kww_sync_status,63,text,YES
+migration,core_listings,feed_to_entegral,64,boolean,YES
+migration,core_listings,entegral_sync_status,65,text,YES
+migration,core_listings,feed_to_property24,66,boolean,YES
+migration,core_listings,property24_ref1,67,text,YES
+migration,core_listings,property24_ref2,68,text,YES
+migration,core_listings,property24_sync_status,69,text,YES
+migration,core_listings,reduced_date,70,date,YES
+migration,core_listings,property_auction,71,boolean,YES
+migration,core_listings,occupation_date,72,date,YES
+migration,core_listings,erf_size,73,numeric,YES
+migration,core_listings,floor_area,74,numeric,YES
+migration,core_listings,construction_date,75,date,YES
+migration,core_listings,height_restriction,76,numeric,YES
+migration,core_listings,out_building_size,77,numeric,YES
+migration,core_listings,zoning_type,78,text,YES
+migration,core_listings,is_furnished,79,boolean,YES
+migration,core_listings,pet_friendly,80,boolean,YES
+migration,core_listings,has_standalone_building,81,boolean,YES
+migration,core_listings,has_flatlet,82,boolean,YES
+migration,core_listings,has_backup_water,83,boolean,YES
+migration,core_listings,wheelchair_accessible,84,boolean,YES
+migration,core_listings,has_generator,85,boolean,YES
+migration,core_listings,has_borehole,86,boolean,YES
+migration,core_listings,has_gas_geyser,87,boolean,YES
+migration,core_listings,has_solar_panels,88,boolean,YES
+migration,core_listings,has_backup_battery_or_inverter,89,boolean,YES
+migration,core_listings,has_solar_geyser,90,boolean,YES
+migration,core_listings,has_water_tank,91,boolean,YES
+migration,core_listings,adsl,92,boolean,YES
+migration,core_listings,fibre,93,boolean,YES
+migration,core_listings,isdn,94,boolean,YES
+migration,core_listings,dialup,95,boolean,YES
+migration,core_listings,fixed_wimax,96,boolean,YES
+migration,core_listings,satellite,97,boolean,YES
+migration,core_listings,nearby_bus_service,98,boolean,YES
+migration,core_listings,nearby_minibus_taxi_service,99,boolean,YES
+migration,core_listings,nearby_train_service,100,boolean,YES
+migration,core_listings,is_draft,101,boolean,YES
+migration,core_listings,is_published,102,boolean,YES
+migration,core_listings,rental_rate,103,text,YES
+migration,core_listings,lease_period,104,text,YES
+migration,core_listings,deposit_requirements,105,text,YES
+migration,core_market_centers,id,1,bigint,NO
+migration,core_market_centers,source_market_center_id,2,text,NO
+migration,core_market_centers,name,3,text,NO
+migration,core_market_centers,status_name,4,text,YES
+migration,core_market_centers,frontdoor_id,5,text,YES
+migration,core_market_centers,created_at,6,timestamp with time zone,NO
+migration,core_market_centers,updated_at,7,timestamp with time zone,NO
+migration,core_market_centers,logo_image_url,8,text,YES
+migration,core_market_centers,company_registered_name,9,text,YES
+migration,core_market_centers,kw_office_id,10,text,YES
+migration,core_market_centers,contact_number,11,text,YES
+migration,core_market_centers,contact_email,12,text,YES
+migration,core_market_centers,has_individual_cap,13,boolean,NO
+migration,core_market_centers,agent_default_cap,14,numeric,YES
+migration,core_market_centers,market_center_default_split,15,numeric,YES
+migration,core_market_centers,agent_default_split,16,numeric,YES
+migration,core_market_centers,productivity_coach,17,text,YES
+migration,core_market_centers,property24_opt_in,18,boolean,NO
+migration,core_market_centers,property24_auction_approved,19,boolean,NO
+migration,core_market_centers,market_center_property24_id,20,text,YES
+migration,core_market_centers,private_property_id,21,text,YES
+migration,core_market_centers,entegral_opt_in,22,boolean,NO
+migration,core_market_centers,entegral_url,23,text,YES
+migration,core_market_centers,entegral_portals,24,ARRAY,NO
+migration,core_market_centers,country,25,text,YES
+migration,core_market_centers,province,26,text,YES
+migration,core_market_centers,city,27,text,YES
+migration,core_market_centers,suburb,28,text,YES
+migration,core_market_centers,erf_number,29,text,YES
+migration,core_market_centers,unit_number,30,text,YES
+migration,core_market_centers,door_number,31,text,YES
+migration,core_market_centers,estate_name,32,text,YES
+migration,core_market_centers,street_number,33,text,YES
+migration,core_market_centers,street_name,34,text,YES
+migration,core_market_centers,postal_code,35,text,YES
+migration,core_market_centers,longitude,36,numeric,YES
+migration,core_market_centers,latitude,37,numeric,YES
+migration,core_market_centers,override_display_location,38,boolean,NO
+migration,core_market_centers,display_longitude,39,numeric,YES
+migration,core_market_centers,display_latitude,40,numeric,YES
+migration,core_market_centers,address_source_id,41,text,YES
+migration,core_market_centers,logo_document_id,42,text,YES
+migration,core_teams,id,1,bigint,NO
+migration,core_teams,source_team_id,2,text,NO
+migration,core_teams,source_market_center_id,3,text,YES
+migration,core_teams,market_center_id,4,bigint,YES
+migration,core_teams,name,5,text,NO
+migration,core_teams,status_name,6,text,YES
+migration,core_teams,created_at,7,timestamp with time zone,NO
+migration,core_teams,updated_at,8,timestamp with time zone,NO
+migration,core_teams,registered_name,9,text,YES
+migration,core_teams,contact_number,10,text,YES
+migration,core_teams,contact_email,11,text,YES
+migration,core_teams,logo_url,12,text,YES
+migration,core_teams,address_line1,13,text,YES
+migration,core_teams,address_suburb,14,text,YES
+migration,core_teams,address_city,15,text,YES
+migration,core_teams,address_province,16,text,YES
+migration,core_teams,address_postal_code,17,text,YES
+migration,core_transactions,id,1,bigint,NO
+migration,core_transactions,source_transaction_id,2,text,NO
+migration,core_transactions,source_associate_id,3,text,NO
+migration,core_transactions,associate_id,4,bigint,YES
+migration,core_transactions,market_center_id,5,bigint,YES
+migration,core_transactions,transaction_number,6,text,YES
+migration,core_transactions,transaction_status,7,text,YES
+migration,core_transactions,transaction_type,8,text,YES
+migration,core_transactions,source_listing_id,9,text,YES
+migration,core_transactions,listing_number,10,text,YES
+migration,core_transactions,address,11,text,YES
+migration,core_transactions,suburb,12,text,YES
+migration,core_transactions,city,13,text,YES
+migration,core_transactions,sales_price,14,numeric,YES
+migration,core_transactions,list_price,15,numeric,YES
+migration,core_transactions,gci_excl_vat,16,numeric,YES
+migration,core_transactions,split_percentage,17,numeric,YES
+migration,core_transactions,net_comm,18,numeric,YES
+migration,core_transactions,total_gci,19,numeric,YES
+migration,core_transactions,sale_type,20,text,YES
+migration,core_transactions,agent_type,21,text,YES
+migration,core_transactions,buyer,22,text,YES
+migration,core_transactions,seller,23,text,YES
+migration,core_transactions,list_date,24,timestamp with time zone,YES
+migration,core_transactions,transaction_date,25,timestamp with time zone,YES
+migration,core_transactions,status_change_date,26,timestamp with time zone,YES
+migration,core_transactions,expected_date,27,timestamp with time zone,YES
+migration,core_transactions,created_at,28,timestamp with time zone,NO
+migration,core_transactions,updated_at,29,timestamp with time zone,NO
+migration,core_transactions,primary_market_center_id,30,bigint,YES
+migration,core_transactions,payment_notes,31,text,YES
+migration,core_transactions,return_notes,32,text,YES
+migration,core_transactions,source_market_center_id,33,text,YES
+migration,core_transactions,market_center_name,34,text,YES
+migration,core_transactions,source_team_id,35,text,YES
+migration,core_transactions,team_name,36,text,YES
+migration,core_transactions,current_source_market_center_id,37,text,YES
+migration,core_transactions,current_market_center_name,38,text,YES
+migration,core_transactions,current_source_team_id,39,text,YES
+migration,core_transactions,current_team_name,40,text,YES
+migration,core_transactions,listing_office_name,41,text,YES
+migration,core_transactions,variance_per,42,numeric,YES
+migration,core_transactions,contract_gci_excl_vat,43,numeric,YES
+migration,core_transactions,avg_comms_per,44,numeric,YES
+migration,core_transactions,transaction_gci_excl_vat,45,numeric,YES
+migration,core_transactions,growth_share,46,numeric,YES
+migration,core_transactions,production_royalties,47,numeric,YES
+migration,core_transactions,cap_remaining,48,numeric,YES
+migration,core_transactions,associate_dollar,49,numeric,YES
+migration,core_transactions,mc_dollar,50,numeric,YES
+migration,core_transactions,company_dollar,51,numeric,YES
+migration,core_transactions,team_dollar,52,numeric,YES
+migration,core_transactions,transfer_attorney,53,text,YES
+migration,core_transactions,ta_mobile_phone,54,text,YES
+migration,core_transactions,ta_email,55,text,YES
+migration,core_transactions,bond_attorney_contact_id,56,text,YES
+migration,core_transactions,bond_attorney,57,text,YES
+migration,core_transactions,ba_mobile_phone,58,text,YES
+migration,core_transactions,ba_email,59,text,YES
+migration,core_transactions,bond_originator,60,text,YES
+migration,core_transactions,bond_due_date,61,timestamp with time zone,YES
+migration,core_transactions,bond_amount,62,numeric,YES
+migration,core_transactions,transaction_financial_institution_id,63,text,YES
+migration,core_transactions,transaction_financial_institution,64,text,YES
+migration,core_transactions,financial_institution_other,65,text,YES
+migration,core_transactions,transaction_financing_type_id,66,text,YES
+migration,core_transactions,transaction_financing_type,67,text,YES
+migration,core_transactions,all_parties_invoiced,68,text,YES
+migration,core_transactions,transaction_category,69,text,YES
+migration,core_transactions,source_type,70,text,YES
+migration,core_transactions,source_rental_id,71,bigint,YES
+migration,core_transactions,source_rental_payment_schedule_id,72,bigint,YES
+migration,core_transactions,counts_toward_cap,73,boolean,YES
+migration,id_map_associates,source_associate_id,1,text,NO
+migration,id_map_associates,core_associate_id,2,bigint,NO
+migration,id_map_legacy_associates,source_associate_id,1,text,NO
+migration,id_map_legacy_associates,legacy_associate_id,2,text,NO
+migration,id_map_legacy_associates,published_at,3,timestamp with time zone,NO
+migration,id_map_legacy_listings,source_listing_id,1,text,NO
+migration,id_map_legacy_listings,legacy_listing_id,2,text,NO
+migration,id_map_legacy_listings,published_at,3,timestamp with time zone,NO
+migration,id_map_legacy_market_centers,source_market_center_id,1,text,NO
+migration,id_map_legacy_market_centers,legacy_market_center_id,2,text,NO
+migration,id_map_legacy_market_centers,published_at,3,timestamp with time zone,NO
+migration,id_map_listings,source_listing_id,1,text,NO
+migration,id_map_listings,core_listing_id,2,bigint,NO
+migration,id_map_market_centers,source_market_center_id,1,text,NO
+migration,id_map_market_centers,core_market_center_id,2,bigint,NO
+migration,id_map_teams,source_team_id,1,text,NO
+migration,id_map_teams,core_team_id,2,bigint,NO
+migration,in_app_notifications,id,1,bigint,NO
+migration,in_app_notifications,associate_id,2,bigint,NO
+migration,in_app_notifications,notification_type,3,text,NO
+migration,in_app_notifications,category,4,text,NO
+migration,in_app_notifications,title,5,text,NO
+migration,in_app_notifications,message,6,text,NO
+migration,in_app_notifications,entity_type,7,text,YES
+migration,in_app_notifications,entity_id,8,bigint,YES
+migration,in_app_notifications,metadata,9,jsonb,NO
+migration,in_app_notifications,is_read,10,boolean,NO
+migration,in_app_notifications,read_at,11,timestamp with time zone,YES
+migration,in_app_notifications,created_at,12,timestamp with time zone,NO
+migration,in_app_notifications,updated_at,13,timestamp with time zone,NO
+migration,listing_agents,id,1,bigint,NO
+migration,listing_agents,listing_id,2,bigint,NO
+migration,listing_agents,associate_id,3,bigint,YES
+migration,listing_agents,agent_name,4,text,YES
+migration,listing_agents,agent_role,5,text,YES
+migration,listing_agents,is_primary,6,boolean,YES
+migration,listing_agents,market_center_id,7,bigint,YES
+migration,listing_agents,sort_order,8,integer,YES
+migration,listing_agents,created_at,9,timestamp with time zone,NO
+migration,listing_agents,updated_at,10,timestamp with time zone,NO
+migration,listing_approval_requests,id,1,bigint,NO
+migration,listing_approval_requests,listing_id,2,bigint,NO
+migration,listing_approval_requests,status,3,text,NO
+migration,listing_approval_requests,submitted_by_associate_id,4,bigint,YES
+migration,listing_approval_requests,submitted_by_name,5,text,YES
+migration,listing_approval_requests,submitted_by_email,6,text,YES
+migration,listing_approval_requests,submission_comment,7,text,YES
+migration,listing_approval_requests,submitted_at,8,timestamp with time zone,YES
+migration,listing_approval_requests,reviewed_by_associate_id,9,bigint,YES
+migration,listing_approval_requests,reviewed_by_name,10,text,YES
+migration,listing_approval_requests,reviewed_by_email,11,text,YES
+migration,listing_approval_requests,review_comment,12,text,YES
+migration,listing_approval_requests,reviewed_at,13,timestamp with time zone,YES
+migration,listing_approval_requests,created_at,14,timestamp with time zone,NO
+migration,listing_approval_requests,updated_at,15,timestamp with time zone,NO
+migration,listing_contacts,id,1,bigint,NO
+migration,listing_contacts,listing_id,2,bigint,NO
+migration,listing_contacts,full_name,3,text,YES
+migration,listing_contacts,phone_number,4,text,YES
+migration,listing_contacts,email_address,5,text,YES
+migration,listing_contacts,sort_order,6,integer,YES
+migration,listing_features,id,1,bigint,NO
+migration,listing_features,listing_id,2,bigint,NO
+migration,listing_features,feature_category,3,text,YES
+migration,listing_features,feature_value,4,text,YES
+migration,listing_features,sort_order,5,integer,YES
+migration,listing_images,id,1,bigint,NO
+migration,listing_images,listing_id,2,bigint,NO
+migration,listing_images,file_name,3,text,YES
+migration,listing_images,file_url,4,text,YES
+migration,listing_images,media_type,5,text,YES
+migration,listing_images,sort_order,6,integer,YES
+migration,listing_images,uploaded_by,7,text,YES
+migration,listing_images,uploaded_at,8,timestamp with time zone,NO
+migration,listing_mandate_documents,id,1,bigint,NO
+migration,listing_mandate_documents,listing_id,2,bigint,NO
+migration,listing_mandate_documents,file_name,3,text,YES
+migration,listing_mandate_documents,file_url,4,text,YES
+migration,listing_mandate_documents,file_type,5,text,YES
+migration,listing_mandate_documents,uploaded_by,6,text,YES
+migration,listing_mandate_documents,uploaded_at,7,timestamp with time zone,NO
+migration,listing_mandate_documents,sort_order,8,integer,YES
+migration,listing_marketing_urls,id,1,bigint,NO
+migration,listing_marketing_urls,listing_id,2,bigint,NO
+migration,listing_marketing_urls,url,3,text,YES
+migration,listing_marketing_urls,url_type,4,text,YES
+migration,listing_marketing_urls,display_name,5,text,YES
+migration,listing_marketing_urls,sort_order,6,integer,YES
+migration,listing_open_house,id,1,bigint,NO
+migration,listing_open_house,listing_id,2,bigint,NO
+migration,listing_open_house,open_house_date,3,date,YES
+migration,listing_open_house,from_time,4,text,YES
+migration,listing_open_house,to_time,5,text,YES
+migration,listing_open_house,average_price,6,text,YES
+migration,listing_open_house,comments,7,text,YES
+migration,listing_open_house,sort_order,8,integer,YES
+migration,listing_property_areas,id,1,bigint,NO
+migration,listing_property_areas,listing_id,2,bigint,NO
+migration,listing_property_areas,area_type,3,text,YES
+migration,listing_property_areas,count,4,integer,YES
+migration,listing_property_areas,size,5,numeric,YES
+migration,listing_property_areas,description,6,text,YES
+migration,listing_property_areas,sub_features,7,jsonb,YES
+migration,listing_property_areas,sort_order,8,integer,YES
+migration,listing_show_times,id,1,bigint,NO
+migration,listing_show_times,listing_id,2,bigint,NO
+migration,listing_show_times,from_date,3,date,YES
+migration,listing_show_times,from_time,4,text,YES
+migration,listing_show_times,to_date,5,date,YES
+migration,listing_show_times,to_time,6,text,YES
+migration,listing_show_times,catch_phrase,7,text,YES
+migration,listing_show_times,sort_order,8,integer,YES
+migration,listing_transfer_log,id,1,bigint,NO
+migration,listing_transfer_log,job_id,2,text,NO
+migration,listing_transfer_log,listing_id,3,bigint,NO
+migration,listing_transfer_log,listing_number,4,text,YES
+migration,listing_transfer_log,from_agent_id,5,bigint,YES
+migration,listing_transfer_log,from_agent_name,6,text,YES
+migration,listing_transfer_log,to_agent_id,7,bigint,YES
+migration,listing_transfer_log,to_agent_name,8,text,YES
+migration,listing_transfer_log,portals_json,9,jsonb,YES
+migration,listing_transfer_log,agent_swapped,10,boolean,NO
+migration,listing_transfer_log,transfer_error,11,text,YES
+migration,listing_transfer_log,requested_by,12,text,YES
+migration,listing_transfer_log,transferred_at,13,timestamp with time zone,NO
+migration,listings_prepared,source_listing_id,1,text,NO
+migration,listings_prepared,listing_number,2,text,YES
+migration,listings_prepared,status_name,3,text,YES
+migration,listings_prepared,market_center_name,4,text,YES
+migration,listings_prepared,sale_or_rent,5,text,YES
+migration,listings_prepared,address_line,6,text,YES
+migration,listings_prepared,erf_number,7,text,YES
+migration,listings_prepared,unit_number,8,text,YES
+migration,listings_prepared,door_number,9,text,YES
+migration,listings_prepared,estate_name,10,text,YES
+migration,listings_prepared,street_number,11,text,YES
+migration,listings_prepared,street_name,12,text,YES
+migration,listings_prepared,postal_code,13,text,YES
+migration,listings_prepared,suburb,14,text,YES
+migration,listings_prepared,city,15,text,YES
+migration,listings_prepared,province,16,text,YES
+migration,listings_prepared,country,17,text,YES
+migration,listings_prepared,longitude,18,numeric,YES
+migration,listings_prepared,latitude,19,numeric,YES
+migration,listings_prepared,price,20,numeric,YES
+migration,listings_prepared,expiry_date,21,date,YES
+migration,listings_prepared,property_title,22,text,YES
+migration,listings_prepared,short_title,23,text,YES
+migration,listings_prepared,property_description,24,text,YES
+migration,listings_prepared,listing_images_json,25,jsonb,YES
+migration,listings_prepared,listing_payload,26,jsonb,YES
+migration,listings_prepared,last_seen_at,27,timestamp with time zone,YES
+migration,listings_prepared,prepared_at,28,timestamp with time zone,NO
+migration,load_rejections,id,1,bigint,NO
+migration,load_rejections,entity_name,2,text,NO
+migration,load_rejections,source_id,3,text,YES
+migration,load_rejections,reason,4,text,NO
+migration,load_rejections,payload,5,jsonb,YES
+migration,load_rejections,rejected_at,6,timestamp with time zone,NO
+migration,market_center_notes,id,1,bigint,NO
+migration,market_center_notes,market_center_id,2,bigint,NO
+migration,market_center_notes,note_text,3,text,NO
+migration,market_center_notes,created_by,4,text,YES
+migration,market_center_notes,created_at,5,timestamp with time zone,NO
+migration,market_centers_prepared,source_market_center_id,1,text,NO
+migration,market_centers_prepared,name,2,text,YES
+migration,market_centers_prepared,status_name,3,text,YES
+migration,market_centers_prepared,frontdoor_id,4,text,YES
+migration,market_centers_prepared,company_registered_name,5,text,YES
+migration,market_centers_prepared,address_source_id,6,text,YES
+migration,market_centers_prepared,logo_document_id,7,text,YES
+migration,market_centers_prepared,contact_number,8,text,YES
+migration,market_centers_prepared,contact_email,9,text,YES
+migration,market_centers_prepared,kw_office_id,10,text,YES
+migration,market_centers_prepared,last_seen_at,11,timestamp with time zone,YES
+migration,market_centers_prepared,prepared_at,12,timestamp with time zone,NO
+migration,mc_dashboard_daily_snapshots,snapshot_date,1,date,NO
+migration,mc_dashboard_daily_snapshots,mc_source_id,2,text,NO
+migration,mc_dashboard_daily_snapshots,payload,3,jsonb,NO
+migration,mc_dashboard_daily_snapshots,refreshed_at,4,timestamp with time zone,NO
+migration,mc_document_hub,id,1,bigint,NO
+migration,mc_document_hub,source_market_center_id,2,text,NO
+migration,mc_document_hub,title,3,text,NO
+migration,mc_document_hub,description,4,text,YES
+migration,mc_document_hub,file_url,5,text,NO
+migration,mc_document_hub,original_file_name,6,text,NO
+migration,mc_document_hub,mime_type,7,text,NO
+migration,mc_document_hub,file_size,8,bigint,YES
+migration,mc_document_hub,gcs_object_name,9,text,YES
+migration,mc_document_hub,local_file_path,10,text,YES
+migration,mc_document_hub,uploaded_by,11,text,YES
+migration,mc_document_hub,created_at,12,timestamp with time zone,NO
+migration,outside_agency_contacts,id,1,bigint,NO
+migration,outside_agency_contacts,transaction_agent_id,2,bigint,YES
+migration,outside_agency_contacts,transaction_id,3,bigint,YES
+migration,outside_agency_contacts,first_name,4,text,YES
+migration,outside_agency_contacts,last_name,5,text,YES
+migration,outside_agency_contacts,email,6,text,YES
+migration,outside_agency_contacts,phone,7,text,YES
+migration,outside_agency_contacts,agency_name,8,text,YES
+migration,outside_agency_contacts,created_at,9,timestamp with time zone,NO
+migration,outside_agency_contacts,updated_at,10,timestamp with time zone,NO
+migration,team_associate_commissions,id,1,bigint,NO
+migration,team_associate_commissions,team_id,2,bigint,NO
+migration,team_associate_commissions,has_individual_cap,3,boolean,NO
+migration,team_associate_commissions,associate_default_cap,4,numeric,YES
+migration,team_associate_commissions,associate_default_split,5,numeric,YES
+migration,team_associate_commissions,productivity_coach,6,text,YES
+migration,team_associate_commissions,created_at,7,timestamp with time zone,NO
+migration,team_associate_commissions,updated_at,8,timestamp with time zone,NO
+migration,team_cap_history,id,1,bigint,NO
+migration,team_cap_history,team_id,2,bigint,NO
+migration,team_cap_history,commission_split_to_team,3,numeric,YES
+migration,team_cap_history,team_cap_amount,4,numeric,YES
+migration,team_cap_history,manual_cap,5,boolean,NO
+migration,team_cap_history,start_date,6,date,YES
+migration,team_cap_history,end_date,7,date,YES
+migration,team_cap_history,created_at,8,timestamp with time zone,NO
+migration,team_caps,id,1,bigint,NO
+migration,team_caps,team_id,2,bigint,NO
+migration,team_caps,commission_split_to_team,3,numeric,YES
+migration,team_caps,team_cap_amount,4,numeric,YES
+migration,team_caps,manual_cap,5,boolean,NO
+migration,team_caps,cap_year,6,integer,YES
+migration,team_caps,created_at,7,timestamp with time zone,NO
+migration,team_caps,updated_at,8,timestamp with time zone,NO
+migration,team_dates,id,1,bigint,NO
+migration,team_dates,team_id,2,bigint,NO
+migration,team_dates,open_date,3,date,YES
+migration,team_dates,close_date,4,date,YES
+migration,team_dates,cap_date,5,date,YES
+migration,team_dates,anniversary_date,6,date,YES
+migration,team_dates,anniversary_comment,7,text,YES
+migration,team_dates,created_at,8,timestamp with time zone,NO
+migration,team_dates,updated_at,9,timestamp with time zone,NO
+migration,team_notes,id,1,bigint,NO
+migration,team_notes,team_id,2,bigint,NO
+migration,team_notes,note_text,3,text,NO
+migration,team_notes,note_type,4,text,NO
+migration,team_notes,created_by,5,text,NO
+migration,team_notes,created_at,6,timestamp with time zone,NO
+migration,team_portal_settings,id,1,bigint,NO
+migration,team_portal_settings,team_id,2,bigint,NO
+migration,team_portal_settings,use_mc_account_p24,3,boolean,NO
+migration,team_portal_settings,p24_agency_id,4,text,YES
+migration,team_portal_settings,feed_to_p24,5,boolean,NO
+migration,team_portal_settings,p24_auction_approved,6,boolean,NO
+migration,team_portal_settings,use_mc_account_entegral,7,boolean,NO
+migration,team_portal_settings,entegral_url,8,text,YES
+migration,team_portal_settings,feed_to_entegral,9,boolean,NO
+migration,team_portal_settings,entegral_portals,10,ARRAY,NO
+migration,team_portal_settings,created_at,11,timestamp with time zone,NO
+migration,team_portal_settings,updated_at,12,timestamp with time zone,NO
+migration,teams_prepared,source_team_id,1,text,NO
+migration,teams_prepared,source_market_center_id,2,text,YES
+migration,teams_prepared,name,3,text,YES
+migration,teams_prepared,status_name,4,text,YES
+migration,teams_prepared,last_seen_at,5,timestamp with time zone,YES
+migration,teams_prepared,prepared_at,6,timestamp with time zone,NO
+migration,transaction_agent_calculations,id,1,bigint,NO
+migration,transaction_agent_calculations,transaction_id,2,bigint,YES
+migration,transaction_agent_calculations,transaction_agent_id,3,bigint,YES
+migration,transaction_agent_calculations,associate_id,4,bigint,YES
+migration,transaction_agent_calculations,agent_name,5,text,YES
+migration,transaction_agent_calculations,office_name,6,text,YES
+migration,transaction_agent_calculations,transaction_side,7,text,YES
+migration,transaction_agent_calculations,effective_reporting_date,8,date,YES
+migration,transaction_agent_calculations,is_registered,9,boolean,YES
+migration,transaction_agent_calculations,split_percentage,10,numeric,YES
+migration,transaction_agent_calculations,variance_sale_list_pct,11,numeric,YES
+migration,transaction_agent_calculations,transaction_gci_before_fees,12,numeric,YES
+migration,transaction_agent_calculations,average_commission_pct,13,numeric,YES
+migration,transaction_agent_calculations,production_royalties,14,numeric,YES
+migration,transaction_agent_calculations,growth_share,15,numeric,YES
+migration,transaction_agent_calculations,total_pr_and_gs,16,numeric,YES
+migration,transaction_agent_calculations,gci_after_fees_excl_vat,17,numeric,YES
+migration,transaction_agent_calculations,associate_dollar,18,numeric,YES
+migration,transaction_agent_calculations,cap_amount,19,numeric,YES
+migration,transaction_agent_calculations,cap_remaining,20,numeric,YES
+migration,transaction_agent_calculations,team_dollar,21,numeric,YES
+migration,transaction_agent_calculations,market_center_dollar,22,numeric,YES
+migration,transaction_agent_calculations,is_outside_agent,23,boolean,YES
+migration,transaction_agent_calculations,created_at,24,timestamp with time zone,NO
+migration,transaction_agent_calculations,updated_at,25,timestamp with time zone,NO
+migration,transaction_agent_calculations,source_associate_id,26,text,YES
+migration,transaction_agent_calculations,sales_value_component,27,numeric,NO
+migration,transaction_agent_calculations,associate_split_pct,28,numeric,NO
+migration,transaction_agent_calculations,market_center_split_pct,29,numeric,NO
+migration,transaction_agent_calculations,cap_contribution,30,numeric,NO
+migration,transaction_agent_calculations,cap_cycle_start_date,31,date,YES
+migration,transaction_agent_calculations,cap_cycle_end_date,32,date,YES
+migration,transaction_agents,id,1,bigint,NO
+migration,transaction_agents,transaction_id,2,bigint,NO
+migration,transaction_agents,associate_id,3,bigint,YES
+migration,transaction_agents,source_associate_id,4,text,YES
+migration,transaction_agents,agent_name,5,text,YES
+migration,transaction_agents,agent_role,6,text,YES
+migration,transaction_agents,split_percentage,7,numeric,YES
+migration,transaction_agents,outside_agency,8,boolean,YES
+migration,transaction_agents,sort_order,9,integer,YES
+migration,transaction_agents,created_at,10,timestamp with time zone,NO
+migration,transaction_agents,updated_at,11,timestamp with time zone,NO
+migration,transaction_documents,id,1,bigint,NO
+migration,transaction_documents,transaction_id,2,bigint,NO
+migration,transaction_documents,source_document_id,3,text,YES
+migration,transaction_documents,source_transaction_document_type_id,4,text,YES
+migration,transaction_documents,transaction_document_type,5,text,YES
+migration,transaction_documents,file_name,6,text,YES
+migration,transaction_documents,document_url,7,text,YES
+migration,transaction_documents,preview_url,8,text,YES
+migration,transaction_documents,created_at,9,timestamp with time zone,NO
+migration,transaction_documents,updated_at,10,timestamp with time zone,NO
+migration,transaction_documents,deleted_at,11,timestamp with time zone,YES
+migration,transaction_status_history,id,1,bigint,NO
+migration,transaction_status_history,transaction_id,2,bigint,NO
+migration,transaction_status_history,previous_status,3,text,YES
+migration,transaction_status_history,new_status,4,text,NO
+migration,transaction_status_history,changed_at,5,timestamp with time zone,NO
+migration,transaction_status_history,changed_by,6,text,YES
+migration,transaction_status_history,notes,7,text,YES
+migration,transaction_status_history,changed_by_user_id,8,text,YES
+migration,transaction_status_history,changed_by_email,9,text,YES
+migration,transactions_prepared,source_transaction_id,1,text,NO
+migration,transactions_prepared,source_associate_id,2,text,NO
+migration,transactions_prepared,transaction_number,3,text,YES
+migration,transactions_prepared,source_market_center_id,4,text,YES
+migration,transactions_prepared,market_center_name,5,text,YES
+migration,transactions_prepared,associate_name,6,text,YES
+migration,transactions_prepared,transaction_status,7,text,YES
+migration,transactions_prepared,source_listing_id,8,text,YES
+migration,transactions_prepared,listing_number,9,text,YES
+migration,transactions_prepared,transaction_type,10,text,YES
+migration,transactions_prepared,address,11,text,YES
+migration,transactions_prepared,suburb,12,text,YES
+migration,transactions_prepared,city,13,text,YES
+migration,transactions_prepared,sales_price,14,numeric,YES
+migration,transactions_prepared,list_price,15,numeric,YES
+migration,transactions_prepared,gci_excl_vat,16,numeric,YES
+migration,transactions_prepared,split_percentage,17,numeric,YES
+migration,transactions_prepared,net_comm,18,numeric,YES
+migration,transactions_prepared,total_gci,19,numeric,YES
+migration,transactions_prepared,sale_type,20,text,YES
+migration,transactions_prepared,agent_type,21,text,YES
+migration,transactions_prepared,buyer,22,text,YES
+migration,transactions_prepared,seller,23,text,YES
+migration,transactions_prepared,list_date,24,timestamp with time zone,YES
+migration,transactions_prepared,transaction_date,25,timestamp with time zone,YES
+migration,transactions_prepared,status_change_date,26,timestamp with time zone,YES
+migration,transactions_prepared,expected_date,27,timestamp with time zone,YES
+migration,transactions_prepared,last_seen_at,28,timestamp with time zone,YES
+migration,transactions_prepared,prepared_at,29,timestamp with time zone,NO
+public,SoftDeleteHelper,id,1,text,NO
+public,addresses,id,1,integer,NO
+public,addresses,streetNumber,2,text,YES
+public,addresses,streetName,3,text,YES
+public,addresses,unitNumber,4,text,YES
+public,addresses,erfNumber,5,text,YES
+public,addresses,postalCode,6,text,YES
+public,addresses,estateName,7,text,YES
+public,addresses,doorNumber,8,text,YES
+public,addresses,suburbId,9,integer,NO
+public,addresses,cityId,10,integer,NO
+public,addresses,provinceId,11,integer,NO
+public,addresses,countryId,12,integer,NO
+public,addresses,createdAt,13,timestamp without time zone,NO
+public,addresses,updatedAt,14,timestamp without time zone,NO
+public,app_users,id,1,integer,NO
+public,app_users,google_id,2,text,NO
+public,app_users,email,3,text,NO
+public,app_users,name,4,text,NO
+public,app_users,picture,5,text,YES
+public,app_users,role,6,text,NO
+public,app_users,is_active,7,boolean,NO
+public,app_users,created_at,8,timestamp with time zone,NO
+public,app_users,updated_at,9,timestamp with time zone,NO
+public,associate_business_details,id,1,integer,NO
+public,associate_business_details,associateId,2,integer,NO
+public,associate_business_details,kwuid,3,text,YES
+public,associate_business_details,breeNumber,4,text,YES
+public,associate_business_details,proposedGrowthShareSponsor,5,text,YES
+public,associate_business_details,growthShareSponsorId,6,integer,YES
+public,associate_business_details,temporaryGrowthShareSponsor,7,boolean,NO
+public,associate_business_details,listingApprovalRequired,8,boolean,NO
+public,associate_business_details,excludeFromIndividualReports,9,boolean,NO
+public,associate_business_details,vested,10,boolean,NO
+public,associate_business_details,vestingStartPeriod,11,timestamp without time zone,YES
+public,associate_business_details,createdAt,12,timestamp without time zone,NO
+public,associate_business_details,updatedAt,13,timestamp without time zone,NO
+public,associate_contact_details,id,1,integer,NO
+public,associate_contact_details,associateId,2,integer,NO
+public,associate_contact_details,email,3,text,YES
+public,associate_contact_details,privateEmail,4,text,YES
+public,associate_contact_details,phone,5,text,YES
+public,associate_contact_details,fax,6,text,YES
+public,associate_contact_details,createdAt,7,timestamp without time zone,NO
+public,associate_contact_details,updatedAt,8,timestamp without time zone,NO
+public,associate_statuses,id,1,integer,NO
+public,associate_statuses,name,2,text,NO
+public,associate_third_party_integrations,id,1,integer,NO
+public,associate_third_party_integrations,associateId,2,integer,NO
+public,associate_third_party_integrations,p24AgentId,3,integer,YES
+public,associate_third_party_integrations,createdAt,4,timestamp without time zone,NO
+public,associate_third_party_integrations,updatedAt,5,timestamp without time zone,NO
+public,associate_transfer_statuses,id,1,integer,NO
+public,associate_transfer_statuses,name,2,text,NO
+public,associate_transfers,id,1,integer,NO
+public,associate_transfers,associateId,2,integer,NO
+public,associate_transfers,marketCenterFromId,3,integer,NO
+public,associate_transfers,marketCenterToId,4,integer,NO
+public,associate_transfers,teamId,5,integer,YES
+public,associate_transfers,property24IdOldOffice,6,integer,YES
+public,associate_transfers,property24IdNewOffice,7,integer,YES
+public,associate_transfers,associateTransactionMove,8,boolean,NO
+public,associate_transfers,transferStatusId,9,integer,NO
+public,associate_transfers,errorMessage,10,text,YES
+public,associate_transfers,createdAt,11,timestamp without time zone,NO
+public,associate_transfers,updatedAt,12,timestamp without time zone,NO
+public,associate_transfers,whoUpdatedId,13,text,YES
+public,associates,id,1,integer,NO
+public,associates,userId,2,text,YES
+public,associates,firstName,3,text,NO
+public,associates,lastName,4,text,NO
+public,associates,nationalId,5,text,YES
+public,associates,ffcNumber,6,text,YES
+public,associates,statusId,7,integer,NO
+public,associates,marketCenterId,8,integer,NO
+public,associates,teamId,9,integer,YES
+public,associates,createdAt,10,timestamp without time zone,NO
+public,associates,updatedAt,11,timestamp without time zone,NO
+public,associates,deletedAt,12,timestamp without time zone,YES
+public,audit_logs,id,1,text,NO
+public,audit_logs,userId,2,text,YES
+public,audit_logs,action,3,text,NO
+public,audit_logs,entity,4,text,NO
+public,audit_logs,entityId,5,integer,NO
+public,audit_logs,changes,6,jsonb,YES
+public,audit_logs,createdAt,7,timestamp without time zone,NO
+public,cities,id,1,integer,NO
+public,cities,name,2,text,NO
+public,cities,provinceId,3,integer,NO
+public,cities,p24Id,4,integer,YES
+public,cities,createdAt,5,timestamp without time zone,NO
+public,cities,updatedAt,6,timestamp without time zone,NO
+public,cma_documents,id,1,integer,NO
+public,cma_documents,associate_email,2,text,NO
+public,cma_documents,associate_db_id,3,text,YES
+public,cma_documents,property_address,4,text,YES
+public,cma_documents,seller_name,5,text,YES
+public,cma_documents,file_name,6,text,NO
+public,cma_documents,file_url,7,text,NO
+public,cma_documents,created_at,8,timestamp with time zone,NO
+public,cma_documents,seller_first_name,9,text,YES
+public,cma_documents,seller_last_name,10,text,YES
+public,cma_documents,seller_email,11,text,YES
+public,cma_documents,seller_phone,12,text,YES
+public,cma_documents,loom_file_url,13,text,YES
+public,cma_documents,loom_original_name,14,text,YES
+public,contacts,id,1,integer,NO
+public,contacts,name,2,text,NO
+public,contacts,email,3,text,YES
+public,contacts,phone,4,text,YES
+public,contacts,createdAt,5,timestamp without time zone,NO
+public,contacts,updatedAt,6,timestamp without time zone,NO
+public,contacts,deletedAt,7,timestamp without time zone,YES
+public,countries,id,1,integer,NO
+public,countries,name,2,text,NO
+public,countries,p24Id,3,integer,YES
+public,countries,createdAt,4,timestamp without time zone,NO
+public,countries,updatedAt,5,timestamp without time zone,NO
+public,documents,id,1,text,NO
+public,documents,url,2,text,NO
+public,documents,contentType,3,text,NO
+public,documents,size,4,integer,NO
+public,documents,orderNumber,5,integer,NO
+public,documents,createdAt,6,timestamp without time zone,NO
+public,email_types,id,1,integer,NO
+public,email_types,name,2,text,NO
+public,icon_types,id,1,integer,NO
+public,icon_types,name,2,text,NO
+public,listing_associate_types,id,1,integer,NO
+public,listing_associate_types,name,2,text,NO
+public,listing_associates,id,1,integer,NO
+public,listing_associates,listingId,2,integer,NO
+public,listing_associates,associateId,3,integer,NO
+public,listing_associates,isPrimary,4,boolean,NO
+public,listing_associates,createdAt,5,timestamp without time zone,NO
+public,listing_building_area_feature_types,id,1,integer,NO
+public,listing_building_area_feature_types,name,2,text,NO
+public,listing_building_area_feature_types,p24Tag,3,text,YES
+public,listing_building_area_features,id,1,integer,NO
+public,listing_building_area_features,buildingInfoId,2,integer,NO
+public,listing_building_area_features,featureId,3,integer,NO
+public,listing_building_area_features,createdAt,4,timestamp without time zone,NO
+public,listing_building_infos,id,1,integer,NO
+public,listing_building_infos,listingId,2,integer,NO
+public,listing_building_infos,createdAt,3,timestamp without time zone,NO
+public,listing_building_infos,updatedAt,4,timestamp without time zone,NO
+public,listing_building_zoning_types,id,1,integer,NO
+public,listing_building_zoning_types,name,2,text,NO
+public,listing_descriptions,id,1,integer,NO
+public,listing_descriptions,listingId,2,integer,NO
+public,listing_descriptions,propertyTitle,3,text,YES
+public,listing_descriptions,propertyDescription,4,text,YES
+public,listing_descriptions,shortDescription,5,text,YES
+public,listing_descriptions,listingTypeId,6,integer,NO
+public,listing_descriptions,createdAt,7,timestamp without time zone,NO
+public,listing_descriptions,updatedAt,8,timestamp without time zone,NO
+public,listing_document_types,id,1,integer,NO
+public,listing_document_types,name,2,text,NO
+public,listing_images,id,1,integer,NO
+public,listing_images,listingId,2,integer,NO
+public,listing_images,documentId,3,text,NO
+public,listing_images,orderNumber,4,integer,NO
+public,listing_images,createdAt,5,timestamp without time zone,NO
+public,listing_lightstone_validation_statuses,id,1,integer,NO
+public,listing_lightstone_validation_statuses,name,2,text,NO
+public,listing_lightstone_validations,id,1,integer,NO
+public,listing_lightstone_validations,listingId,2,integer,NO
+public,listing_lightstone_validations,lightStonePropertyId,3,integer,YES
+public,listing_lightstone_validations,validationStatus,4,text,YES
+public,listing_lightstone_validations,createdAt,5,timestamp without time zone,NO
+public,listing_lightstone_validations,updatedAt,6,timestamp without time zone,NO
+public,listing_loom_validation_statuses,id,1,integer,NO
+public,listing_loom_validation_statuses,name,2,text,NO
+public,listing_mandate_infos,id,1,integer,NO
+public,listing_mandate_infos,listingId,2,integer,NO
+public,listing_mandate_infos,mandateTypeId,3,integer,NO
+public,listing_mandate_infos,signedDate,4,timestamp without time zone,YES
+public,listing_mandate_infos,onMarketSince,5,timestamp without time zone,YES
+public,listing_mandate_infos,ratesTaxes,6,numeric,YES
+public,listing_mandate_infos,monthlyLevy,7,numeric,YES
+public,listing_mandate_infos,createdAt,8,timestamp without time zone,NO
+public,listing_mandate_infos,updatedAt,9,timestamp without time zone,NO
+public,listing_mandate_types,id,1,integer,NO
+public,listing_mandate_types,name,2,text,NO
+public,listing_marketing_url_types,id,1,integer,NO
+public,listing_marketing_url_types,name,2,text,NO
+public,listing_marketing_urls,id,1,integer,NO
+public,listing_marketing_urls,listingId,2,integer,NO
+public,listing_marketing_urls,url,3,text,NO
+public,listing_marketing_urls,marketingUrlTypeId,4,integer,NO
+public,listing_marketing_urls,createdAt,5,timestamp without time zone,NO
+public,listing_ownership_types,id,1,integer,NO
+public,listing_ownership_types,name,2,text,NO
+public,listing_p24_feed_item_statuses,id,1,integer,NO
+public,listing_p24_feed_item_statuses,name,2,text,NO
+public,listing_p24_feed_items,id,1,integer,NO
+public,listing_p24_feed_items,listingId,2,integer,NO
+public,listing_p24_feed_items,statusId,3,integer,NO
+public,listing_p24_feed_items,jsonToFeed,4,text,YES
+public,listing_p24_feed_items,createdAt,5,timestamp without time zone,NO
+public,listing_p24_feed_items,updatedAt,6,timestamp without time zone,NO
+public,listing_price_details,id,1,integer,NO
+public,listing_price_details,listingId,2,integer,NO
+public,listing_price_details,price,3,numeric,NO
+public,listing_price_details,poa,4,boolean,NO
+public,listing_price_details,noTransferDuty,5,boolean,NO
+public,listing_price_details,ignoreForPriceReducedAlerts,6,boolean,NO
+public,listing_price_details,repossessed,7,boolean,NO
+public,listing_price_details,agentPropertyValuation,8,numeric,YES
+public,listing_price_details,createdAt,9,timestamp without time zone,NO
+public,listing_price_details,updatedAt,10,timestamp without time zone,NO
+public,listing_property_area_types,id,1,integer,NO
+public,listing_property_area_types,name,2,text,NO
+public,listing_property_areas,id,1,integer,NO
+public,listing_property_areas,listingId,2,integer,NO
+public,listing_property_areas,propertyAreaTypeId,3,integer,NO
+public,listing_property_areas,size,4,numeric,YES
+public,listing_property_areas,createdAt,5,timestamp without time zone,NO
+public,listing_property_feature_listing_sub_types,listingPropertyFeaturesId,1,integer,NO
+public,listing_property_feature_listing_sub_types,listingSubTypesId,2,integer,NO
+public,listing_property_feature_listing_types,listingPropertyFeaturesId,1,integer,NO
+public,listing_property_feature_listing_types,listingTypesId,2,integer,NO
+public,listing_sale_or_rent_types,id,1,integer,NO
+public,listing_sale_or_rent_types,name,2,text,NO
+public,listing_status_tags,id,1,integer,NO
+public,listing_status_tags,name,2,text,NO
+public,listing_statuses,id,1,integer,NO
+public,listing_statuses,name,2,text,NO
+public,listing_sub_types,id,1,integer,NO
+public,listing_sub_types,name,2,text,NO
+public,listing_third_party_integrations,id,1,integer,NO
+public,listing_third_party_integrations,listingId,2,integer,NO
+public,listing_third_party_integrations,property24Reference,3,integer,YES
+public,listing_third_party_integrations,privatePropertyReference,4,text,YES
+public,listing_third_party_integrations,kwwReference,5,text,YES
+public,listing_third_party_integrations,entegralReference,6,text,YES
+public,listing_third_party_integrations,kwwSyncMessage,7,text,YES
+public,listing_third_party_integrations,createdAt,8,timestamp without time zone,NO
+public,listing_third_party_integrations,updatedAt,9,timestamp without time zone,NO
+public,listing_types,id,1,integer,NO
+public,listing_types,name,2,text,NO
+public,listings,id,1,integer,NO
+public,listings,listingNumber,2,text,NO
+public,listings,addressId,3,integer,NO
+public,listings,marketCenterId,4,integer,NO
+public,listings,statusId,5,integer,NO
+public,listings,statusTagId,6,integer,YES
+public,listings,saleOrRentTypeId,7,integer,NO
+public,listings,mandateTypeId,8,integer,NO
+public,listings,listingTypeId,9,integer,YES
+public,listings,listingDate,10,timestamp without time zone,YES
+public,listings,expiryDate,11,timestamp without time zone,YES
+public,listings,reducedDate,12,timestamp without time zone,YES
+public,listings,pendingDate,13,timestamp without time zone,YES
+public,listings,withdrawnDate,14,timestamp without time zone,YES
+public,listings,occupationDate,15,timestamp without time zone,YES
+public,listings,createdAt,16,timestamp without time zone,NO
+public,listings,updatedAt,17,timestamp without time zone,NO
+public,listings,deletedAt,18,timestamp without time zone,YES
+public,loom_user_tokens,id,1,integer,NO
+public,loom_user_tokens,user_email,2,text,NO
+public,loom_user_tokens,access_enc,3,text,NO
+public,loom_user_tokens,refresh_enc,4,text,YES
+public,loom_user_tokens,expires_at,5,timestamp with time zone,YES
+public,loom_user_tokens,loom_email,6,text,YES
+public,loom_user_tokens,created_at,7,timestamp with time zone,NO
+public,loom_user_tokens,updated_at,8,timestamp with time zone,NO
+public,loom_user_tokens,consent_accepted,9,boolean,NO
+public,market_center_statuses,id,1,integer,NO
+public,market_center_statuses,name,2,text,NO
+public,market_centers,id,1,integer,NO
+public,market_centers,name,2,text,NO
+public,market_centers,addressId,3,integer,NO
+public,market_centers,frontdoorId,4,integer,YES
+public,market_centers,statusId,5,integer,NO
+public,market_centers,createdAt,6,timestamp without time zone,NO
+public,market_centers,updatedAt,7,timestamp without time zone,NO
+public,market_centers,deletedAt,8,timestamp without time zone,YES
+public,marketing_plan_documents,id,1,integer,NO
+public,marketing_plan_documents,associate_email,2,text,NO
+public,marketing_plan_documents,associate_db_id,3,text,YES
+public,marketing_plan_documents,property_address,4,text,YES
+public,marketing_plan_documents,seller_name,5,text,YES
+public,marketing_plan_documents,source_cma_id,6,integer,YES
+public,marketing_plan_documents,file_name,7,text,NO
+public,marketing_plan_documents,file_url,8,text,NO
+public,marketing_plan_documents,created_at,9,timestamp with time zone,NO
+public,provinces,id,1,integer,NO
+public,provinces,name,2,text,NO
+public,provinces,countryId,3,integer,NO
+public,provinces,p24Id,4,integer,YES
+public,provinces,createdAt,5,timestamp without time zone,NO
+public,provinces,updatedAt,6,timestamp without time zone,NO
+public,public_agents_v,id,1,text,YES
+public,public_agents_v,slug,2,text,YES
+public,public_agents_v,name,3,text,YES
+public,public_agents_v,title,4,text,YES
+public,public_agents_v,phone,5,text,YES
+public,public_agents_v,email,6,text,YES
+public,public_agents_v,whatsapp,7,text,YES
+public,public_agents_v,photo_url,8,text,YES
+public,public_agents_v,market_center_id,9,text,YES
+public,public_agents_v,team_id,10,text,YES
+public,public_leads,id,1,bigint,NO
+public,public_leads,listing_id,2,text,NO
+public,public_leads,internal_listing_agent_id,3,text,NO
+public,public_leads,display_context_type,4,text,NO
+public,public_leads,display_context_id,5,text,NO
+public,public_leads,public_display_contact_id,6,text,NO
+public,public_leads,page_url,7,text,NO
+public,public_leads,lead_name,8,text,NO
+public,public_leads,lead_phone,9,text,NO
+public,public_leads,lead_email,10,text,NO
+public,public_leads,message,11,text,NO
+public,public_leads,created_at,12,timestamp with time zone,NO
+public,public_listings_v,id,1,text,YES
+public,public_listings_v,slug,2,text,YES
+public,public_listings_v,listing_number,3,text,YES
+public,public_listings_v,title,4,text,YES
+public,public_listings_v,short_description,5,text,YES
+public,public_listings_v,description,6,text,YES
+public,public_listings_v,property_type,7,text,YES
+public,public_listings_v,sale_or_rent,8,text,YES
+public,public_listings_v,suburb,9,text,YES
+public,public_listings_v,city,10,text,YES
+public,public_listings_v,province,11,text,YES
+public,public_listings_v,price,12,numeric,YES
+public,public_listings_v,bedrooms,13,integer,YES
+public,public_listings_v,bathrooms,14,integer,YES
+public,public_listings_v,garages,15,integer,YES
+public,public_listings_v,parking,16,integer,YES
+public,public_listings_v,updated_at,17,timestamp without time zone,YES
+public,public_listings_v,published_at,18,timestamp without time zone,YES
+public,public_listings_v,status,19,text,YES
+public,public_listings_v,image_urls,20,ARRAY,YES
+public,public_listings_v,internal_listing_agent_id,21,text,YES
+public,public_listings_v,market_center_id,22,text,YES
+public,public_listings_v,team_id,23,text,YES
+public,public_listings_v,feature_tags,24,ARRAY,YES
+public,public_market_centres_v,id,1,text,YES
+public,public_market_centres_v,slug,2,text,YES
+public,public_market_centres_v,name,3,text,YES
+public,public_market_centres_v,description,4,text,YES
+public,public_market_centres_v,phone,5,text,YES
+public,public_market_centres_v,email,6,text,YES
+public,public_market_centres_v,logo_url,7,text,YES
+public,public_market_centres_v,contact_person,8,text,YES
+public,public_teams_v,id,1,text,YES
+public,public_teams_v,slug,2,text,YES
+public,public_teams_v,name,3,text,YES
+public,public_teams_v,description,4,text,YES
+public,public_teams_v,lead_name,5,text,YES
+public,public_teams_v,lead_photo_url,6,text,YES
+public,public_teams_v,phone,7,text,YES
+public,public_teams_v,email,8,text,YES
+public,public_teams_v,market_center_id,9,text,YES
+public,referral_statuses,id,1,integer,NO
+public,referral_statuses,name,2,text,NO
+public,referral_types,id,1,integer,NO
+public,referral_types,name,2,text,NO
+public,roles,id,1,text,NO
+public,roles,name,2,text,NO
+public,roles,createdAt,3,timestamp without time zone,NO
+public,suburbs,id,1,integer,NO
+public,suburbs,name,2,text,NO
+public,suburbs,cityId,3,integer,NO
+public,suburbs,p24Id,4,integer,YES
+public,suburbs,createdAt,5,timestamp without time zone,NO
+public,suburbs,updatedAt,6,timestamp without time zone,NO
+public,team_statuses,id,1,integer,NO
+public,team_statuses,name,2,text,NO
+public,teams,id,1,integer,NO
+public,teams,name,2,text,NO
+public,teams,marketCenterId,3,integer,NO
+public,teams,statusId,4,integer,NO
+public,teams,createdAt,5,timestamp without time zone,NO
+public,teams,updatedAt,6,timestamp without time zone,NO
+public,teams,deletedAt,7,timestamp without time zone,YES
+public,transaction_associate_payment_details,id,1,integer,NO
+public,transaction_associate_payment_details,transactionAssociateId,2,integer,NO
+public,transaction_associate_payment_details,paymentAmount,3,numeric,YES
+public,transaction_associate_payment_details,commissionPercentage,4,numeric,YES
+public,transaction_associate_payment_details,paymentStatus,5,text,YES
+public,transaction_associate_payment_details,transactionGCIBeforeFees,6,numeric,YES
+public,transaction_associate_payment_details,productionRoyalties,7,numeric,YES
+public,transaction_associate_payment_details,growthShare,8,numeric,YES
+public,transaction_associate_payment_details,gciAfterFeesExclVAT,9,numeric,YES
+public,transaction_associate_payment_details,capRemaining,10,numeric,YES
+public,transaction_associate_payment_details,associateDollar,11,numeric,YES
+public,transaction_associate_payment_details,teamDollar,12,numeric,YES
+public,transaction_associate_payment_details,mcDollar,13,numeric,YES
+public,transaction_associate_payment_details,createdAt,14,timestamp without time zone,NO
+public,transaction_associate_payment_details,updatedAt,15,timestamp without time zone,NO
+public,transaction_associate_types,id,1,integer,NO
+public,transaction_associate_types,name,2,text,NO
+public,transaction_associates,id,1,integer,NO
+public,transaction_associates,transactionId,2,integer,NO
+public,transaction_associates,associateId,3,integer,NO
+public,transaction_associates,marketCenterId,4,integer,YES
+public,transaction_associates,teamId,5,integer,YES
+public,transaction_associates,managementMarketCenterId,6,integer,YES
+public,transaction_associates,transactionAssociateTypeId,7,integer,NO
+public,transaction_associates,contactId,8,integer,YES
+public,transaction_associates,splitPercentage,9,numeric,NO
+public,transaction_associates,outsideAgency,10,text,YES
+public,transaction_associates,softDelete,11,boolean,NO
+public,transaction_associates,createdAt,12,timestamp without time zone,NO
+public,transaction_associates,updatedAt,13,timestamp without time zone,NO
+public,transaction_bonds,id,1,integer,NO
+public,transaction_bonds,transactionId,2,integer,NO
+public,transaction_bonds,bondAmount,3,numeric,YES
+public,transaction_bonds,registrationNumber,4,text,YES
+public,transaction_bonds,transactionFinancingTypeId,5,integer,YES
+public,transaction_bonds,transactionFinancialInstitutionId,6,integer,YES
+public,transaction_bonds,transactionFinancingChannelId,7,integer,YES
+public,transaction_bonds,transferAttorneyId,8,integer,YES
+public,transaction_bonds,bondAttorneyId,9,integer,YES
+public,transaction_bonds,transactionFinancingChannelContactPersonId,10,text,YES
+public,transaction_bonds,createdAt,11,timestamp without time zone,NO
+public,transaction_bonds,updatedAt,12,timestamp without time zone,NO
+public,transaction_contact_types,id,1,integer,NO
+public,transaction_contact_types,name,2,text,NO
+public,transaction_contacts,id,1,integer,NO
+public,transaction_contacts,transactionId,2,integer,NO
+public,transaction_contacts,contactId,3,integer,NO
+public,transaction_contacts,transactionContactTypeId,4,integer,NO
+public,transaction_contacts,createdAt,5,timestamp without time zone,NO
+public,transaction_descriptions,id,1,integer,NO
+public,transaction_descriptions,transactionId,2,integer,NO
+public,transaction_descriptions,soldPrice,3,numeric,NO
+public,transaction_descriptions,contractGCIExclVAT,4,numeric,NO
+public,transaction_descriptions,transactionDate,5,timestamp without time zone,YES
+public,transaction_descriptions,varianceSaleListPricePerc,6,numeric,YES
+public,transaction_descriptions,avgCommsPerc,7,numeric,YES
+public,transaction_descriptions,soldDate,8,timestamp without time zone,YES
+public,transaction_descriptions,expectedDate,9,timestamp without time zone,YES
+public,transaction_descriptions,paymentNotes,10,text,YES
+public,transaction_descriptions,returnNotes,11,text,YES
+public,transaction_descriptions,createdAt,12,timestamp without time zone,NO
+public,transaction_descriptions,updatedAt,13,timestamp without time zone,NO
+public,transaction_documents,id,1,integer,NO
+public,transaction_documents,transactionId,2,integer,NO
+public,transaction_documents,documentId,3,text,NO
+public,transaction_documents,createdAt,4,timestamp without time zone,NO
+public,transaction_financial_institutions,id,1,integer,NO
+public,transaction_financial_institutions,name,2,text,NO
+public,transaction_financial_institutions,createdAt,3,timestamp without time zone,NO
+public,transaction_financial_institutions,updatedAt,4,timestamp without time zone,NO
+public,transaction_financing_channels,id,1,integer,NO
+public,transaction_financing_channels,name,2,text,NO
+public,transaction_financing_types,id,1,integer,NO
+public,transaction_financing_types,name,2,text,NO
+public,transaction_notes,id,1,integer,NO
+public,transaction_notes,transactionId,2,integer,NO
+public,transaction_notes,content,3,text,NO
+public,transaction_notes,createdAt,4,timestamp without time zone,NO
+public,transaction_statuses,id,1,integer,NO
+public,transaction_statuses,name,2,text,NO
+public,transactions,id,1,integer,NO
+public,transactions,transactionNumber,2,text,NO
+public,transactions,listingId,3,integer,NO
+public,transactions,statusId,4,integer,NO
+public,transactions,statusChangeDate,5,timestamp without time zone,YES
+public,transactions,createdAt,6,timestamp without time zone,NO
+public,transactions,updatedAt,7,timestamp without time zone,NO
+public,transactions,whoUpdatedId,8,text,YES
+public,transactions,whenUpdated,9,timestamp without time zone,NO
+public,transactions,deletedAt,10,timestamp without time zone,YES
+public,user_roles,userId,1,text,NO
+public,user_roles,roleId,2,text,NO
+public,users,id,1,text,NO
+public,users,email,2,text,NO
+public,users,password,3,text,NO
+public,users,firstName,4,text,NO
+public,users,lastName,5,text,NO
+public,users,createdAt,6,timestamp without time zone,NO
+public,users,updatedAt,7,timestamp without time zone,NO
+public,users,deletedAt,8,timestamp without time zone,YES
+staging,associate_admin_market_centers_raw,source_associate_id,1,text,YES
+staging,associate_admin_market_centers_raw,source_market_center_id,2,text,YES
+staging,associate_admin_teams_raw,source_associate_id,1,text,YES
+staging,associate_admin_teams_raw,source_team_id,2,text,YES
+staging,associate_business_details_raw,source_associate_id,1,text,YES
+staging,associate_business_details_raw,kwuid,2,text,YES
+staging,associate_business_details_raw,growth_share_sponsor_source_id,3,text,YES
+staging,associate_business_details_raw,proposed_growth_share_sponsor,4,text,YES
+staging,associate_business_details_raw,temporary_growth_share_sponsor,5,text,YES
+staging,associate_business_details_raw,vested,6,text,YES
+staging,associate_business_details_raw,vesting_start_period,7,text,YES
+staging,associate_business_details_raw,listing_approval_required,8,text,YES
+staging,associate_business_details_raw,exclude_from_individual_reports,9,text,YES
+staging,associate_business_details_raw,source_market_center_id,10,text,YES
+staging,associate_business_details_raw,source_team_id,11,text,YES
+staging,associate_commissions_raw,source_associate_id,1,text,YES
+staging,associate_commissions_raw,commission_split_pct,2,text,YES
+staging,associate_commissions_raw,total_cap_amount,3,text,YES
+staging,associate_commissions_raw,manual_cap,4,text,YES
+staging,associate_dates_raw,source_associate_id,1,text,YES
+staging,associate_dates_raw,start_date,2,text,YES
+staging,associate_dates_raw,end_date,3,text,YES
+staging,associate_dates_raw,anniversary_date,4,text,YES
+staging,associate_dates_raw,cap_date,5,text,YES
+staging,associate_documents_raw,id,1,bigint,NO
+staging,associate_documents_raw,source_associate_id,2,text,YES
+staging,associate_documents_raw,source_document_id,3,text,YES
+staging,associate_documents_raw,source_associate_document_type_id,4,text,YES
+staging,associate_documents_raw,associate_document_type,5,text,YES
+staging,associate_documents_raw,document_url,6,text,YES
+staging,associate_documents_raw,preview_url,7,text,YES
+staging,associate_documents_raw,file_name,8,text,YES
+staging,associate_documents_raw,created_at,9,timestamp with time zone,YES
+staging,associate_documents_raw,updated_at,10,timestamp with time zone,YES
+staging,associate_documents_raw,soft_delete,11,boolean,YES
+staging,associate_documents_raw,loaded_at,12,timestamp with time zone,NO
+staging,associate_job_titles_raw,source_associate_id,1,text,YES
+staging,associate_job_titles_raw,job_title_name,2,text,YES
+staging,associate_roles_raw,source_associate_id,1,text,YES
+staging,associate_roles_raw,role_name,2,text,YES
+staging,associate_service_communities_raw,source_associate_id,1,text,YES
+staging,associate_service_communities_raw,service_community_name,2,text,YES
+staging,associate_third_party_raw,source_associate_id,1,text,YES
+staging,associate_third_party_raw,feed_to_p24,2,text,YES
+staging,associate_third_party_raw,p24_agent_id,3,text,YES
+staging,associate_third_party_raw,entegral_agent_id,4,text,YES
+staging,associate_third_party_raw,feed_to_entegral,5,text,YES
+staging,associate_third_party_raw,entegral_sync_message,6,text,YES
+staging,associates_raw,id,1,bigint,NO
+staging,associates_raw,batch_id,2,text,NO
+staging,associates_raw,source_associate_id,3,text,YES
+staging,associates_raw,first_name,4,text,YES
+staging,associates_raw,last_name,5,text,YES
+staging,associates_raw,email,6,text,YES
+staging,associates_raw,status_name,7,text,YES
+staging,associates_raw,market_center_name,8,text,YES
+staging,associates_raw,team_name,9,text,YES
+staging,associates_raw,kwuid,10,text,YES
+staging,associates_raw,source_updated_at,11,timestamp with time zone,YES
+staging,associates_raw,raw_payload,12,jsonb,YES
+staging,associates_raw,loaded_at,13,timestamp with time zone,NO
+staging,listing_associates,id,1,bigint,NO
+staging,listing_associates,source_listing_id,2,text,YES
+staging,listing_associates,source_associate_id,3,text,YES
+staging,listing_associates,associate_name,4,text,YES
+staging,listing_associates,is_primary,5,boolean,YES
+staging,listing_associates,loaded_at,6,timestamp with time zone,NO
+staging,listing_documents_raw,id,1,bigint,NO
+staging,listing_documents_raw,source_listing_id,2,text,YES
+staging,listing_documents_raw,source_document_id,3,text,YES
+staging,listing_documents_raw,source_listing_document_type_id,4,text,YES
+staging,listing_documents_raw,listing_document_type,5,text,YES
+staging,listing_documents_raw,document_url,6,text,YES
+staging,listing_documents_raw,preview_url,7,text,YES
+staging,listing_documents_raw,file_name,8,text,YES
+staging,listing_documents_raw,created_at,9,timestamp with time zone,YES
+staging,listing_documents_raw,updated_at,10,timestamp with time zone,YES
+staging,listing_documents_raw,soft_delete,11,boolean,YES
+staging,listing_documents_raw,loaded_at,12,timestamp with time zone,NO
+staging,listing_features_raw,id,1,bigint,NO
+staging,listing_features_raw,source_listing_id,2,text,YES
+staging,listing_features_raw,source_feature_id,3,text,YES
+staging,listing_features_raw,feature_name,4,text,YES
+staging,listing_features_raw,source_feature_category_id,5,text,YES
+staging,listing_features_raw,soft_delete,6,boolean,YES
+staging,listing_features_raw,updated_at,7,timestamp with time zone,YES
+staging,listing_features_raw,loaded_at,8,timestamp with time zone,NO
+staging,listing_images_raw,id,1,bigint,NO
+staging,listing_images_raw,source_listing_id,2,text,YES
+staging,listing_images_raw,document_id,3,text,YES
+staging,listing_images_raw,image_url,4,text,YES
+staging,listing_images_raw,preview_url,5,text,YES
+staging,listing_images_raw,order_number,6,integer,YES
+staging,listing_images_raw,image_caption,7,text,YES
+staging,listing_images_raw,loaded_at,8,timestamp with time zone,NO
+staging,listing_marketing_urls_raw,id,1,bigint,NO
+staging,listing_marketing_urls_raw,source_listing_id,2,text,YES
+staging,listing_marketing_urls_raw,url,3,text,YES
+staging,listing_marketing_urls_raw,marketing_url_type_id,4,text,YES
+staging,listing_marketing_urls_raw,loaded_at,5,timestamp with time zone,NO
+staging,listing_p24_feed_items_raw,id,1,bigint,NO
+staging,listing_p24_feed_items_raw,source_listing_p24_feed_item_id,2,text,YES
+staging,listing_p24_feed_items_raw,source_listing_id,3,text,YES
+staging,listing_p24_feed_items_raw,source_status_id,4,text,YES
+staging,listing_p24_feed_items_raw,json_to_feed,5,text,YES
+staging,listing_p24_feed_items_raw,blob_url,6,text,YES
+staging,listing_p24_feed_items_raw,created_at,7,timestamp with time zone,YES
+staging,listing_p24_feed_items_raw,updated_at,8,timestamp with time zone,YES
+staging,listing_p24_feed_items_raw,loaded_at,9,timestamp with time zone,NO
+staging,listing_property_areas_raw,id,1,bigint,NO
+staging,listing_property_areas_raw,source_listing_id,2,text,YES
+staging,listing_property_areas_raw,source_property_area_id,3,text,YES
+staging,listing_property_areas_raw,property_area_name,4,text,YES
+staging,listing_property_areas_raw,area_size,5,numeric,YES
+staging,listing_property_areas_raw,source_measurement_type_id,6,text,YES
+staging,listing_property_areas_raw,soft_delete,7,boolean,YES
+staging,listing_property_areas_raw,updated_at,8,timestamp with time zone,YES
+staging,listing_property_areas_raw,loaded_at,9,timestamp with time zone,NO
+staging,listings_raw,id,1,bigint,NO
+staging,listings_raw,batch_id,2,text,NO
+staging,listings_raw,source_listing_id,3,text,YES
+staging,listings_raw,listing_number,4,text,YES
+staging,listings_raw,status_name,5,text,YES
+staging,listings_raw,market_center_name,6,text,YES
+staging,listings_raw,sale_or_rent,7,text,YES
+staging,listings_raw,street_number,8,text,YES
+staging,listings_raw,street_name,9,text,YES
+staging,listings_raw,suburb,10,text,YES
+staging,listings_raw,city,11,text,YES
+staging,listings_raw,province,12,text,YES
+staging,listings_raw,country,13,text,YES
+staging,listings_raw,price,14,numeric,YES
+staging,listings_raw,expiry_date,15,timestamp with time zone,YES
+staging,listings_raw,source_updated_at,16,timestamp with time zone,YES
+staging,listings_raw,property_title,17,text,YES
+staging,listings_raw,short_title,18,text,YES
+staging,listings_raw,property_description,19,text,YES
+staging,listings_raw,listing_images_json,20,jsonb,YES
+staging,listings_raw,raw_payload,21,jsonb,YES
+staging,listings_raw,loaded_at,22,timestamp with time zone,NO
+staging,market_centers_raw,id,1,bigint,NO
+staging,market_centers_raw,batch_id,2,text,NO
+staging,market_centers_raw,source_market_center_id,3,text,YES
+staging,market_centers_raw,name,4,text,YES
+staging,market_centers_raw,status_name,5,text,YES
+staging,market_centers_raw,frontdoor_id,6,text,YES
+staging,market_centers_raw,source_updated_at,7,timestamp with time zone,YES
+staging,market_centers_raw,raw_payload,8,jsonb,YES
+staging,market_centers_raw,loaded_at,9,timestamp with time zone,NO
+staging,portal_fields_raw,source_listing_id,1,text,YES
+staging,portal_fields_raw,listing_number,2,text,YES
+staging,portal_fields_raw,display_address_on_website,3,text,YES
+staging,portal_fields_raw,feed_to_property24,4,text,YES
+staging,portal_fields_raw,property24_ref1,5,text,YES
+staging,portal_fields_raw,feed_to_entegral,6,text,YES
+staging,portal_fields_raw,feed_to_private_property,7,text,YES
+staging,portal_fields_raw,private_property_ref1,8,text,YES
+staging,portal_fields_raw,feed_to_kww,9,text,YES
+staging,portal_fields_raw,kww_property_reference,10,text,YES
+staging,portal_fields_raw_norm,source_listing_id,1,text,YES
+staging,portal_fields_raw_norm,listing_number,2,text,YES
+staging,portal_fields_raw_norm,display_address_on_website,3,boolean,YES
+staging,portal_fields_raw_norm,feed_to_property24,4,boolean,YES
+staging,portal_fields_raw_norm,property24_ref1,5,text,YES
+staging,portal_fields_raw_norm,feed_to_entegral,6,boolean,YES
+staging,portal_fields_raw_norm,feed_to_private_property,7,boolean,YES
+staging,portal_fields_raw_norm,private_property_ref1,8,text,YES
+staging,portal_fields_raw_norm,feed_to_kww,9,boolean,YES
+staging,portal_fields_raw_norm,kww_property_reference,10,text,YES
+staging,ssms_listing_area_features_flat_raw,id,1,bigint,NO
+staging,ssms_listing_area_features_flat_raw,source_listing_id,2,text,YES
+staging,ssms_listing_area_features_flat_raw,listing_number,3,text,YES
+staging,ssms_listing_area_features_flat_raw,listing_property_area_id,4,text,YES
+staging,ssms_listing_area_features_flat_raw,listing_property_area_type_id,5,text,YES
+staging,ssms_listing_area_features_flat_raw,area_name,6,text,YES
+staging,ssms_listing_area_features_flat_raw,feature_name,7,text,YES
+staging,ssms_listing_area_features_flat_raw,loaded_at,8,timestamp with time zone,NO
+staging,ssms_listing_building_area_features_raw,id,1,bigint,NO
+staging,ssms_listing_building_area_features_raw,source_listing_id,2,text,YES
+staging,ssms_listing_building_area_features_raw,listing_number,3,text,YES
+staging,ssms_listing_building_area_features_raw,listing_building_info_id,4,text,YES
+staging,ssms_listing_building_area_features_raw,area_name,5,text,YES
+staging,ssms_listing_building_area_features_raw,feature_name,6,text,YES
+staging,ssms_listing_building_area_features_raw,feature_p24_tag,7,text,YES
+staging,ssms_listing_building_area_features_raw,loaded_at,8,timestamp with time zone,NO
+staging,ssms_listing_building_info_internet_raw,id,1,bigint,NO
+staging,ssms_listing_building_info_internet_raw,source_listing_id,2,text,YES
+staging,ssms_listing_building_info_internet_raw,listing_number,3,text,YES
+staging,ssms_listing_building_info_internet_raw,listing_building_info_id,4,text,YES
+staging,ssms_listing_building_info_internet_raw,adsl,5,boolean,YES
+staging,ssms_listing_building_info_internet_raw,dialup,6,boolean,YES
+staging,ssms_listing_building_info_internet_raw,fibre,7,boolean,YES
+staging,ssms_listing_building_info_internet_raw,fixed_wimax,8,boolean,YES
+staging,ssms_listing_building_info_internet_raw,isdn,9,boolean,YES
+staging,ssms_listing_building_info_internet_raw,satellite,10,boolean,YES
+staging,ssms_listing_building_info_internet_raw,loaded_at,11,timestamp with time zone,NO
+staging,ssms_listing_building_info_public_transport_raw,id,1,bigint,NO
+staging,ssms_listing_building_info_public_transport_raw,source_listing_id,2,text,YES
+staging,ssms_listing_building_info_public_transport_raw,listing_number,3,text,YES
+staging,ssms_listing_building_info_public_transport_raw,listing_building_info_id,4,text,YES
+staging,ssms_listing_building_info_public_transport_raw,has_nearby_bus_service,5,boolean,YES
+staging,ssms_listing_building_info_public_transport_raw,has_nearby_minibus_taxi_service,6,boolean,YES
+staging,ssms_listing_building_info_public_transport_raw,has_nearby_train_service,7,boolean,YES
+staging,ssms_listing_building_info_public_transport_raw,loaded_at,8,timestamp with time zone,NO
+staging,ssms_listing_building_info_raw,id,1,bigint,NO
+staging,ssms_listing_building_info_raw,source_listing_id,2,text,YES
+staging,ssms_listing_building_info_raw,listing_number,3,text,YES
+staging,ssms_listing_building_info_raw,listing_building_info_id,4,text,YES
+staging,ssms_listing_building_info_raw,erf_size,5,text,YES
+staging,ssms_listing_building_info_raw,floor_area,6,text,YES
+staging,ssms_listing_building_info_raw,number_of_floors,7,text,YES
+staging,ssms_listing_building_info_raw,construction_year,8,text,YES
+staging,ssms_listing_building_info_raw,height_restriction,9,text,YES
+staging,ssms_listing_building_info_raw,furnished_property,10,boolean,YES
+staging,ssms_listing_building_info_raw,has_flatlet,11,boolean,YES
+staging,ssms_listing_building_info_raw,pet_friendly,12,boolean,YES
+staging,ssms_listing_building_info_raw,out_building_size,13,text,YES
+staging,ssms_listing_building_info_raw,has_backup_water,14,boolean,YES
+staging,ssms_listing_building_info_raw,has_generator,15,boolean,YES
+staging,ssms_listing_building_info_raw,has_standalone_building,16,boolean,YES
+staging,ssms_listing_building_info_raw,wheelchair_accessible,17,boolean,YES
+staging,ssms_listing_building_info_raw,zoning_type,18,text,YES
+staging,ssms_listing_building_info_raw,loaded_at,19,timestamp with time zone,NO
+staging,ssms_listing_building_info_sustainability_raw,id,1,bigint,NO
+staging,ssms_listing_building_info_sustainability_raw,source_listing_id,2,text,YES
+staging,ssms_listing_building_info_sustainability_raw,listing_number,3,text,YES
+staging,ssms_listing_building_info_sustainability_raw,listing_building_info_id,4,text,YES
+staging,ssms_listing_building_info_sustainability_raw,has_solar_panels,5,boolean,YES
+staging,ssms_listing_building_info_sustainability_raw,has_solar_geyser,6,boolean,YES
+staging,ssms_listing_building_info_sustainability_raw,has_gas_geyser,7,boolean,YES
+staging,ssms_listing_building_info_sustainability_raw,has_water_tank,8,boolean,YES
+staging,ssms_listing_building_info_sustainability_raw,has_borehole,9,boolean,YES
+staging,ssms_listing_building_info_sustainability_raw,has_backup_battery_or_inverter,10,boolean,YES
+staging,ssms_listing_building_info_sustainability_raw,loaded_at,11,timestamp with time zone,NO
+staging,ssms_listing_details_raw,id,1,bigint,NO
+staging,ssms_listing_details_raw,source_listing_id,2,text,YES
+staging,ssms_listing_details_raw,listing_number,3,text,YES
+staging,ssms_listing_details_raw,status_name,4,text,YES
+staging,ssms_listing_details_raw,listing_status_tag,5,text,YES
+staging,ssms_listing_details_raw,sale_or_rent,6,text,YES
+staging,ssms_listing_details_raw,list_date,7,text,YES
+staging,ssms_listing_details_raw,reduced_date,8,text,YES
+staging,ssms_listing_details_raw,reduced_price,9,text,YES
+staging,ssms_listing_details_raw,property24_reference,10,text,YES
+staging,ssms_listing_details_raw,private_property_reference,11,text,YES
+staging,ssms_listing_details_raw,kww_sync_message,12,text,YES
+staging,ssms_listing_details_raw,p24_sync_message,13,text,YES
+staging,ssms_listing_details_raw,private_property_sync_message,14,text,YES
+staging,ssms_listing_details_raw,entegral_sync_message,15,text,YES
+staging,ssms_listing_details_raw,erf_number,16,text,YES
+staging,ssms_listing_details_raw,erf_size,17,text,YES
+staging,ssms_listing_details_raw,floor_area,18,text,YES
+staging,ssms_listing_details_raw,has_flatlet,19,boolean,YES
+staging,ssms_listing_details_raw,kww_property_reference,20,text,YES
+staging,ssms_listing_details_raw,marketing_urls,21,text,YES
+staging,ssms_listing_details_raw,document_urls,22,text,YES
+staging,ssms_listing_details_raw,building_feature,23,text,YES
+staging,ssms_listing_details_raw,loaded_at,24,timestamp with time zone,NO
+staging,ssms_listing_property_area_features_raw,id,1,bigint,NO
+staging,ssms_listing_property_area_features_raw,source_listing_id,2,text,YES
+staging,ssms_listing_property_area_features_raw,listing_number,3,text,YES
+staging,ssms_listing_property_area_features_raw,listing_property_area_id,4,text,YES
+staging,ssms_listing_property_area_features_raw,listing_property_area_type_id,5,text,YES
+staging,ssms_listing_property_area_features_raw,area_name,6,text,YES
+staging,ssms_listing_property_area_features_raw,feature_name,7,text,YES
+staging,ssms_listing_property_area_features_raw,feature_p24_tag,8,text,YES
+staging,ssms_listing_property_area_features_raw,loaded_at,9,timestamp with time zone,NO
+staging,ssms_listing_property_areas_raw,id,1,bigint,NO
+staging,ssms_listing_property_areas_raw,source_listing_id,2,text,YES
+staging,ssms_listing_property_areas_raw,listing_number,3,text,YES
+staging,ssms_listing_property_areas_raw,listing_property_area_id,4,text,YES
+staging,ssms_listing_property_areas_raw,listing_property_area_type_id,5,text,YES
+staging,ssms_listing_property_areas_raw,area_name,6,text,YES
+staging,ssms_listing_property_areas_raw,area_type_name,7,text,YES
+staging,ssms_listing_property_areas_raw,area_count,8,text,YES
+staging,ssms_listing_property_areas_raw,area_size,9,text,YES
+staging,ssms_listing_property_areas_raw,area_description,10,text,YES
+staging,ssms_listing_property_areas_raw,loaded_at,11,timestamp with time zone,NO
+staging,team_associate_comm_raw,source_id,1,text,YES
+staging,team_associate_comm_raw,source_team_id,2,text,YES
+staging,team_associate_comm_raw,has_individual_cap,3,text,YES
+staging,team_associate_comm_raw,associate_default_cap,4,text,YES
+staging,team_associate_comm_raw,associate_default_split,5,text,YES
+staging,team_associate_comm_raw,productivity_coach,6,text,YES
+staging,team_caps_raw,source_cap_id,1,text,YES
+staging,team_caps_raw,source_team_id,2,text,YES
+staging,team_caps_raw,commission_split_to_team,3,text,YES
+staging,team_caps_raw,team_cap_amount,4,text,YES
+staging,team_caps_raw,manual_cap,5,text,YES
+staging,team_caps_raw,cap_year,6,text,YES
+staging,team_caps_raw,source_updated_at,7,text,YES
+staging,team_dates_raw,source_id,1,text,YES
+staging,team_dates_raw,source_team_id,2,text,YES
+staging,team_dates_raw,open_date,3,text,YES
+staging,team_dates_raw,close_date,4,text,YES
+staging,team_dates_raw,cap_date,5,text,YES
+staging,team_dates_raw,anniversary_date,6,text,YES
+staging,team_dates_raw,anniversary_comment,7,text,YES
+staging,team_notes_raw,source_id,1,text,YES
+staging,team_notes_raw,source_team_id,2,text,YES
+staging,team_notes_raw,note_text,3,text,YES
+staging,team_notes_raw,note_type,4,text,YES
+staging,team_notes_raw,created_by,5,text,YES
+staging,team_notes_raw,created_at,6,text,YES
+staging,team_third_party_raw,source_id,1,text,YES
+staging,team_third_party_raw,source_team_id,2,text,YES
+staging,team_third_party_raw,third_party_name,3,text,YES
+staging,team_third_party_raw,external_team_id,4,text,YES
+staging,team_third_party_raw,is_active,5,text,YES
+staging,team_third_party_raw,sync_message,6,text,YES
+staging,teams_raw,id,1,bigint,NO
+staging,teams_raw,batch_id,2,text,NO
+staging,teams_raw,source_team_id,3,text,YES
+staging,teams_raw,source_market_center_id,4,text,YES
+staging,teams_raw,name,5,text,YES
+staging,teams_raw,status_name,6,text,YES
+staging,teams_raw,source_updated_at,7,timestamp with time zone,YES
+staging,teams_raw,raw_payload,8,jsonb,YES
+staging,teams_raw,loaded_at,9,timestamp with time zone,NO
+staging,transaction_agents,id,1,bigint,NO
+staging,transaction_agents,transaction_id,2,bigint,NO
+staging,transaction_agents,source_associate_id,3,text,YES
+staging,transaction_agents,associate_name,4,text,YES
+staging,transaction_agents,split_percentage,5,numeric,YES
+staging,transaction_agents,agent_type,6,text,YES
+staging,transaction_agents,sort_order,7,integer,YES
+staging,transaction_agents,created_at,8,timestamp with time zone,NO
+staging,transaction_agents,outside_agency,9,boolean,YES
+staging,transaction_agents,market_center_id_source,10,text,YES
+staging,transaction_agents,team_id_source,11,text,YES
+staging,transaction_agents,management_mc_id_source,12,text,YES
+staging,transaction_associate_payment_details,id,1,bigint,NO
+staging,transaction_associate_payment_details,source_transaction_id,2,text,YES
+staging,transaction_associate_payment_details,source_associate_id,3,text,YES
+staging,transaction_associate_payment_details,split_percentage,4,numeric,YES
+staging,transaction_associate_payment_details,gci_before_fees,5,numeric,YES
+staging,transaction_associate_payment_details,production_royalties,6,numeric,YES
+staging,transaction_associate_payment_details,growth_share,7,numeric,YES
+staging,transaction_associate_payment_details,gci_after_fees_excl_vat,8,numeric,YES
+staging,transaction_associate_payment_details,cap_remaining,9,numeric,YES
+staging,transaction_associate_payment_details,associate_dollar,10,numeric,YES
+staging,transaction_associate_payment_details,team_dollar,11,numeric,YES
+staging,transaction_associate_payment_details,mc_dollar,12,numeric,YES
+staging,transaction_associate_payment_details,loaded_at,13,timestamp with time zone,NO
+staging,transaction_associate_payment_details,source_transaction_associate_id,14,text,YES
+staging,transaction_bonds,id,1,bigint,NO
+staging,transaction_bonds,source_transaction_id,2,text,YES
+staging,transaction_bonds,bond_amount,3,numeric,YES
+staging,transaction_bonds,bond_due_date,4,date,YES
+staging,transaction_bonds,bond_originator,5,text,YES
+staging,transaction_bonds,other_financial_institution,6,text,YES
+staging,transaction_bonds,financing_type,7,text,YES
+staging,transaction_bonds,financial_institution,8,text,YES
+staging,transaction_bonds,financing_channel,9,text,YES
+staging,transaction_bonds,transfer_attorney,10,text,YES
+staging,transaction_bonds,bond_attorney,11,text,YES
+staging,transaction_bonds,loaded_at,12,timestamp with time zone,NO
+staging,transaction_contacts_raw,id,1,bigint,NO
+staging,transaction_contacts_raw,source_transaction_id,2,text,YES
+staging,transaction_contacts_raw,source_contact_id,3,text,YES
+staging,transaction_contacts_raw,source_transaction_contact_type_id,4,text,YES
+staging,transaction_contacts_raw,transaction_contact_type,5,text,YES
+staging,transaction_contacts_raw,contact_full_name,6,text,YES
+staging,transaction_contacts_raw,first_name,7,text,YES
+staging,transaction_contacts_raw,last_name,8,text,YES
+staging,transaction_contacts_raw,email,9,text,YES
+staging,transaction_contacts_raw,phone_number,10,text,YES
+staging,transaction_contacts_raw,created_at,11,timestamp with time zone,YES
+staging,transaction_contacts_raw,updated_at,12,timestamp with time zone,YES
+staging,transaction_contacts_raw,soft_delete,13,boolean,YES
+staging,transaction_contacts_raw,loaded_at,14,timestamp with time zone,NO
+staging,transaction_documents_raw,id,1,bigint,NO
+staging,transaction_documents_raw,source_transaction_id,2,text,YES
+staging,transaction_documents_raw,source_document_id,3,text,YES
+staging,transaction_documents_raw,source_transaction_document_type_id,4,text,YES
+staging,transaction_documents_raw,transaction_document_type,5,text,YES
+staging,transaction_documents_raw,document_url,6,text,YES
+staging,transaction_documents_raw,preview_url,7,text,YES
+staging,transaction_documents_raw,file_name,8,text,YES
+staging,transaction_documents_raw,created_at,9,timestamp with time zone,YES
+staging,transaction_documents_raw,updated_at,10,timestamp with time zone,YES
+staging,transaction_documents_raw,soft_delete,11,boolean,YES
+staging,transaction_documents_raw,loaded_at,12,timestamp with time zone,NO
+staging,transaction_notes,id,1,bigint,NO
+staging,transaction_notes,source_transaction_id,2,text,YES
+staging,transaction_notes,note_text,3,text,YES
+staging,transaction_notes,created_at,4,timestamp with time zone,YES
+staging,transaction_notes,updated_at,5,timestamp with time zone,YES
+staging,transaction_notes,loaded_at,6,timestamp with time zone,NO
+staging,transactions_raw,id,1,bigint,NO
+staging,transactions_raw,batch_id,2,text,NO
+staging,transactions_raw,source_transaction_id,3,text,YES
+staging,transactions_raw,transaction_number,4,text,YES
+staging,transactions_raw,source_market_center_id,5,text,YES
+staging,transactions_raw,market_center_name,6,text,YES
+staging,transactions_raw,source_associate_id,7,text,YES
+staging,transactions_raw,associate_name,8,text,YES
+staging,transactions_raw,transaction_status,9,text,YES
+staging,transactions_raw,source_listing_id,10,text,YES
+staging,transactions_raw,listing_number,11,text,YES
+staging,transactions_raw,list_date,12,timestamp with time zone,YES
+staging,transactions_raw,transaction_date,13,timestamp with time zone,YES
+staging,transactions_raw,status_change_date,14,timestamp with time zone,YES
+staging,transactions_raw,expected_date,15,timestamp with time zone,YES
+staging,transactions_raw,transaction_type,16,text,YES
+staging,transactions_raw,address,17,text,YES
+staging,transactions_raw,suburb,18,text,YES
+staging,transactions_raw,city,19,text,YES
+staging,transactions_raw,sales_price,20,numeric,YES
+staging,transactions_raw,list_price,21,numeric,YES
+staging,transactions_raw,gci_excl_vat,22,numeric,YES
+staging,transactions_raw,split_percentage,23,numeric,YES
+staging,transactions_raw,net_comm,24,numeric,YES
+staging,transactions_raw,total_gci,25,numeric,YES
+staging,transactions_raw,sale_type,26,text,YES
+staging,transactions_raw,agent_type,27,text,YES
+staging,transactions_raw,buyer,28,text,YES
+staging,transactions_raw,seller,29,text,YES
+staging,transactions_raw,raw_payload,30,jsonb,YES
+staging,transactions_raw,loaded_at,31,timestamp with time zone,NO
+staging,transactions_raw,payment_notes,32,text,YES
+staging,transactions_raw,return_notes,33,text,YES
+staging,transactions_raw,source_team_id,34,text,YES
+staging,transactions_raw,team_name,35,text,YES
+staging,transactions_raw,current_source_market_center_id,36,text,YES
+staging,transactions_raw,current_market_center_name,37,text,YES
+staging,transactions_raw,current_source_team_id,38,text,YES
+staging,transactions_raw,current_team_name,39,text,YES
+staging,transactions_raw,listing_office_name,40,text,YES
+staging,transactions_raw,variance_per,41,numeric,YES
+staging,transactions_raw,contract_gci_excl_vat,42,numeric,YES
+staging,transactions_raw,avg_comms_per,43,numeric,YES
+staging,transactions_raw,transaction_gci_excl_vat,44,numeric,YES
+staging,transactions_raw,growth_share,45,numeric,YES
+staging,transactions_raw,production_royalties,46,numeric,YES
+staging,transactions_raw,cap_remaining,47,numeric,YES
+staging,transactions_raw,associate_dollar,48,numeric,YES
+staging,transactions_raw,mc_dollar,49,numeric,YES
+staging,transactions_raw,company_dollar,50,numeric,YES
+staging,transactions_raw,team_dollar,51,numeric,YES
+staging,transactions_raw,transfer_attorney,52,text,YES
+staging,transactions_raw,ta_mobile_phone,53,text,YES
+staging,transactions_raw,ta_email,54,text,YES
+staging,transactions_raw,bond_attorney_contact_id,55,text,YES
+staging,transactions_raw,bond_attorney,56,text,YES
+staging,transactions_raw,ba_mobile_phone,57,text,YES
+staging,transactions_raw,ba_email,58,text,YES
+staging,transactions_raw,bond_originator,59,text,YES
+staging,transactions_raw,bond_due_date,60,timestamp with time zone,YES
+staging,transactions_raw,bond_amount,61,numeric,YES
+staging,transactions_raw,transaction_financial_institution_id,62,text,YES
+staging,transactions_raw,transaction_financial_institution,63,text,YES
+staging,transactions_raw,financial_institution_other,64,text,YES
+staging,transactions_raw,transaction_financing_type_id,65,text,YES
+staging,transactions_raw,transaction_financing_type,66,text,YES
+staging,transactions_raw,all_parties_invoiced,67,text,YES

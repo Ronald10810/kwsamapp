@@ -1,0 +1,6 @@
+﻿timestamp,step,database,status,details
+2026-05-14T15:39:03,indexes,kwsa_uat,ok,pg_indexes export
+2026-05-14T15:39:04,indexes,kwsa_prod,ok,pg_indexes export
+2026-05-14T15:39:05,indexes,kwsa,ok,pg_indexes export
+2026-05-14T15:39:06,schema,kwsa,failed,pg_dump fallback failed
+2026-05-14T15:39:07,indexes,kwsa_public,ok,pg_indexes export

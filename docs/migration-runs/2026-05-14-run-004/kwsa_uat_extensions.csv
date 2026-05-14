@@ -1,0 +1,4 @@
+extname,extversion
+google_vacuum_mgmt,1.0
+pg_trgm,1.6
+plpgsql,1.0
