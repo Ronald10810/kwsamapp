@@ -155,3 +155,56 @@ LINE 10:   updated_at
 
 ## Artifacts
 - Execution log: `docs/migration-runs/2026-05-14-run-010/phase4-execution.log`
+
+---
+
+## 2026-05-15 Approval 10e rerun (FAILED)
+
+### Execution Sequence and Results
+
+**0. Targeted cleanup of migration.load_rejections:**
+- Ran: DELETE FROM migration.load_rejections WHERE reason LIKE '%core_listings%' AND rejected_at > now() - interval '2 days';
+- Result: 0 rows deleted. Current count: 72,546
+
+**1. scripts/transform-staging-to-migration.sql:**
+- Ran after verifying current_database() = kwsa_import_staging
+- Result: FAILED at core_transactions step
+- Error: column "source_associate_id" of relation "core_transactions" does not exist
+- No rows inserted into migration.core_transactions
+- All other core tables populated:
+    - migration.core_market_centers: 48
+    - migration.core_teams: 219
+    - migration.core_associates: 9,243
+    - migration.core_listings: 129,123
+
+**2–5. Phase 4 scripts:**
+- NOT RUN (execution halted on error)
+
+### Validation and Audit
+- Only kwsa_import_staging was touched.
+- No secrets, env vars, or deployments were changed.
+- Working tree is clean.
+- No uncommitted changes.
+
+### Row Counts After Failure
+- migration.core_market_centers: 48
+- migration.core_teams: 219
+- migration.core_associates: 9,243
+- migration.core_listings: 129,123
+- migration.core_transactions: 0
+- migration.load_rejections: 72,546
+
+### Failure Details
+- Step failed: scripts/transform-staging-to-migration.sql (core_transactions)
+- Error: column "source_associate_id" of relation "core_transactions" does not exist
+- Steps completed before failure: targeted cleanup, transform for all core tables except transactions
+- No partial transformation for core_transactions (0 rows)
+
+### Recommended Fix
+- Patch scripts/transform-staging-to-migration.sql to remove or correct reference to source_associate_id in core_transactions step, aligning with actual schema:
+    - Actual columns: id, source_transaction_id, primary_market_center_id, transaction_number, transaction_status, transaction_type, source_listing_id, listing_number, address, suburb, city, sales_price, list_price, gci_excl_vat, net_comm, total_gci, sale_type, buyer, seller, list_date, transaction_date, status_change_date, expected_date, created_at, updated_at
+- Re-run Approval 10e after patch.
+
+---
+
+**End of report.**
