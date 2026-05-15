@@ -6,7 +6,10 @@ Status: Three-stage rollback procedures documented per approval.
 Approval checkpoint update (2026-05-15):
 - Approval 7 completed (Phase 3 import to kwsa_import_staging).
 - Approval 8 completed (Phase 4 mapping design only; no execution).
-- Next executable gate is Approval 9 (Phase 4 execution in kwsa_import_staging only).
+- Approval 9 completed (Phase 4 execution in kwsa_import_staging).
+- Approval 10 completed (Phase 4 validation passed in kwsa_import_staging).
+- Approval 11 completed (Phase 5 planning/safety review only; no data promotion executed).
+- Next executable gate recommended: Approval 12 (maintenance window + mapped upsert signoff).
 
 ## Rollback Triggers (Three-Stage Flow)
 
@@ -24,6 +27,7 @@ Approval checkpoint update (2026-05-15):
 - Listings or transactions missing
 - Report generation fails
 - Row count mismatch after copy
+- Promotion executed while production still points to kwsa_uat and live traffic is impacted
 
 ### Stage 3 (kwsa_prod)
 - Production services unhealthy post-switch
@@ -68,6 +72,10 @@ gcloud sql backups restore 1778765132025 \
 **RPO:** Approval 4 baseline (pre-import state)  
 **Impact:** MEDIUM (UAT and test services will be stale; then updated)  
 **Mitigation:** Run only during agreed maintenance window
+
+Approval 11 safety addendum:
+- Because production currently resolves to kwsa_uat, Stage 2 promotion must be treated as production-impacting until prod is moved away.
+- Require a named rollback owner and explicit stop/go checkpoints during maintenance window.
 
 ### Stage 3 Rollback (Secret Revert — kwsa_prod)
 If production services unhealthy after switching DATABASE_URL:
@@ -116,3 +124,4 @@ gcloud run services update kwsa-backend-prod \
 - Stage 2 rollback is slow but reliable (restore from backup ID 1778765132025).
 - Stage 3 rollback is fast (secret revert to kwsa_uat endpoint).
 - After Stage 3 rollback, debug production issues offline before retrying.
+- Do not execute direct full-schema overwrite into kwsa_uat; use mapped upsert promotion and preserve MAPP 2.0 tables.

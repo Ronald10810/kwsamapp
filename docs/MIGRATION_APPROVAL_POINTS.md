@@ -117,3 +117,31 @@ Required evidence:
 - All import and asset validations passed.
 - Final go-live checklist signed.
 - Explicit production switch approval recorded.
+
+## Approval 10: Phase 4 execution and validation in kwsa_import_staging
+Completed: 2026-05-15
+Evidence file: docs/migration-runs/2026-05-14-run-010/PHASE4_EXECUTION_REPORT.md
+
+Deliverables:
+- Phase 4 scripts completed and validated in kwsa_import_staging
+- Validation status passed (Script 4 exit code 0)
+- No non-staging database writes during Phase 4 execution/validation
+
+## Approval 11: Phase 5 promotion planning and safety review only
+Completed: 2026-05-15
+Evidence file: docs/migration-runs/2026-05-14-run-011/PHASE5_UAT_PROMOTION_PLAN.md
+
+Deliverables:
+- Read-only source vs target schema/table review completed
+- Cloud Run DB target mapping re-verified (masked)
+- Confirmation production/test/public-api currently resolve to kwsa_uat
+- Phase 5 promotion risk assessment completed
+- Backup requirements, rollback plan, and post-promotion validation checklist prepared
+- No data copy executed, no env/secret/deploy changes, no asset migration
+
+## Approval 12: Phase 5 pre-execution safety gate (recommended next)
+Required evidence:
+- Approved maintenance window and freeze plan
+- Decision recorded: move production off kwsa_uat first, or execute under strict downtime
+- Fresh pre-promotion backup plan approved for kwsa_uat
+- Final mapped upsert SQL reviewed (no blanket truncate/drop)

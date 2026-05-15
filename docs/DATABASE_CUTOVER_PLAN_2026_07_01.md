@@ -4,9 +4,9 @@ Date: 2026-05-13
 Mode: Inspection and planning only (no migration/import/deploy/env changes executed)
 
 ## 1) Current State (Verified)
-- Git branch: master
-- Latest commit: 5b6f7f60a23be6d6e6846e3c3b0c9bdd217a191a
-- Working tree: NOT clean (modified + untracked files present)
+- Git branch: clean-source-snapshot-before-db-cutover
+- Latest commit: 4f3b5bc75c77e830a279ce412c65cb8093cdcc8b
+- Working tree: clean at Approval 11 planning snapshot
 - Active GCP project: kwsa-mapp
 - Primary GCP region (backend + Cloud SQL): africa-south1
 - Cloud SQL instance: kwsa-postgres
@@ -28,17 +28,17 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
   - kwsa-backend-prod (africa-south1, Ready=True, Cloud SQL attached)
   - kwsa-backend-test (africa-south1, Ready=True, Cloud SQL attached)
   - kwsa-public-api-uat (africa-south1, Ready=True, no Cloud SQL attachment)
-  - kwsa-frontend-prod (us-central1, Ready=True)
-  - kwsa-frontend-uat (us-central1, Ready=True)
-  - kwsa-frontend-test (africa-south1, Ready=False)
+  - kwsa-frontend-test (africa-south1, Ready=True)
+  - kwsa-smoketest (africa-south1, Ready=True)
 - Local runtime check:
   - frontend http://localhost:5174 => HTTP 200
   - backend http://localhost:3000/health => HTTP 200
 
-## 2) Current State (Needs Confirmation in Approval Phase)
-- Exact database name used by Cloud Run prod secret DATABASE_URL (secret value access failed from current operator context).
-- Exact database name used by Cloud Run test secret kwsa-backend-test-db-url (secret value access failed).
-- Live Azure SQL table/column inventory from sys.tables/sys.columns (not executed; credentials/approval pending).
+## 2) Current State (Verified in Approval 11)
+- kwsa-backend-prod -> DATABASE_URL@3 -> db token includes kwsa_uat (masked confirmation).
+- kwsa-backend-test -> kwsa-backend-test-db-url@latest -> kwsa_uat (masked confirmation).
+- kwsa-public-api-uat -> kwsa-public-api-db-url@latest -> kwsa_uat (masked confirmation).
+- Live production-path services are still effectively on kwsa_uat.
 
 
 ## 3) Target State (Go-live)
@@ -100,10 +100,11 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 - docs/migration-runs/2026-05-14-run-008/ — Approval 8: Phase 4 mapping design and review (design only)
 
 ## 7) Risks
-- Working tree is not clean; accidental deploy of uncommitted changes is possible.
+- Promoting to kwsa_uat while production points there creates direct live risk.
+- Source/target schema drift exists across promotion tables; blanket copy can fail or corrupt.
+- In-place promotion without maintenance control can cause partial state exposure.
 - Sensitive values currently exist in local env files and deployment scripts; secret hygiene risk.
 - Current local backend DATABASE_URL points to local kwsa and ENFORCE_LOCAL_UAT_DB=false, which conflicts with target policy.
-- UAT/prod secret-value level DB confirmation could not be completed from current IAM context.
 
 ## 8) Mitigations
 - Freeze deploy actions until approval checklist is complete.
@@ -122,7 +123,10 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
   - Batch azure-2026-05-14-staging-run-001 loaded; no non-staging DB changes
 - **Approval 8:** Phase 4 mapping design and review completed (design only). ✓
   - No transforms executed; no promotion executed
-- **Approval 9:** Execute Phase 4 transforms in kwsa_import_staging only (NEXT)
-  - Run patched transforms, enrichments, and validation pack; no promotion
-- **Approval 10:** Promotion approval (kwsa_import_staging -> kwsa_uat)
-  - Proceed only after Approval 9 validation sign-off
+- **Approval 9:** Execute Phase 4 transforms in kwsa_import_staging only. ✓
+- **Approval 10:** Complete Phase 4 validation in kwsa_import_staging. ✓
+- **Approval 11:** Phase 5 promotion planning and safety review only. ✓
+- **Approval 12:** Phase 5 pre-execution safety gate (recommended next).
+  - Approve maintenance window/freeze plan.
+  - Approve fresh pre-promotion backup commands and owners.
+  - Approve mapped upsert promotion SQL (no blanket truncate/drop).
