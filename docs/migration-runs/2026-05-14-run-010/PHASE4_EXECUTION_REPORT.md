@@ -259,4 +259,87 @@ LINE 10:   updated_at
 
 ---
 
+## 2026-05-15 Approval 10k targeted cleanup + rerun from script 3 (FAILED at Script 3)
+
+### Scope and Safety
+- Branch: clean-source-snapshot-before-db-cutover
+- Checkpoint: 2c036eedf24ccf1373d06a3373c9362f86f7610a
+- Target DB host/port: 127.0.0.1:9470 (Cloud SQL Auth Proxy)
+- Target database: kwsa_import_staging only
+- Safety check: `SELECT current_database();` was executed before each SQL step and returned `kwsa_import_staging`.
+
+### Approved cleanup executed
+SQL run:
+
+```sql
+DELETE FROM migration.load_rejections
+WHERE entity_name = 'transaction_associate_payment_details_raw'
+    AND reason = 'No matching transaction_agent for payment detail row';
+```
+
+Pre-cleanup counts:
+- total migration.load_rejections: 119,370
+- entity_name = transaction_associate_payment_details_raw: 46,824
+- reason = No matching transaction_agent for payment detail row: 46,824
+
+Cleanup result:
+- DELETE 46,824
+
+Post-cleanup counts:
+- total migration.load_rejections: 72,546
+- entity_name = transaction_associate_payment_details_raw: 0
+- reason = No matching transaction_agent for payment detail row: 0
+
+### Script execution outcome
+Planned execution:
+1. scripts/migration/phase4/03-group-d-transaction-participants-and-financials.sql
+2. scripts/migration/phase4/04-post-phase4-validation.sql
+
+Actual:
+- Script 3: started and partially inserted transaction agents, then failed.
+- Script 4: not run (stopped immediately on first failure).
+
+### Failure details (required)
+1. Failed step:
+- scripts/migration/phase4/03-group-d-transaction-participants-and-financials.sql
+
+2. Exact error:
+
+```text
+psql:C:/Users/ronal/OneDrive/Desktop/KWSA-Workspace/kwsa-cloud-console-clean-snapshot/scripts/migration/phase4/03-group-d-transaction-participants-and-financials.sql:85: ERROR:  duplicate key value violates unique constraint "transaction_agents_transaction_id_source_associate_id_key"
+```
+
+3. Current database at failure:
+- kwsa_import_staging
+
+4. Steps completed before failure:
+- pre_cleanup_counts
+- targeted_cleanup_delete
+- post_cleanup_counts
+- partial execution of script 3 (first INSERT executed)
+
+5. Whether any partial transformation occurred:
+- Yes. Partial transformation occurred in `migration.transaction_agents`.
+
+6. Current row counts in affected migration tables:
+- migration.transaction_agents: 46,824
+- migration.transaction_agent_calculations: 0
+- migration.load_rejections (total): 72,546
+- migration.load_rejections where entity_name='transaction_associate_payment_details_raw' and reason='No matching transaction_agent for payment detail row': 0
+
+7. Recommended fix:
+- Script 3 currently runs two inserts into `migration.transaction_agents` (authoritative source + compatibility fallback).
+- The second insert is colliding with rows inserted by the first insert under unique constraint `transaction_agents_transaction_id_source_associate_id_key`.
+- Next approved hotfix should make the fallback insert skip already-loaded keys by `(transaction_id, source_associate_id)` (or disable fallback when authoritative rows are present), then rerun script 3 and script 4.
+
+### Rejection categories after failure
+- listing_images_raw_source | NULL source_listing_id preserved and not mapped | 72,546
+
+### Audit confirmations
+- Only `kwsa_import_staging` was touched.
+- No cleanup beyond the approved targeted delete was run.
+- No transform/Phase 4 scripts 1 or 2 were rerun.
+- No UAT/prod DBs were touched.
+- No secrets, env vars, deployments, or asset migration steps were changed/run.
+
 **End of report.**

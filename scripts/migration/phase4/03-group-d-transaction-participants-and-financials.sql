@@ -79,9 +79,7 @@ WHERE (
     SELECT 1
     FROM migration.transaction_agents existing
     WHERE existing.transaction_id = ct.id
-      AND COALESCE(existing.source_associate_id, '') = COALESCE(sta.source_associate_id, '')
-      AND COALESCE(LOWER(existing.agent_role), '') = COALESCE(LOWER(COALESCE(NULLIF(BTRIM(sta.agent_type), ''), 'Agent')), '')
-      AND COALESCE(existing.split_percentage, 0) = COALESCE(sta.split_percentage, 0)
+      AND existing.source_associate_id IS NOT DISTINCT FROM sta.source_associate_id
   );
 
 INSERT INTO migration.load_rejections (entity_name, source_id, reason, payload)
