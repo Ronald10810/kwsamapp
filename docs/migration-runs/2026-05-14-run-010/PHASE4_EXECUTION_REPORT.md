@@ -555,4 +555,84 @@ LEFT JOIN LATERAL (
 - No data changes during Approval 10o (diagnostics only)
 - No UAT/prod/secrets touched
 
+## Approval 10q Execution (Patched Script 3)
+
+Date: 2026-05-15
+Scope approved: Execute script 3 only, then script 4 only if script 3 succeeds.
+
+### Precheck (required)
+
+```sql
+SELECT current_database();
+```
+
+Result before script 3: `kwsa_import_staging` (PASS)
+
+### Step 1: Execute script 3
+
+Script executed:
+- `scripts/migration/phase4/03-group-d-transaction-participants-and-financials.sql`
+
+Connection:
+- Host: `127.0.0.1`
+- Port: `9470`
+- Database: `kwsa_import_staging`
+- Batch setting: `migration.batch = 'azure-2026-05-14-staging-run-001'`
+
+Output before failure:
+- `INSERT 0 0`
+- `INSERT 0 0`
+- `INSERT 0 0`
+
+Failure:
+
+```text
+psql:scripts/migration/phase4/03-group-d-transaction-participants-and-financials.sql:196:
+ERROR: null value in column "transaction_gci_before_fees" of relation "transaction_agent_calculations" violates not-null constraint
+```
+
+Status:
+- Script 3: FAILED
+- Script 4: NOT RUN (stopped immediately on first failure per approval)
+
+### Post-failure diagnostics
+
+Precheck before diagnostics:
+- `SELECT current_database();` => `kwsa_import_staging` (PASS)
+
+Current counts:
+- `migration.transaction_agents` = 46,824
+- `migration.transaction_agent_calculations` = 0
+- `migration.load_rejections` = 72,546
+
+Load rejection categories:
+- `listing_images_raw_source | NULL source_listing_id preserved and not mapped` = 72,546
+
+Additional diagnostic:
+- Candidate rows with matching transaction_agent but NULL `tapd.gci_before_fees` = 940
+
+### Partial transformation assessment
+
+- The failing `transaction_agent_calculations` statement inserted 0 rows due to NOT NULL violation.
+- Prior statements in this run reported `INSERT 0 0`, so no new rows were added there either.
+- Net effect for this execution attempt: no observable row-count change in the tracked tables above.
+
+### Recommended fix for next approval
+
+Patch script 3 to guard NOT NULL target `transaction_gci_before_fees`:
+
+- Replace `tapd.gci_before_fees` in the calculation INSERT select-list with `COALESCE(tapd.gci_before_fees, 0)`
+
+Rationale:
+- Table enforces NOT NULL on `transaction_gci_before_fees`.
+- Source contains NULL values (940 qualifying rows), causing the statement to fail.
+- Coalescing preserves run continuity while still recording financial rows.
+
+### Safety confirmation for Approval 10q
+
+- Only `kwsa_import_staging` was queried/targeted.
+- No script outside approved scope was run (`transform`, script 1, script 2, script 4 not run after failure).
+- No UAT/prod databases were touched.
+- No secrets/env vars/deployments were changed.
+
 
