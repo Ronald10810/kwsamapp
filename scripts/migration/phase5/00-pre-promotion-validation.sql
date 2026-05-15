@@ -2,6 +2,7 @@
 
 -- Phase 5 pre-promotion validation (read-only)
 -- Expected session target database: kwsa_uat
+-- Source tables accessed via FDW foreign table schema: src_staging (pointing to kwsa_import_staging.migration)
 
 SELECT 'current_database' AS check_name, current_database() AS value;
 
@@ -12,7 +13,7 @@ BEGIN
   END IF;
 END $$;
 
--- Required source tables (phase5_src) and target tables (migration)
+-- Required source tables (src_staging via FDW) and target tables (migration)
 WITH expected(table_name) AS (
   VALUES
     ('core_market_centers'),
@@ -36,8 +37,8 @@ SELECT
   EXISTS (
     SELECT 1
     FROM information_schema.tables t
-    WHERE t.table_schema = 'phase5_src' AND t.table_name = e.table_name
-  ) AS has_phase5_src,
+    WHERE t.table_schema = 'src_staging' AND t.table_name = e.table_name
+  ) AS has_src_staging,
   EXISTS (
     SELECT 1
     FROM information_schema.tables t
@@ -74,7 +75,7 @@ BEGIN
   WHERE NOT EXISTS (
       SELECT 1
       FROM information_schema.tables t
-      WHERE t.table_schema = 'phase5_src' AND t.table_name = e.table_name
+      WHERE t.table_schema = 'src_staging' AND t.table_name = e.table_name
     )
     OR NOT EXISTS (
       SELECT 1
@@ -83,7 +84,7 @@ BEGIN
     );
 
   IF missing_count > 0 THEN
-    RAISE EXCEPTION 'Safety stop: % required promotion tables are missing in phase5_src and/or migration', missing_count;
+    RAISE EXCEPTION 'Safety stop: % required promotion tables are missing in src_staging (FDW) and/or migration', missing_count;
   END IF;
 END $$;
 
@@ -108,21 +109,21 @@ WITH expected(table_name) AS (
 )
 SELECT
   e.table_name,
-  (SELECT count(*) FROM phase5_src.core_market_centers WHERE e.table_name = 'core_market_centers')
-+ (SELECT count(*) FROM phase5_src.core_teams WHERE e.table_name = 'core_teams')
-+ (SELECT count(*) FROM phase5_src.core_associates WHERE e.table_name = 'core_associates')
-+ (SELECT count(*) FROM phase5_src.core_listings WHERE e.table_name = 'core_listings')
-+ (SELECT count(*) FROM phase5_src.core_transactions WHERE e.table_name = 'core_transactions')
-+ (SELECT count(*) FROM phase5_src.id_map_market_centers WHERE e.table_name = 'id_map_market_centers')
-+ (SELECT count(*) FROM phase5_src.id_map_teams WHERE e.table_name = 'id_map_teams')
-+ (SELECT count(*) FROM phase5_src.id_map_associates WHERE e.table_name = 'id_map_associates')
-+ (SELECT count(*) FROM phase5_src.id_map_listings WHERE e.table_name = 'id_map_listings')
-+ (SELECT count(*) FROM phase5_src.listing_agents WHERE e.table_name = 'listing_agents')
-+ (SELECT count(*) FROM phase5_src.listing_images WHERE e.table_name = 'listing_images')
-+ (SELECT count(*) FROM phase5_src.listing_marketing_urls WHERE e.table_name = 'listing_marketing_urls')
-+ (SELECT count(*) FROM phase5_src.transaction_agents WHERE e.table_name = 'transaction_agents')
-+ (SELECT count(*) FROM phase5_src.transaction_agent_calculations WHERE e.table_name = 'transaction_agent_calculations')
-+ (SELECT count(*) FROM phase5_src.load_rejections WHERE e.table_name = 'load_rejections')
+  (SELECT count(*) FROM src_staging.core_market_centers WHERE e.table_name = 'core_market_centers')
++ (SELECT count(*) FROM src_staging.core_teams WHERE e.table_name = 'core_teams')
++ (SELECT count(*) FROM src_staging.core_associates WHERE e.table_name = 'core_associates')
++ (SELECT count(*) FROM src_staging.core_listings WHERE e.table_name = 'core_listings')
++ (SELECT count(*) FROM src_staging.core_transactions WHERE e.table_name = 'core_transactions')
++ (SELECT count(*) FROM src_staging.id_map_market_centers WHERE e.table_name = 'id_map_market_centers')
++ (SELECT count(*) FROM src_staging.id_map_teams WHERE e.table_name = 'id_map_teams')
++ (SELECT count(*) FROM src_staging.id_map_associates WHERE e.table_name = 'id_map_associates')
++ (SELECT count(*) FROM src_staging.id_map_listings WHERE e.table_name = 'id_map_listings')
++ (SELECT count(*) FROM src_staging.listing_agents WHERE e.table_name = 'listing_agents')
++ (SELECT count(*) FROM src_staging.listing_images WHERE e.table_name = 'listing_images')
++ (SELECT count(*) FROM src_staging.listing_marketing_urls WHERE e.table_name = 'listing_marketing_urls')
++ (SELECT count(*) FROM src_staging.transaction_agents WHERE e.table_name = 'transaction_agents')
++ (SELECT count(*) FROM src_staging.transaction_agent_calculations WHERE e.table_name = 'transaction_agent_calculations')
++ (SELECT count(*) FROM src_staging.load_rejections WHERE e.table_name = 'load_rejections')
     AS source_count,
   (SELECT count(*) FROM migration.core_market_centers WHERE e.table_name = 'core_market_centers')
 + (SELECT count(*) FROM migration.core_teams WHERE e.table_name = 'core_teams')

@@ -1,10 +1,11 @@
 \set ON_ERROR_STOP on
 
 -- Phase 5 promotion SQL (execution-gated)
--- Source schema: phase5_src
+-- Source schema: migration (in kwsa_import_staging, accessed via FDW foreign table src_import)
 -- Target schema: migration in kwsa_uat
 -- Method: controlled delete-and-reload for approved migration tables only
 -- IMPORTANT: Run only during approved maintenance window.
+-- NOTE: Assumes src_import foreign schema is set up before execution
 
 SELECT 'current_database' AS check_name, current_database() AS value;
 
@@ -70,10 +71,10 @@ BEGIN
     IF NOT EXISTS (
       SELECT 1
       FROM information_schema.tables
-      WHERE table_schema = 'phase5_src'
+      WHERE table_schema = 'src_staging'
         AND table_name = r.table_name
     ) THEN
-      RAISE EXCEPTION 'Missing source table phase5_src.%', r.table_name;
+      RAISE EXCEPTION 'Missing source table src_staging.% (kwsa_import_staging.migration via fdw)', r.table_name;
     END IF;
 
     IF NOT EXISTS (
@@ -89,7 +90,7 @@ BEGIN
     INTO common_cols
     FROM information_schema.columns c
     JOIN information_schema.columns s
-      ON s.table_schema = 'phase5_src'
+      ON s.table_schema = 'src_staging'
      AND s.table_name = r.table_name
      AND s.column_name = c.column_name
     WHERE c.table_schema = 'migration'
@@ -99,14 +100,14 @@ BEGIN
       RAISE EXCEPTION 'No common columns found for table %', r.table_name;
     END IF;
 
-    EXECUTE format('SELECT count(*) FROM phase5_src.%I', r.table_name) INTO source_count;
+    EXECUTE format('SELECT count(*) FROM src_staging.%I', r.table_name) INTO source_count;
     EXECUTE format('SELECT count(*) FROM migration.%I', r.table_name) INTO before_count;
 
     EXECUTE format('WITH d AS (DELETE FROM migration.%I RETURNING 1) SELECT count(*) FROM d', r.table_name)
       INTO deleted_count;
 
     EXECUTE format(
-      'INSERT INTO migration.%I (%s) SELECT %s FROM phase5_src.%I',
+      'INSERT INTO migration.%I (%s) SELECT %s FROM src_staging.%I',
       r.table_name,
       common_cols,
       common_cols,
