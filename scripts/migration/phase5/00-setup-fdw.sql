@@ -10,13 +10,13 @@ CREATE SERVER IF NOT EXISTS src_staging_server
   FOREIGN DATA WRAPPER postgres_fdw
   OPTIONS (
     dbname 'kwsa_import_staging',
-    host 'localhost',
+    host '34.35.113.173',
     port '5432'
   );
 
 CREATE USER MAPPING IF NOT EXISTS FOR CURRENT_USER
   SERVER src_staging_server
-  OPTIONS (user 'CURRENT_USER');
+  OPTIONS (user 'kwsa_backend_service', password 'DB_PASS_PLACEHOLDER');
 
 -- Create schema for foreign tables
 CREATE SCHEMA IF NOT EXISTS src_staging;
