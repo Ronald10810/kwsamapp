@@ -1,6 +1,19 @@
 -- Phase 4 patch: Group C mappings using current staging table shapes.
 -- Covers listing_associates, listing_images_raw_source/listing_images_raw, listing_marketing_urls_raw.
 
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM migration.core_listings LIMIT 1) THEN
+    RAISE EXCEPTION
+      'Prerequisite failed: migration.core_listings is empty. Run scripts/transform-staging-to-migration.sql before Phase 4 script 02.';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM migration.core_associates LIMIT 1) THEN
+    RAISE EXCEPTION
+      'Prerequisite failed: migration.core_associates is empty. Run scripts/transform-staging-to-migration.sql before Phase 4 script 02.';
+  END IF;
+END $$;
+
 -- ============================================================
 -- 1) Listing agents from staging.listing_associates
 --    staging keys are listing_id and associate_id (text source keys).

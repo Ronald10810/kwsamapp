@@ -1,6 +1,14 @@
 -- Phase 4 patch: merge listing descriptions into migration.core_listings
 -- Critical rule: join by source_listing_id only (never by row order).
 
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM migration.core_listings LIMIT 1) THEN
+    RAISE EXCEPTION
+      'Prerequisite failed: migration.core_listings is empty. Run scripts/transform-staging-to-migration.sql before Phase 4 script 01.';
+  END IF;
+END $$;
+
 WITH latest_descriptions AS (
   SELECT DISTINCT ON (d.source_listing_id)
     d.source_listing_id,
