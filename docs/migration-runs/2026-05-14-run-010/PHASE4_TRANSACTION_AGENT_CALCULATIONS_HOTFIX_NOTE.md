@@ -157,7 +157,22 @@ WHERE (
 - No kwsa_uat, kwsa_prod, kwsa, secrets, env vars, or deployments were touched.
 - Only diagnostic queries were run; no INSERT/UPDATE/DELETE executed.
 
-## Recommended Next Approval
+## Approval 10p Status
 
-- **Approval 10p:** Patch script 3 with the corrected transaction_agent_calculations INSERT (add source_associate_id column + value), then run script 3 only to populate the 42,533 missing transaction_agent_calculations rows.
-- Then run script 4 validation to confirm Phase 4 completion.
+**Status:** PATCH APPLIED (awaiting commit approval)
+
+**Changes Made:**
+- ✓ Added `source_associate_id` to INSERT column list (position 4, after `associate_id`)
+- ✓ Added `ta.source_associate_id` to SELECT expression list (position 4, after `ta.associate_id`)
+- ✓ INSERT column count: 22 (was 21)
+- ✓ SELECT expression count: 22 (was 21)
+- ✓ All 22 inserted columns verified to exist in migration.transaction_agent_calculations
+- ✓ No data was changed (patch-only, no execution)
+
+**File Modified:**
+- scripts/migration/phase4/03-group-d-transaction-participants-and-financials.sql (lines 121-160)
+
+**Ready for Next Step:**
+- Script 3 is now syntactically correct and ready to execute
+- Expected outcome: 42,533 transaction_agent_calculations rows will insert
+- Recommendation: Proceed to Approval 10q to execute patched script 3 and run script 4 validation
