@@ -73,14 +73,17 @@ Deliverables:
 - Risks and blockers documented
 - Preparation checklist for Approval 7 provided
 
-## Approval 7: Stage 1 — Execute first Azure import to kwsa_import_staging (NEXT)
-Next approval scope:
-- Export from Azure SQL to CSV files
-- Apply schema to kwsa_import_staging
-- Load staging.* tables from CSV
-- Transform and promote to public.* Prisma tables
-- Run 11 validation query sets
-- Decision: proceed to Stage 2 or retry import
+## Approval 7: Stage 1 — Execute first Azure import to kwsa_import_staging
+Completed: 2026-05-15
+Evidence file: docs/migration-runs/2026-05-14-run-007/AZURE_TO_IMPORT_STAGING_RUN_REPORT.md
+
+Deliverables:
+- Batch loaded: azure-2026-05-14-staging-run-001
+- Database touched: kwsa_import_staging only
+- Total rows loaded: 5,238,234
+- Group D transaction mapping: 0 unmatched transaction IDs
+- No kwsa_uat, kwsa_prod, or kwsa writes
+- No env var/secret/deploy changes
 
 ## Approval 6: kwsa_prod preparation from validated kwsa_uat allowed
 Required evidence:
@@ -92,10 +95,17 @@ Required evidence:
 - Job config reviewed.
 - Dry-run scope and batch limits approved.
 
-## Approval 8: Asset migration run 1 allowed
-Required evidence:
-- Dry-run results accepted.
-- Retry strategy approved.
+## Approval 8: Phase 4 mapping design and review only
+Completed: 2026-05-15
+Evidence file: docs/migration-runs/2026-05-14-run-008/PHASE4_MAPPING_DESIGN_AND_REVIEW.md
+
+Deliverables:
+- Full Phase 4 source-to-target mapping design across Groups A-D
+- Existing transform/validation script review and compatibility gaps
+- Proposed Phase 4 execution order and post-validation checks
+- Preservation rules for MAPP 2.0-only tables/columns
+- Risk register and mitigation plan
+- Explicit no-execution confirmation (design only)
 
 ## Approval 9: Local and UAT may be pointed to kwsa_uat
 Required evidence:

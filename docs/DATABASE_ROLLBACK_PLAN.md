@@ -3,6 +3,11 @@
 Date: 2026-05-13 (Updated 2026-05-14 with three-stage flow)
 Status: Three-stage rollback procedures documented per approval.
 
+Approval checkpoint update (2026-05-15):
+- Approval 7 completed (Phase 3 import to kwsa_import_staging).
+- Approval 8 completed (Phase 4 mapping design only; no execution).
+- Next executable gate is Approval 9 (Phase 4 execution in kwsa_import_staging only).
+
 ## Rollback Triggers (Three-Stage Flow)
 
 ### Stage 1 (kwsa_import_staging)
@@ -41,6 +46,10 @@ gcloud sql databases create kwsa_import_staging --instance=kwsa-postgres --chars
 **Time to restore:** <5 minutes  
 **RPO:** Empty; start fresh import  
 **Impact:** None (no production services point here)
+
+For Approval 9 Phase 4 execution rollback:
+- If transform/enrichment validation fails, rollback should delete/rebuild migration.* targets only, then rerun from staging baseline.
+- Keep staging.* Phase 3 raw load untouched unless source load itself is proven corrupt.
 
 ### Stage 2 Rollback (Cloud SQL Restore — kwsa_uat)
 If copy from kwsa_import_staging to kwsa_uat fails or UAT validation rejects:

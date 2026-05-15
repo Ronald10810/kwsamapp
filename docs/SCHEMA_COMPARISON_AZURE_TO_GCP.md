@@ -179,3 +179,16 @@ users
   - type differences
   - nullability differences
   - key/index differences
+
+## F) Approval 8 Design Findings (2026-05-15)
+- In kwsa_import_staging, app-ready working targets currently exist in migration schema, not public schema.
+- public schema in kwsa_import_staging currently contains only _prisma_migrations.
+- staging schema includes Phase 3 Group C/D source-rich tables:
+  - listing_descriptions_raw_source
+  - listing_images_raw_source
+  - transaction_agents_raw_source
+  - transaction_associate_payment_details_raw
+- Existing transform scripts must be aligned to current Phase 3 table shapes before execution:
+  - listing_associates now uses listing_id/associate_id text source keys
+  - listing description merge must join by source_listing_id only
+  - Group D mappings should prioritize *_raw_source and payment_details_raw tables

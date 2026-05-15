@@ -96,6 +96,8 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
   - **Backup ID:** 1778765132025 (SUCCESSFUL, can restore kwsa_uat if needed)
 - docs/migration-runs/2026-05-14-run-005/ — Approval 5: Azure import mapping & dry-run plan
 - docs/migration-runs/2026-05-14-run-006/ — Approval 6: kwsa_import_staging database created (26b0ae9)
+- docs/migration-runs/2026-05-14-run-007/ — Approval 7: Phase 3 import complete to kwsa_import_staging (5,238,234 rows)
+- docs/migration-runs/2026-05-14-run-008/ — Approval 8: Phase 4 mapping design and review (design only)
 
 ## 7) Risks
 - Working tree is not clean; accidental deploy of uncommitted changes is possible.
@@ -116,13 +118,11 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 - Approval 4: pre-import baseline backup + export completed. ✓ (Backup ID: 1778765132025)
 - Approval 5: Azure import mapping & dry-run plan completed. ✓
 - **Approval 6:** kwsa_import_staging created; three-stage flow documented. ✓ (NEW SAFETY GATE)
-- **Approval 7:** Stage 1 — Execute first import to kwsa_import_staging (NEXT)
-  - Rehearsal with real Azure data; safe isolation; decision: proceed or retry
-- **Approval 8:** Stage 2 — Copy validated kwsa_import_staging → kwsa_uat
-  - Pre-production testing; decision: proceed to Stage 3 or rollback
-- **Approval 9:** Stage 3 — Copy validated kwsa_uat → kwsa_prod; switch production secret
-  - Production cutover; decision: commit or rollback via secret revert
-- **Approval 10:** (Future) Asset migration (after data is stable in kwsa_prod)
-  - GCS image/document URL resolution; portal image loading
-- **Approval 11:** (Future) Local env switching (optional)
-  - Point local dev to kwsa_prod or keep on kwsa_uat
+- **Approval 7:** Stage 1 import to kwsa_import_staging completed. ✓
+  - Batch azure-2026-05-14-staging-run-001 loaded; no non-staging DB changes
+- **Approval 8:** Phase 4 mapping design and review completed (design only). ✓
+  - No transforms executed; no promotion executed
+- **Approval 9:** Execute Phase 4 transforms in kwsa_import_staging only (NEXT)
+  - Run patched transforms, enrichments, and validation pack; no promotion
+- **Approval 10:** Promotion approval (kwsa_import_staging -> kwsa_uat)
+  - Proceed only after Approval 9 validation sign-off

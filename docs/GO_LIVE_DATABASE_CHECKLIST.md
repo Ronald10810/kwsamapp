@@ -27,6 +27,8 @@ Legend:
 - [ ] Azure to PostgreSQL mapping approved
 
 ## Import and Validation
+- [x] Stage 1 import to kwsa_import_staging complete (Approval 7, 5,238,234 rows)
+- [x] Phase 4 mapping design and review complete (Approval 8, design only)
 - [ ] kwsa_uat import complete
 - [ ] kwsa_uat validated
 - [ ] kwsa_prod prepared
@@ -78,7 +80,7 @@ Legend:
 - [x] Approval 4: Pre-import baseline backup/export complete (2026-05-14, backup ID 1778765132025, hash 05eb56e)
 - [x] Approval 5: Azure import mapping & dry-run plan complete (2026-05-14, docs/migration-runs/2026-05-14-run-005/)
 - [x] Approval 6: kwsa_import_staging created; three-stage flow documented (2026-05-14, hash 26b0ae9)
-- [ ] Approval 7: Stage 1 — Execute first import to kwsa_import_staging (NEXT)
-- [ ] Approval 8: Stage 2 — Copy validated kwsa_import_staging → kwsa_uat
-- [ ] Approval 9: Stage 3 — Copy validated kwsa_uat → kwsa_prod; switch production secret
-- [ ] Approval 10: Asset migration (after data is stable in kwsa_prod)
+- [x] Approval 7: Stage 1 import to kwsa_import_staging complete (2026-05-15, run-007)
+- [x] Approval 8: Phase 4 mapping design and review complete (2026-05-15, run-008; no execution)
+- [ ] Approval 9: Execute Phase 4 transforms in kwsa_import_staging only, then validate
+- [ ] Approval 10: Promotion plan approval (kwsa_import_staging -> kwsa_uat)
