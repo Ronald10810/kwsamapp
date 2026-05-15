@@ -41,10 +41,9 @@ FROM staging.market_centers_raw
 WHERE batch_id = current_setting('migration.batch')
   AND source_market_center_id IS NOT NULL
 ON CONFLICT (source_market_center_id) DO UPDATE
-    SET name        = EXCLUDED.name,
-        status_name = EXCLUDED.status_name,
-        frontdoor_id= EXCLUDED.frontdoor_id,
-        updated_at  = now();
+  SET name        = EXCLUDED.name,
+    status_name = EXCLUDED.status_name,
+    frontdoor_id= EXCLUDED.frontdoor_id;
 
 -- id mapping
 INSERT INTO migration.id_map_market_centers (source_market_center_id, core_market_center_id)
