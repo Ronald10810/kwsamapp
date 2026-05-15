@@ -280,11 +280,10 @@ SELECT source_listing_id, id FROM migration.core_listings ON CONFLICT DO NOTHING
 -- ============================================================
 INSERT INTO migration.core_transactions (
     source_transaction_id,
-    source_associate_id,
-    associate_id,
-    market_center_id,
+    primary_market_center_id,
     transaction_number,
     transaction_status,
+    transaction_type,
     source_listing_id,
     listing_number,
     address,
@@ -293,8 +292,11 @@ INSERT INTO migration.core_transactions (
     sales_price,
     list_price,
     gci_excl_vat,
-    split_percentage,
+    net_comm,
+    total_gci,
     sale_type,
+    buyer,
+    seller,
     list_date,
     transaction_date,
     status_change_date,
@@ -302,11 +304,10 @@ INSERT INTO migration.core_transactions (
 )
 SELECT DISTINCT ON (tr.source_transaction_id)
     tr.source_transaction_id,
-    COALESCE(tr.source_associate_id, '')        AS source_associate_id,
-    a.id                                        AS associate_id,
-    mc.id                                       AS market_center_id,
+    mc.id                                       AS primary_market_center_id,
     tr.transaction_number,
     tr.transaction_status,
+    tr.transaction_type,
     tr.source_listing_id,
     tr.listing_number,
     tr.address,
@@ -315,14 +316,16 @@ SELECT DISTINCT ON (tr.source_transaction_id)
     tr.sales_price,
     tr.list_price,
     tr.gci_excl_vat,
-    tr.split_percentage,
+    tr.net_comm,
+    tr.total_gci,
     tr.sale_type,
+    tr.buyer,
+    tr.seller,
     tr.list_date,
     tr.transaction_date,
     tr.status_change_date,
     tr.expected_date
 FROM staging.transactions_raw tr
-LEFT JOIN migration.core_associates a  ON a.source_associate_id  = tr.source_associate_id
 LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = tr.source_market_center_id
 WHERE tr.batch_id = current_setting('migration.batch')
   AND tr.source_transaction_id IS NOT NULL
@@ -331,7 +334,8 @@ ON CONFLICT (source_transaction_id) DO UPDATE
         sales_price         = EXCLUDED.sales_price,
         list_price          = EXCLUDED.list_price,
         gci_excl_vat        = EXCLUDED.gci_excl_vat,
-        split_percentage    = EXCLUDED.split_percentage,
+        net_comm            = EXCLUDED.net_comm,
+        total_gci           = EXCLUDED.total_gci,
         transaction_date    = EXCLUDED.transaction_date,
         status_change_date  = EXCLUDED.status_change_date,
         expected_date       = EXCLUDED.expected_date,
