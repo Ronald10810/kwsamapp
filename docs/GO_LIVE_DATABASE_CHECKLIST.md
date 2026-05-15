@@ -88,7 +88,8 @@ Legend:
 - [x] Approval 9: Execute Phase 4 transforms in kwsa_import_staging only, then validate
 - [x] Approval 10: Phase 4 validation complete in kwsa_import_staging (run-010)
 - [x] Approval 11: Phase 5 promotion planning and safety review only (run-011)
-- [ ] Approval 12: Phase 5 pre-execution safety gate (maintenance window + mapped upsert plan signoff)
+- [x] Approval 12: Phase 5 pre-promotion safety gate complete (run-012; fresh backup 1778860105623 successful)
+- [ ] Approval 13: Phase 5 execution authorization (maintenance window + mapped upsert execution signoff)
 
 ## Current Blocker
 - [!] Do not promote to kwsa_uat immediately while production is pointed to kwsa_uat unless an explicit maintenance window and rollback owner are approved.

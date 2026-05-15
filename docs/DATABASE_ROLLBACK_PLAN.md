@@ -9,7 +9,8 @@ Approval checkpoint update (2026-05-15):
 - Approval 9 completed (Phase 4 execution in kwsa_import_staging).
 - Approval 10 completed (Phase 4 validation passed in kwsa_import_staging).
 - Approval 11 completed (Phase 5 planning/safety review only; no data promotion executed).
-- Next executable gate recommended: Approval 12 (maintenance window + mapped upsert signoff).
+- Approval 12 completed (Phase 5 pre-promotion safety gate; fresh backup created).
+- Next executable gate recommended: Approval 13 (maintenance window + mapped upsert execution signoff).
 
 ## Rollback Triggers (Three-Stage Flow)
 
@@ -110,6 +111,8 @@ gcloud run services update kwsa-backend-prod \
 - docs/migration-runs/2026-05-14-run-005/ — Approval 5 azure import mapping & dry-run plan
 - docs/migration-runs/2026-05-14-run-006/ — Approval 6 kwsa_import_staging creation evidence
 - Cloud SQL on-demand backup id: 1778765132025 (SUCCESSFUL, for Stage 2 rollback)
+- docs/migration-runs/2026-05-14-run-012/ — Approval 12 pre-promotion safety gate report
+- Cloud SQL on-demand backup id: 1778860105623 (SUCCESSFUL, fresh pre-promotion rollback anchor)
 
 ## Validation After Rollback
 - Service readiness and health endpoints
@@ -122,6 +125,7 @@ gcloud run services update kwsa-backend-prod \
 - Rollback runbook must be executable by an on-call engineer without hidden context.
 - Stage 1 rollback is fast and low-risk (delete/recreate database).
 - Stage 2 rollback is slow but reliable (restore from backup ID 1778765132025).
+- For upcoming Phase 5 promotion attempts, use backup ID 1778860105623 as primary rollback anchor.
 - Stage 3 rollback is fast (secret revert to kwsa_uat endpoint).
 - After Stage 3 rollback, debug production issues offline before retrying.
 - Do not execute direct full-schema overwrite into kwsa_uat; use mapped upsert promotion and preserve MAPP 2.0 tables.

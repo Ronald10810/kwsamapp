@@ -139,9 +139,23 @@ Deliverables:
 - Backup requirements, rollback plan, and post-promotion validation checklist prepared
 - No data copy executed, no env/secret/deploy changes, no asset migration
 
-## Approval 12: Phase 5 pre-execution safety gate (recommended next)
+## Approval 12: Phase 5 pre-promotion safety gate only
+Completed: 2026-05-15
+Evidence file: docs/migration-runs/2026-05-14-run-012/PHASE5_PRE_PROMOTION_SAFETY_GATE.md
+
+Deliverables:
+- Fresh Cloud SQL on-demand backup created: 1778860105623 (SUCCESSFUL)
+- Source vs target mapped row-count baselines captured (kwsa_import_staging vs kwsa_uat)
+- Cloud Run service DB target mapping re-verified (masked)
+- Confirmation production/test/public API still resolve to kwsa_uat
+- Promotion method constrained to mapped table-by-table upsert (proposal only)
+- Rollback plan tied to fresh backup documented
+- Post-promotion validation checklist documented
+- No data copy executed, no DML executed, no env/secret/deploy changes
+
+## Approval 13: Phase 5 execution authorization (recommended next)
 Required evidence:
-- Approved maintenance window and freeze plan
+- Approved maintenance window and freeze owner
 - Decision recorded: move production off kwsa_uat first, or execute under strict downtime
-- Fresh pre-promotion backup plan approved for kwsa_uat
-- Final mapped upsert SQL reviewed (no blanket truncate/drop)
+- Final mapped upsert SQL reviewed and approved (no blanket truncate/drop)
+- Explicit go/no-go and rollback trigger owner recorded

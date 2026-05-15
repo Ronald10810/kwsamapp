@@ -126,7 +126,11 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
 - **Approval 9:** Execute Phase 4 transforms in kwsa_import_staging only. ✓
 - **Approval 10:** Complete Phase 4 validation in kwsa_import_staging. ✓
 - **Approval 11:** Phase 5 promotion planning and safety review only. ✓
-- **Approval 12:** Phase 5 pre-execution safety gate (recommended next).
-  - Approve maintenance window/freeze plan.
-  - Approve fresh pre-promotion backup commands and owners.
-  - Approve mapped upsert promotion SQL (no blanket truncate/drop).
+- **Approval 12:** Phase 5 pre-promotion safety gate only. ✓
+  - Fresh backup created: 1778860105623 (SUCCESSFUL)
+  - Source/target baselines captured and risk re-validated
+  - No promotion executed
+- **Approval 13:** Phase 5 execution authorization (recommended next).
+  - Approve maintenance window/freeze plan and owner.
+  - Approve final mapped upsert promotion SQL (no blanket truncate/drop).
+  - Approve explicit rollback trigger criteria using backup 1778860105623.
