@@ -13,8 +13,7 @@ INSERT INTO migration.listing_agents (
   is_primary,
   market_center_id,
   sort_order,
-  created_at,
-  updated_at
+  created_at
 )
 SELECT
   cl.id AS listing_id,
@@ -32,7 +31,6 @@ SELECT
       CASE WHEN LOWER(COALESCE(la.role, '')) IN ('primary', 'primary agent', 'listing agent', 'lead') THEN 0 ELSE 1 END,
       la.id
   )::int - 1 AS sort_order,
-  now(),
   now()
 FROM staging.listing_associates la
 JOIN migration.core_listings cl
