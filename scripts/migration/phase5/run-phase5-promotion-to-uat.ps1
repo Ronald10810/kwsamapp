@@ -14,6 +14,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$setupSql = Join-Path $scriptDir '00-setup-fdw.sql'
 $preSql = Join-Path $scriptDir '00-pre-promotion-validation.sql'
 $promoteSql = Join-Path $scriptDir '01-promote-staging-to-uat.sql'
 $postSql = Join-Path $scriptDir '02-post-promotion-validation.sql'
@@ -58,6 +59,9 @@ try {
   "--- Confirm backup exists and is successful ---" | Tee-Object -FilePath $reportPath -Append
   gcloud sql backups describe $BackupId --instance=$InstanceName --project=$ProjectId --format="value(id,type,status,windowStartTime,windowEndTime)" | Tee-Object -FilePath $reportPath -Append
 
+  "--- Setup FDW foreign table references to source (kwsa_import_staging.migration) ---" | Tee-Object -FilePath $reportPath -Append
+  & $psqlExe -h $ProxyHost -p $ProxyPort -U $dbUser -d $TargetDb -v ON_ERROR_STOP=1 -f $setupSql | Tee-Object -FilePath $reportPath -Append
+
   "--- Run pre-promotion validation SQL (read-only) ---" | Tee-Object -FilePath $reportPath -Append
   & $psqlExe -h $ProxyHost -p $ProxyPort -U $dbUser -d $TargetDb -v ON_ERROR_STOP=1 -f $preSql | Tee-Object -FilePath $reportPath -Append
 
@@ -67,7 +71,22 @@ try {
   "--- Run post-promotion validation SQL ---" | Tee-Object -FilePath $reportPath -Append
   & $psqlExe -h $ProxyHost -p $ProxyPort -U $dbUser -d $TargetDb -v ON_ERROR_STOP=1 -f $postSql | Tee-Object -FilePath $reportPath -Append
 
-  "--- SUCCESS: Promotion sequence completed ---" | Tee-Object -FilePath $reportPath -Append
+  "--- Cleanup FDW temporary objects (safe cleanup after successful promotion) ---" | Tee-Object -FilePath $reportPath -Append
+  "DROP SCHEMA IF EXISTS src_staging CASCADE;" | & $psqlExe -h $ProxyHost -p $ProxyPort -U $dbUser -d $TargetDb -v ON_ERROR_STOP=1 | Tee-Object -FilePath $reportPath -Append
+  "DROP USER MAPPING IF EXISTS FOR $dbUser SERVER src_staging_server;" | & $psqlExe -h $ProxyHost -p $ProxyPort -U $dbUser -d $TargetDb -v ON_ERROR_STOP=1 | Tee-Object -FilePath $reportPath -Append
+  "DROP SERVER IF EXISTS src_staging_server CASCADE;" | & $psqlExe -h $ProxyHost -p $ProxyPort -U $dbUser -d $TargetDb -v ON_ERROR_STOP=1 | Tee-Object -FilePath $reportPath -Append
+# Emergency cleanup of FDW objects if promotion failed or was interrupted mid-way
+  if (Test-Path Env:PGPASSWORD) {
+    "--- Emergency FDW cleanup (executed if promotion failed) ---" | Tee-Object -FilePath $reportPath -Append
+    $prevErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    
+    & $psqlExe -h $ProxyHost -p $ProxyPort -U $dbUser -d $TargetDb -c "DROP SCHEMA IF EXISTS src_staging CASCADE;" 2>&1 | Tee-Object -FilePath $reportPath -Append
+    & $psqlExe -h $ProxyHost -p $ProxyPort -U $dbUser -d $TargetDb -c "DROP USER MAPPING IF EXISTS FOR $dbUser SERVER src_staging_server;" 2>&1 | Tee-Object -FilePath $reportPath -Append
+    & $psqlExe -h $ProxyHost -p $ProxyPort -U $dbUser -d $TargetDb -c "DROP SERVER IF EXISTS src_staging_server CASCADE;" 2>&1 | Tee-Object -FilePath $reportPath -Append
+    
+    $ErrorActionPreference = $prevErrorAction
+  "--- SUCCESS: Promotion sequence completed and FDW objects cleaned ---" | Tee-Object -FilePath $reportPath -Append
   "Report: $reportPath" | Tee-Object -FilePath $reportPath -Append
 }
 finally {
