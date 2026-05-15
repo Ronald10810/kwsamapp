@@ -10,7 +10,8 @@ Approval checkpoint update (2026-05-15):
 - Approval 10 completed (Phase 4 validation passed in kwsa_import_staging).
 - Approval 11 completed (Phase 5 planning/safety review only; no data promotion executed).
 - Approval 12 completed (Phase 5 pre-promotion safety gate; fresh backup created).
-- Next executable gate recommended: Approval 13 (maintenance window + mapped upsert execution signoff).
+- Approval 13A completed (final execution review package prepared; no promotion executed).
+- Next executable gate recommended: Approval 13B (maintenance window + mapped package execution signoff).
 
 ## Rollback Triggers (Three-Stage Flow)
 
@@ -112,6 +113,7 @@ gcloud run services update kwsa-backend-prod \
 - docs/migration-runs/2026-05-14-run-006/ — Approval 6 kwsa_import_staging creation evidence
 - Cloud SQL on-demand backup id: 1778765132025 (SUCCESSFUL, for Stage 2 rollback)
 - docs/migration-runs/2026-05-14-run-012/ — Approval 12 pre-promotion safety gate report
+- docs/migration-runs/2026-05-14-run-013/ — Approval 13A final execution review report
 - Cloud SQL on-demand backup id: 1778860105623 (SUCCESSFUL, fresh pre-promotion rollback anchor)
 
 ## Validation After Rollback

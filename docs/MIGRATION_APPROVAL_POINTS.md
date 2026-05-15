@@ -153,9 +153,22 @@ Deliverables:
 - Post-promotion validation checklist documented
 - No data copy executed, no DML executed, no env/secret/deploy changes
 
-## Approval 13: Phase 5 execution authorization (recommended next)
+## Approval 13A: Phase 5 final execution decision and command review only
+Completed: 2026-05-15
+Evidence file: docs/migration-runs/2026-05-14-run-013/PHASE5_FINAL_EXECUTION_REVIEW.md
+
+Deliverables:
+- Final promotion strategy selected (hybrid controlled table-by-table method)
+- Exact proposed SQL package documented (proposal only)
+- Exact proposed PowerShell/psql execution command documented (proposal only)
+- Pre-check and post-check query packs documented
+- Rollback command package documented using backup 1778860105623
+- Maintenance-window requirement and risk posture reaffirmed
+- No promotion executed and no environment changes made
+
+## Approval 13B: Phase 5 promotion execution (recommended next)
 Required evidence:
 - Approved maintenance window and freeze owner
-- Decision recorded: move production off kwsa_uat first, or execute under strict downtime
-- Final mapped upsert SQL reviewed and approved (no blanket truncate/drop)
-- Explicit go/no-go and rollback trigger owner recorded
+- Rollback owner assigned and on-call
+- Explicit approval to execute proposed SQL package against kwsa_uat
+- Explicit stop/go checkpoints and rollback trigger criteria recorded

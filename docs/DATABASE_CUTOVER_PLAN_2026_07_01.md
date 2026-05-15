@@ -130,7 +130,11 @@ Mode: Inspection and planning only (no migration/import/deploy/env changes execu
   - Fresh backup created: 1778860105623 (SUCCESSFUL)
   - Source/target baselines captured and risk re-validated
   - No promotion executed
-- **Approval 13:** Phase 5 execution authorization (recommended next).
+- **Approval 13A:** Final execution decision and command review only. ✓
+  - Final proposed SQL package documented (not executed).
+  - Final proposed execution command documented (not executed).
+  - Maintenance-window-only recommendation reaffirmed.
+- **Approval 13B:** Phase 5 promotion execution (recommended next).
   - Approve maintenance window/freeze plan and owner.
-  - Approve final mapped upsert promotion SQL (no blanket truncate/drop).
+  - Approve execution of final reviewed SQL package.
   - Approve explicit rollback trigger criteria using backup 1778860105623.
