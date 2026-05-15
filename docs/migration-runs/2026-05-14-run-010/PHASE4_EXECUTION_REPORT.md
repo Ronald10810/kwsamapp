@@ -207,4 +207,56 @@ LINE 10:   updated_at
 
 ---
 
+## 2026-05-15 Approval 10e rerun #2 (FAILED at Step 4)
+
+### Pre-flight
+- current_database() confirmed: kwsa_import_staging
+- staging.transactions_raw all required columns confirmed present (transaction_type, net_comm, total_gci, buyer, seller)
+
+### Execution Sequence and Results
+
+**Step 0: Targeted cleanup of migration.load_rejections:**
+- DELETE: 72,546 false-positive rows removed.
+
+**Step 1: scripts/transform-staging-to-migration.sql — SUCCEEDED**
+- core_market_centers: 48 (idempotent), core_teams: 219 (idempotent)
+- core_associates: 9,243 (idempotent), core_listings: 129,123 (idempotent)
+- core_transactions: 30,181 (new rows)
+
+**Step 2: 01-core-listings-description-merge.sql — SUCCEEDED**
+- UPDATE 129,123 listings with descriptions.
+
+**Step 3: 02-group-c-listing-links-media-marketing.sql — SUCCEEDED**
+- listing_agents: 146,571 | listing_images: 2,531,507 | listing_marketing_urls: 9,975
+
+**Step 4: 03-group-d-transaction-participants-and-financials.sql — FAILED**
+- Error 1 (line 48): column "agent_name" of relation "transaction_agents" does not exist
+- Error 2 (line 93): column "agent_name" of relation "transaction_agents" does not exist
+- Error 3 (line 204): column ta.agent_name does not exist (HINT: Perhaps you meant ta.agent_role)
+- Actual migration.transaction_agents columns: id, transaction_id, associate_id, source_associate_id, agent_role, split_percentage, net_comm, sort_order, created_at, updated_at
+- Non-existent referenced: agent_name, outside_agency (in migration.transaction_agents)
+- Note: agent_name and is_outside_agent DO exist in migration.transaction_agent_calculations.
+
+**Step 5: 04-post-phase4-validation.sql — NOT RUN (halted)**
+
+### Row Counts After Failure
+- core_market_centers: 48 | core_teams: 219 | core_associates: 9,243
+- core_listings: 129,123 | core_transactions: 30,181
+- listing_agents: 146,571 | listing_images: 2,531,507 | listing_marketing_urls: 9,975
+- transaction_agents: 0 | transaction_agent_calculations: 0
+- load_rejections: 119,370 (46,824 new rows from payment-details rejection logic)
+
+### Audit
+- Only kwsa_import_staging was touched.
+- No secrets, env vars, or deployments were changed.
+- Working tree is clean.
+
+### Recommended Fix
+- Approval 10j: Patch 03-group-d-transaction-participants-and-financials.sql
+    - Remove agent_name and outside_agency from INSERT into migration.transaction_agents (both inserts, lines ~8 and ~50)
+    - In transaction_agent_calculations INSERT, replace ta.agent_name with COALESCE(ca.full_name, 'Unknown Agent')
+    - Replace ta.outside_agency with false or an appropriate fallback
+
+---
+
 **End of report.**

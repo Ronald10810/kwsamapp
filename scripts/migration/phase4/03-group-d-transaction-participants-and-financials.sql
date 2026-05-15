@@ -9,10 +9,8 @@ INSERT INTO migration.transaction_agents (
   transaction_id,
   associate_id,
   source_associate_id,
-  agent_name,
   agent_role,
   split_percentage,
-  outside_agency,
   sort_order,
   created_at,
   updated_at
@@ -21,10 +19,8 @@ SELECT
   ct.id AS transaction_id,
   ca.id AS associate_id,
   tas.source_associate_id::text,
-  COALESCE(ca.full_name, NULLIF(BTRIM(tas.associate_name), ''), 'Unknown Agent') AS agent_name,
   COALESCE(NULLIF(BTRIM(tas.agent_type), ''), 'Agent') AS agent_role,
   COALESCE(tas.split_percentage, 0),
-  COALESCE(tas.outside_agency, false),
   COALESCE(tas.sort_order, 0),
   now(),
   now()
@@ -52,10 +48,8 @@ INSERT INTO migration.transaction_agents (
   transaction_id,
   associate_id,
   source_associate_id,
-  agent_name,
   agent_role,
   split_percentage,
-  outside_agency,
   sort_order,
   created_at,
   updated_at
@@ -64,10 +58,8 @@ SELECT
   ct.id AS transaction_id,
   ca.id AS associate_id,
   sta.source_associate_id,
-  COALESCE(ca.full_name, NULLIF(BTRIM(sta.associate_name), ''), 'Unknown Agent') AS agent_name,
   COALESCE(NULLIF(BTRIM(sta.agent_type), ''), 'Agent') AS agent_role,
   COALESCE(sta.split_percentage, 0),
-  false,
   COALESCE(sta.sort_order, 0),
   now(),
   now()
@@ -155,7 +147,7 @@ SELECT
   ct.id AS transaction_id,
   ta.id AS transaction_agent_id,
   ta.associate_id,
-  ta.agent_name,
+  COALESCE(ca.full_name, ta.source_associate_id, 'Unknown Agent') AS agent_name,
   mc.name AS office_name,
   COALESCE(NULLIF(BTRIM(ta.agent_role), ''), NULLIF(BTRIM(ct.sale_type), ''), 'Agent') AS transaction_side,
   COALESCE(ct.status_change_date::date, ct.transaction_date::date, ct.created_at::date) AS effective_reporting_date,
@@ -170,7 +162,7 @@ SELECT
   tapd.cap_remaining,
   tapd.team_dollar,
   tapd.mc_dollar,
-  COALESCE(ta.outside_agency, false),
+  false AS is_outside_agent,
   now(),
   now()
 FROM staging.transaction_associate_payment_details_raw tapd
