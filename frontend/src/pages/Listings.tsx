@@ -3,6 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useGoogleMapsScript } from '../hooks/useGoogleMapsScript';
+import ListingFlyerPreview, { type ListingFlyerData } from '../components/ListingFlyerPreview';
+import ListingFlyerPreviewClassic from '../components/ListingFlyerPreviewClassic';
+import { downloadNodeAsPdf, downloadNodeAsRasterImage } from '../components/listingFlyerExport';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +46,9 @@ type ListingRow = {
   bedroom_count?: number | null;
   bathroom_count?: number | null;
   garage_count?: number | null;
+  bedrooms?: number | string | null;
+  bathrooms?: number | string | null;
+  garages?: number | string | null;
   parking_count?: number | null;
   erf_size?: string | null;
   floor_area?: string | null;
@@ -55,6 +61,10 @@ type ListingRow = {
   is_draft?: boolean;
   is_published?: boolean;
   mandate_type?: string | null;
+  rates_and_taxes?: string | null;
+  monthly_levy?: string | null;
+  rental_rate?: string | null;
+  deposit_requirements?: string | null;
   image_urls?: string[];
   thumbnail_url?: string | null;
   can_edit?: boolean;
@@ -62,6 +72,17 @@ type ListingRow = {
 };
 
 type ListingsResponse = { total: number; limit: number; offset: number; items: ListingRow[] };
+
+type MarketingProfileResponse = {
+  profile: {
+    agentName: string;
+    agentEmail: string;
+    agentPhone: string;
+    marketCentre: string;
+    logoUrl: string | null;
+  };
+  partial: boolean;
+};
 
 function numericValue(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -72,6 +93,31 @@ function numericValue(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function positiveStatValue(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = numericValue(value);
+    if (parsed !== null && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+const CANONICAL_RENTAL_RATE_OPTIONS = ['Monthly', 'Weekly', 'Daily', 'Yearly', 'Per Square Meter'] as const;
+
+function normalizeRentalRateOption(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  const normalized = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (normalized === 'monthly' || normalized === 'per month') return 'Monthly';
+  if (normalized === 'weekly' || normalized === 'per week') return 'Weekly';
+  if (normalized === 'daily' || normalized === 'per day') return 'Daily';
+  if (normalized === 'yearly' || normalized === 'annually' || normalized === 'per year') return 'Yearly';
+  if (normalized === 'per square meter' || normalized === 'per square metre' || normalized === 'sqm' || normalized === 'm2') return 'Per Square Meter';
+
+  return CANONICAL_RENTAL_RATE_OPTIONS.includes(trimmed as (typeof CANONICAL_RENTAL_RATE_OPTIONS)[number]) ? trimmed : '';
 }
 
 function CardStatIcon({ kind }: { kind: 'bed' | 'bath' | 'garage' | 'parking' | 'erf' | 'floor' }) {
@@ -135,6 +181,7 @@ type FeatureEntry = { feature_category: string; feature_value: string };
 type PropertyAreaEntry = { area_type: string; count: string; size: string; description: string; sub_features?: string[] };
 type NormalizedImageEntry = { file_url: string; file_name: string; media_type: string; uploaded_by: string; sort_order: number };
 type MandateDocumentEntry = { id?: string; file_name: string; file_url: string; file_type?: string; uploaded_by?: string; uploaded_at?: string; sort_order?: number };
+type PendingMandateDocument = { id: string; file: File };
 
 type ListingFormState = {
   // Listing Info
@@ -145,6 +192,15 @@ type ListingFormState = {
   listing_status_tag: string;
   ownership_type: string;
   sale_or_rent: string;
+  listing_validation_required: boolean;
+  listing_validation_approved: boolean;
+  listing_validation_code: string;
+  listing_validated_at: string;
+  seller_name: string;
+  seller_surname: string;
+  seller_phone: string;
+  seller_email: string;
+  seller_id: string;
   is_draft: boolean;
   is_published: boolean;
   expiry_date: string;
@@ -296,6 +352,7 @@ type OptionsResponse = {
   property_types: string[];
   property_sub_types: Record<string, string[]>;
   mandate_types: string[];
+  rental_rate_options?: string[];
   zoning_types: string[];
   marketing_url_types: string[];
   agent_roles: string[];
@@ -359,9 +416,23 @@ type Property24ProvinceSearchResponse = {
 type ActiveAgentRow = { id: string; full_name: string | null; source_market_center_id: string | null; market_center_id: string | null; market_center_name: string | null };
 
 type ViewMode = 'card' | 'list';
-type ListingSection = 'info' | 'address' | 'marketing' | 'images' | 'mandate' | 'property';
+type ListingSection = 'validation' | 'info' | 'address' | 'marketing' | 'images' | 'mandate' | 'property';
+
+type ListingValidationConflict = {
+  listingId?: string;
+  listingNumber?: string;
+  listingType?: string;
+  agentName?: string;
+  agentSurname?: string;
+  agentPhone?: string;
+  agentEmail?: string;
+  marketCenterName?: string;
+};
 
 const PAGE_SIZE = 20;
+const ENABLE_LISTING_FLYER = true;
+const USE_EXPERIMENTAL_FLYER_LAYOUT = true;
+const ENFORCE_LISTING_VALIDATION = String(import.meta.env.VITE_LISTING_VALIDATION_ENFORCED ?? 'true').toLowerCase() !== 'false';
 const SOUTH_AFRICA_PROVINCES = [
   'Eastern Cape',
   'Free State',
@@ -394,8 +465,9 @@ type PublishValidationError = {
 // ---------------------------------------------------------------------------
 
 const listingSectionLabels: Record<ListingSection, string> = {
+  validation: 'Validation',
   info: 'Listing Info',
-  address: 'Address & Validation',
+  address: 'Address Info',
   marketing: 'Marketing',
   images: 'Images',
   mandate: 'Mandate',
@@ -440,7 +512,7 @@ function isLandProperty(form: ListingFormState): boolean {
 
 // Sub-types that support a unit number (sectional title / complex / multi-unit)
 const SECTIONAL_TITLE_SUB_TYPES = new Set([
-  'flat/apartment', 'apartment/flat', 'apartment', 'townhouse', 'cluster',
+  'flat/apartment', 'apartment/flat', 'apartment', 'flat', 'townhouse', 'town house', 'cluster', 'sectional title',
 ]);
 
 function isSectionalTitleSubType(form: ListingFormState): boolean {
@@ -522,6 +594,27 @@ const minimumPortalRequirements: PortalPublishRequirement[] = [
     isMissing: (form) => !form.address_line.trim() && !form.street_name.trim(),
   },
   {
+    section: 'address',
+    label: 'Private Property: Unit Number',
+    helpText: 'For Private Property sectional/townhouse listings, Unit Number is required.',
+    isMissing: (form) => !form.unit_number.trim(),
+    when: (form) => form.feed_to_private_property && isSectionalTitleSubType(form),
+  },
+  {
+    section: 'address',
+    label: 'Private Property: Complex / Estate Name',
+    helpText: 'For Private Property sectional/townhouse listings, Complex / Estate Name is required.',
+    isMissing: (form) => !form.estate_name.trim(),
+    when: (form) => form.feed_to_private_property && isSectionalTitleSubType(form),
+  },
+  {
+    section: 'address',
+    label: 'Private Property: Address Type Mismatch',
+    helpText: 'This listing is set as non-sectional. Clear Unit Number and Estate Name, or change Property Sub Type to a sectional/townhouse type if applicable.',
+    isMissing: (form) => Boolean(form.unit_number.trim()) || Boolean(form.estate_name.trim()),
+    when: (form) => form.feed_to_private_property && !isSectionalTitleSubType(form),
+  },
+  {
     section: 'images',
     label: 'At Least 3 Photos',
     helpText: 'Listings with more photos get significantly more interest. Please upload at least 3 photos before publishing.',
@@ -598,6 +691,12 @@ function buildProperty24Url(referenceId: string | null | undefined): string | nu
   const reference = referenceId?.trim();
   if (!reference) return null;
   return `https://www.property24.com/for-sale/modimolle/modimolle/limpopo/11294/${reference}`;
+}
+
+const publicKwHomesBaseUrl = ((import.meta.env.VITE_PUBLIC_KWHOMES_BASE_URL as string | undefined) ?? 'https://kwhomes.co.za').replace(/\/$/, '');
+
+function buildPublicLandingUrl(kwuid: string, listingNumber: string): string {
+  return `${publicKwHomesBaseUrl}/${encodeURIComponent(kwuid)}/${encodeURIComponent(listingNumber)}`;
 }
 
 function buildPrivatePropertyUrl(referenceId: string | null | undefined): string | null {
@@ -709,8 +808,77 @@ function isWithdrawalState(statusName: string | null | undefined, statusTag: str
 function normalizeRenderableImageUrl(value: string): string {
   const v = value.trim();
   if (!v) return v;
+
+  const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim().replace(/\/$/, '') ?? '';
+
+  if (v.startsWith('/uploads/')) {
+    return apiBase ? `${apiBase}${v}` : v;
+  }
+
   const uploadHostMatch = v.match(/^https?:\/\/[^/]+(\/uploads\/.+)$/i);
-  return uploadHostMatch ? uploadHostMatch[1] : v;
+  if (uploadHostMatch) {
+    return apiBase ? `${apiBase}${uploadHostMatch[1]}` : uploadHostMatch[1];
+  }
+
+  return v;
+}
+
+function buildFlyerRenderableImageUrl(value: string): string {
+  const normalized = normalizeRenderableImageUrl(value);
+  if (!normalized) return normalized;
+  if (normalized.startsWith('data:') || normalized.startsWith('blob:')) return normalized;
+
+  const proxyable = normalized.startsWith('/uploads/') || /^https?:\/\//i.test(normalized);
+  if (!proxyable) return normalized;
+
+  // Use the configured API base URL so <img src> resolves to the backend host in production.
+  // In local dev VITE_API_BASE_URL is empty, so the path stays relative (handled by Vite proxy).
+  const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim().replace(/\/$/, '') ?? '';
+  const params = new URLSearchParams({ url: normalized });
+  return `${apiBase}/api/marketing/image-proxy?${params.toString()}`;
+}
+
+function applyMarketCentreLogoFallback(event: React.SyntheticEvent<HTMLImageElement, Event>): void {
+  const fallback = '/images/market-centre-fallback.png';
+  const target = event.currentTarget;
+  if (target.getAttribute('data-logo-fallback') === '1') return;
+  target.setAttribute('data-logo-fallback', '1');
+  target.src = fallback;
+}
+
+async function fetchImageAsDataUrl(url: string): Promise<string | null> {
+  if (!url) return null;
+  if (url.startsWith('data:')) return url;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+
+    const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
+    if (contentType && !contentType.startsWith('image/')) return null;
+
+    const blob = await res.blob();
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(new Error('Failed to convert image to data URL.'));
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+function buildFlyerFileName(item: ListingRow): string {
+  const listingId = (item.listing_number ?? item.source_listing_id ?? item.id).trim();
+  const title = (item.property_title ?? item.short_title ?? 'listing').trim();
+  const base = `${listingId}-${title}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 72);
+
+  return base.length > 0 ? `kwsa-flyer-${base}` : 'kwsa-flyer-listing';
 }
 
 function canonicalFeatureCategory(value: string): string {
@@ -805,6 +973,15 @@ const emptyForm: ListingFormState = {
   source_listing_id: '', source_market_center_id: '', listing_number: '',
   status_name: 'Active', listing_status_tag: 'For Sale', ownership_type: 'Full Title',
   sale_or_rent: 'For Sale', is_draft: true, is_published: false,
+  listing_validation_required: ENFORCE_LISTING_VALIDATION,
+  listing_validation_approved: false,
+  listing_validation_code: '',
+  listing_validated_at: '',
+  seller_name: '',
+  seller_surname: '',
+  seller_phone: '',
+  seller_email: '',
+  seller_id: '',
   expiry_date: '', price: '', agent_property_valuation: '', reduced_date: '',
   no_transfer_duty: false, property_auction: false, poa: false,
   property_title: '', short_title: '', property_description: '', short_description: '',
@@ -850,7 +1027,7 @@ const emptyForm: ListingFormState = {
 export default function Listings() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, canCreateListing, canEditListing, isOfficeAdmin, isAgent, activeContext } = useAuth();
+  const { user, token, canCreateListing, canEditListing, isOfficeAdmin, isRegionalAdmin, isAgent, activeContext } = useAuth();
   const [view, setView] = useState<ViewMode>('card');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -871,7 +1048,8 @@ export default function Listings() {
   const [securityEstateFilter, setSecurityEstateFilter] = useState(false);
   const [repossessedFilter, setRepossessedFilter] = useState(false);
   const [showOptionalFilters, setShowOptionalFilters] = useState(false);
-  /** When true, the query is scoped to the user's role (own listings / own MC). Cleared on any user-initiated filter change. */
+  const FlyerPreviewComponent = USE_EXPERIMENTAL_FLYER_LAYOUT ? ListingFlyerPreview : ListingFlyerPreviewClassic;
+  /** When true, the query is scoped to the user's role (own listings / own MC). */
   const [scopeActive, setScopeActive] = useState(true);
 
   // Reset scope whenever the active context changes (role switch)
@@ -884,11 +1062,23 @@ export default function Listings() {
   const [previewDetail, setPreviewDetail] = useState<Record<string, unknown> | null>(null);
   const [previewImageIdx, setPreviewImageIdx] = useState(0);
   const [previewExpandedDescription, setPreviewExpandedDescription] = useState(false);
+  const flyerPreviewRef = useRef<HTMLDivElement | null>(null);
+  const [flyerItem, setFlyerItem] = useState<ListingRow | null>(null);
+  const [flyerDetail, setFlyerDetail] = useState<Record<string, unknown> | null>(null);
+  const [flyerNotice, setFlyerNotice] = useState<string | null>(null);
+  const [isDownloadingFlyer, setIsDownloadingFlyer] = useState<'pdf' | 'jpg' | null>(null);
+  const [isSharingFlyer, setIsSharingFlyer] = useState(false);
+  const [flyerRenderData, setFlyerRenderData] = useState<ListingFlyerData | null>(null);
+  const [isPreparingFlyerAssets, setIsPreparingFlyerAssets] = useState(false);
+  const [flyerDisplayAddress, setFlyerDisplayAddress] = useState(false);
+  const [flyerDisplayMandateType, setFlyerDisplayMandateType] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<ListingSection>('info');
+  const [activeSection, setActiveSection] = useState<ListingSection>('validation');
   const [form, setForm] = useState<ListingFormState>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
+  const [isValidatingListing, setIsValidatingListing] = useState(false);
+  const [validationConflict, setValidationConflict] = useState<{ message: string; details: ListingValidationConflict | null } | null>(null);
   const [publishValidationErrors, setPublishValidationErrors] = useState<PublishValidationError[]>([]);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -904,12 +1094,17 @@ export default function Listings() {
   const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [isUploadingDocs, setIsUploadingDocs] = useState(false);
   const [isDeletingDoc, setIsDeletingDoc] = useState<string | null>(null);
+  const [pendingMandateDocuments, setPendingMandateDocuments] = useState<PendingMandateDocument[]>([]);
   const [isGeneratingNumber, setIsGeneratingNumber] = useState(false);
+  const workspaceContentRef = useRef<HTMLDivElement | null>(null);
   const preloadedImagesRef = useRef<Set<string>>(new Set());
   const openedFromReviewParamRef = useRef<string | null>(null);
 
-  // Scoped mode is backend permission-driven (OWN/MARKET_CENTRE) and lifted when user changes filters.
+  // Scoped mode is backend permission-driven (OWN/MARKET_CENTRE) and lifted only when user clicks Show all.
   const scopedMode = scopeActive && (isAgent || isOfficeAdmin);
+  const requiresValidationGate = ENFORCE_LISTING_VALIDATION && !editingId && form.listing_validation_required;
+  const isValidationLocked = requiresValidationGate && !form.listing_validation_approved;
+  const isLegacyValidationGrandfathered = Boolean(editingId) && !form.listing_validation_required;
 
   const queryFilters: ListingQueryFilters = {
     propertyType: propertyTypeFilter,
@@ -930,6 +1125,12 @@ export default function Listings() {
   };
 
   const activeContextId = activeContext?.id ?? 'no-context';
+  const authHeaders = useMemo<Record<string, string>>(() => {
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (activeContext?.id) headers['X-Active-Context'] = activeContext.id;
+    return headers;
+  }, [token, activeContext?.id]);
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['listings', activeContextId, page, search, statusFilter, saleOrRentFilter, queryFilters],
@@ -1039,7 +1240,7 @@ export default function Listings() {
       }
       return res.json() as Promise<Property24SuburbSearchResponse>;
     },
-    enabled: isFormOpen && activeSection === 'address' && Boolean(form.province.trim()) && Boolean(form.city.trim()),
+    enabled: isFormOpen && (activeSection === 'address' || activeSection === 'validation') && Boolean(form.province.trim()) && Boolean(form.city.trim()),
     staleTime: 30000,
   });
 
@@ -1054,7 +1255,7 @@ export default function Listings() {
       }
       return res.json() as Promise<Property24CitySearchResponse>;
     },
-    enabled: isFormOpen && activeSection === 'address' && Boolean(form.province.trim()),
+    enabled: isFormOpen && (activeSection === 'address' || activeSection === 'validation') && Boolean(form.province.trim()),
     staleTime: 30000,
   });
 
@@ -1074,6 +1275,18 @@ export default function Listings() {
 
   const activeAgents = activeAgentsData?.items ?? [];
 
+  const { data: flyerProfileData, isFetching: isLoadingFlyerProfile } = useQuery<MarketingProfileResponse | null>({
+    queryKey: ['listing-flyer-profile', token, activeContextId],
+    queryFn: async () => {
+      if (!token) return null;
+      const res = await fetch('/api/marketing/profile', { headers: authHeaders });
+      if (!res.ok) return null;
+      return await res.json() as MarketingProfileResponse;
+    },
+    enabled: ENABLE_LISTING_FLYER && Boolean(token),
+    staleTime: 120000,
+  });
+
   // Fetch whether the current agent requires admin approval before publish
   const { data: homeData } = useQuery<{ associate?: { listing_approval_required?: boolean; kwuid?: string | null } }>({
     queryKey: ['listings-home-approval-required', activeContextId],
@@ -1087,6 +1300,7 @@ export default function Listings() {
     staleTime: 60000,
   });
   const listingApprovalRequired = Boolean(homeData?.associate?.listing_approval_required);
+  const shareKwuid = (homeData?.associate?.kwuid ?? '').trim();
   const { ready: isGoogleMapsReady } = useGoogleMapsScript();
 
   const visibleItems = useMemo(() => data?.items ?? [], [data]);
@@ -1097,6 +1311,66 @@ export default function Listings() {
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
   const canGoPrev = page > 1;
   const canGoNext = page < totalPages;
+  const scrollListingsToTop = (): void => {
+    window.scrollTo(0, 0);
+    const appMain = document.querySelector('main.overflow-auto');
+    if (appMain instanceof HTMLElement) {
+      appMain.scrollTop = 0;
+    }
+  };
+  const handlePageNavigation = (delta: number): void => {
+    setPage((p) => p + delta);
+    scrollListingsToTop();
+  };
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      scrollListingsToTop();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [page]);
+
+  useEffect(() => {
+    if (!isFormOpen) return;
+    const hasOutcomeToShow = Boolean(
+      formError ||
+      formSuccess ||
+      validationConflict ||
+      publishValidationErrors.length > 0 ||
+      p24Result ||
+      ppResult ||
+      kwwResult ||
+      entegralResult
+    );
+    if (!hasOutcomeToShow) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      if (workspaceContentRef.current) {
+        workspaceContentRef.current.scrollTop = 0;
+      } else {
+        scrollListingsToTop();
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    isFormOpen,
+    formError,
+    formSuccess,
+    validationConflict,
+    publishValidationErrors.length,
+    p24Result,
+    ppResult,
+    kwwResult,
+    entegralResult,
+  ]);
+  const isThirdPartyReferenceReadOnly = !isRegionalAdmin;
+  const isThirdPartyIntegrationLockActive = useMemo(() => {
+    if (isRegionalAdmin) return false;
+    const isPublishedListing = Boolean(form.is_published) && !Boolean(form.is_draft);
+    if (!isPublishedListing) return false;
+    return !isWithdrawalState(form.status_name, form.listing_status_tag);
+  }, [isRegionalAdmin, form.is_published, form.is_draft, form.status_name, form.listing_status_tag]);
   const propertyTypeOptions = useMemo(() => {
     if (!options) return [];
     const set = new Set<string>();
@@ -1107,6 +1381,8 @@ export default function Listings() {
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [options]);
   const priceOptions = ['250000', '500000', '750000', '1000000', '1500000', '2000000', '3000000', '5000000', '7500000', '10000000', '15000000', '20000000'];
+  const highestPriceOption = priceOptions[priceOptions.length - 1];
+  const maxPriceOpenEndedToken = `${highestPriceOption}_plus`;
   const bedroomCountOptions = ['', '1', '2', '3', '4', '5'];
   const bathroomCountOptions = ['', '1', '2', '3', '4', '5'];
 
@@ -1201,6 +1477,259 @@ export default function Listings() {
     setPreviewDetail(null);
     setPreviewImageIdx(0);
     setPreviewExpandedDescription(false);
+  };
+
+  const openFlyer = (item: ListingRow): void => {
+    if (!ENABLE_LISTING_FLYER) return;
+    setFlyerItem(item);
+    setFlyerDetail(null);
+    setFlyerNotice(null);
+    setFlyerDisplayAddress(false);
+    setFlyerDisplayMandateType(false);
+
+    void fetch(`/api/listings/${item.id}`)
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json()) as Record<string, unknown>;
+      })
+      .then((details) => {
+        if (details) setFlyerDetail(details);
+      })
+      .catch(() => {
+        // Flyer should still open even if detail enrichment fails.
+      });
+  };
+
+  const closeFlyer = (): void => {
+    setFlyerItem(null);
+    setFlyerDetail(null);
+    setFlyerRenderData(null);
+    setIsPreparingFlyerAssets(false);
+    setFlyerNotice(null);
+    setIsDownloadingFlyer(null);
+    setIsSharingFlyer(false);
+    setFlyerDisplayAddress(false);
+    setFlyerDisplayMandateType(false);
+  };
+
+  const flyerData = useMemo<ListingFlyerData | null>(() => {
+    if (!ENABLE_LISTING_FLYER) return null;
+    if (!flyerItem) return null;
+
+    const listingTitle = (flyerItem.property_title ?? flyerItem.short_title ?? '').trim();
+    const title = listingTitle || `Listing ${flyerItem.listing_number ?? flyerItem.source_listing_id}`;
+    const reference = (flyerItem.listing_number ?? flyerItem.source_listing_id ?? '-').trim();
+    const listingAddress = [
+      [flyerItem.street_number, flyerItem.street_name].filter(Boolean).join(' '),
+      flyerItem.suburb,
+      flyerItem.city,
+      flyerItem.province,
+    ].filter(Boolean).join(', ') || flyerItem.address_line || 'Address available on request';
+    const description = (flyerItem.property_description ?? flyerItem.short_description ?? '').trim() || 'Contact us to receive full property details and arrange a private viewing.';
+    const statusLabel = deriveListingStatusTag(flyerItem.listing_status_tag, flyerItem.sale_or_rent) || flyerItem.status_name || 'Listing';
+    const secondaryStatus = flyerItem.status_name && flyerItem.status_name !== statusLabel ? flyerItem.status_name : null;
+
+    const bedroomCount = positiveStatValue(flyerItem.bedroom_count, flyerItem.bedrooms);
+    const bathroomCount = positiveStatValue(flyerItem.bathroom_count, flyerItem.bathrooms);
+    const garageCount = positiveStatValue(flyerItem.garage_count, flyerItem.garages);
+    const parkingCount = numericValue(flyerItem.parking_count);
+    const erfSize = numericValue(flyerItem.erf_size);
+    const floorArea = numericValue(flyerItem.floor_area);
+
+    const detailValue = (key: string): string | null => {
+      const source = flyerDetail?.[key];
+      if (typeof source === 'string') {
+        const trimmed = source.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      }
+      if (typeof source === 'number' && Number.isFinite(source)) {
+        return String(source);
+      }
+      return null;
+    };
+
+    const ratesAndTaxesRaw = detailValue('rates_and_taxes') ?? flyerItem.rates_and_taxes ?? null;
+    const monthlyLevyRaw = detailValue('monthly_levy') ?? flyerItem.monthly_levy ?? null;
+    const rentalRateRaw = detailValue('rental_rate') ?? flyerItem.rental_rate ?? null;
+    const depositRaw = detailValue('deposit_requirements') ?? flyerItem.deposit_requirements ?? null;
+
+    const metrics: ListingFlyerData['metrics'] = [
+      bedroomCount && bedroomCount > 0 ? { key: 'bedrooms', label: 'Bedrooms', value: String(bedroomCount), icon: 'bed' as const } : null,
+      bathroomCount && bathroomCount > 0 ? { key: 'bathrooms', label: 'Bathrooms', value: String(bathroomCount), icon: 'bath' as const } : null,
+      garageCount && garageCount > 0 ? { key: 'garages', label: 'Garages', value: String(garageCount), icon: 'garage' as const } : null,
+      parkingCount && parkingCount > 0 ? { key: 'parking', label: 'Parking', value: String(parkingCount), icon: 'parking' as const } : null,
+      erfSize && erfSize > 0 ? { key: 'erf-size', label: 'Erf Size', value: `${erfSize} m2`, icon: 'erf' as const } : null,
+      floorArea && floorArea > 0 ? { key: 'floor-area', label: 'Floor Area', value: `${floorArea} m2`, icon: 'floor' as const } : null,
+    ].filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+    const facts: ListingFlyerData['facts'] = [
+      ratesAndTaxesRaw ? { key: 'rates-and-taxes', label: 'Rates & Taxes', value: toMoney(ratesAndTaxesRaw) } : null,
+      monthlyLevyRaw ? { key: 'monthly-levy', label: 'Monthly Levy', value: toMoney(monthlyLevyRaw) } : null,
+      rentalRateRaw ? { key: 'rental-rate', label: 'Rental Rate', value: toMoney(rentalRateRaw) } : null,
+      depositRaw ? { key: 'deposit', label: 'Deposit', value: depositRaw } : null,
+      flyerItem.property_type ? { key: 'property-type', label: 'Property Type', value: flyerItem.property_type } : null,
+      flyerItem.property_sub_type ? { key: 'property-sub-type', label: 'Property Sub Type', value: flyerItem.property_sub_type } : null,
+      flyerDisplayMandateType && flyerItem.mandate_type ? { key: 'mandate-type', label: 'Mandate', value: flyerItem.mandate_type } : null,
+    ].filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+    const profile = flyerProfileData?.profile;
+    const associateName = (profile?.agentName ?? user?.name ?? flyerItem.primary_agent_name ?? flyerItem.primary_contact_name ?? 'Assigned Agent').trim();
+    const initials = associateName
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? '')
+      .join('') || 'AG';
+
+    const galleryPool = [
+      ...(flyerItem.image_urls ?? []),
+      flyerItem.thumbnail_url ?? '',
+    ]
+      .map((entry) => buildFlyerRenderableImageUrl((entry ?? '').trim()))
+      .filter((entry) => entry.length > 0);
+
+    const uniqueGallery = [...new Set(galleryPool)];
+    const firstImage = uniqueGallery[0] ?? '';
+    const galleryImageUrls = uniqueGallery.slice(1, 4);
+    const photoUrl = buildFlyerRenderableImageUrl((user?.picture ?? flyerItem.primary_agent_image_url ?? '').trim());
+    const marketCenterLogoUrl = buildFlyerRenderableImageUrl((profile?.logoUrl ?? flyerItem.market_center_logo_url ?? '').trim());
+
+    return {
+      title,
+      reference,
+      price: toMoney(flyerItem.price ?? null),
+      statusLabel,
+      secondaryStatus,
+      address: flyerDisplayAddress ? listingAddress : '',
+      description,
+      heroImageUrl: firstImage || null,
+      galleryImageUrls,
+      metrics,
+      facts,
+      disclaimer: 'Each office is independently owned and operated, and registered with the PPRA.',
+      associate: {
+        name: associateName,
+        phone: (profile?.agentPhone ?? flyerItem.primary_agent_phone ?? flyerItem.primary_contact_phone ?? '-').trim() || '-',
+        email: (profile?.agentEmail ?? user?.email ?? flyerItem.primary_agent_email ?? flyerItem.primary_contact_email ?? '-').trim() || '-',
+        photoUrl: photoUrl || null,
+        initials,
+        marketCenterName: (profile?.marketCentre ?? activeContext?.marketCenter ?? '').trim() || null,
+        marketCenterLogoUrl: marketCenterLogoUrl || null,
+      },
+    };
+  }, [flyerItem, flyerDetail, flyerDisplayAddress, flyerDisplayMandateType, flyerProfileData, user?.name, user?.email, user?.picture, activeContext?.marketCenter]);
+
+  const flyerShareUrl = useMemo(() => {
+    if (!flyerItem) return null;
+    if (shareKwuid && flyerItem.listing_number) {
+      return buildPublicLandingUrl(shareKwuid, flyerItem.listing_number);
+    }
+    return (
+      buildProperty24Url(flyerItem.property24_reference_id) ??
+      buildPrivatePropertyUrl(flyerItem.private_property_reference_id) ??
+      buildKwwUrl(flyerItem.kww_reference_id) ??
+      `${window.location.origin}${location.pathname}`
+    );
+  }, [flyerItem, location.pathname, shareKwuid]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!flyerData) {
+      setFlyerRenderData(null);
+      setIsPreparingFlyerAssets(false);
+      return;
+    }
+
+    setIsPreparingFlyerAssets(true);
+
+    const hydrateAssets = async (): Promise<void> => {
+      const [heroImageUrl, photoUrl, marketCenterLogoUrl, galleryImageUrls] = await Promise.all([
+        flyerData.heroImageUrl ? fetchImageAsDataUrl(buildFlyerRenderableImageUrl(flyerData.heroImageUrl)) : Promise.resolve<string | null>(null),
+        flyerData.associate.photoUrl ? fetchImageAsDataUrl(buildFlyerRenderableImageUrl(flyerData.associate.photoUrl)) : Promise.resolve<string | null>(null),
+        flyerData.associate.marketCenterLogoUrl ? fetchImageAsDataUrl(buildFlyerRenderableImageUrl(flyerData.associate.marketCenterLogoUrl)) : Promise.resolve<string | null>(null),
+        Promise.all((flyerData.galleryImageUrls ?? []).map(async (url) => {
+          const resolved = await fetchImageAsDataUrl(buildFlyerRenderableImageUrl(url));
+          return resolved;
+        })),
+      ]);
+
+      if (cancelled) return;
+
+      setFlyerRenderData({
+        ...flyerData,
+        heroImageUrl,
+        galleryImageUrls: galleryImageUrls.filter((entry): entry is string => Boolean(entry)),
+        associate: {
+          ...flyerData.associate,
+          photoUrl,
+          marketCenterLogoUrl,
+        },
+      });
+      setIsPreparingFlyerAssets(false);
+    };
+
+    void hydrateAssets();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [flyerData]);
+
+  const downloadFlyerPdf = async (): Promise<void> => {
+    if (!flyerItem || !flyerPreviewRef.current || !flyerRenderData) return;
+    setFlyerNotice(null);
+    setIsDownloadingFlyer('pdf');
+    try {
+      await downloadNodeAsPdf(flyerPreviewRef.current, buildFlyerFileName(flyerItem));
+    } catch {
+      setFlyerNotice('Could not create PDF. Please try again.');
+    } finally {
+      setIsDownloadingFlyer(null);
+    }
+  };
+
+  const downloadFlyerJpg = async (): Promise<void> => {
+    if (!flyerItem || !flyerPreviewRef.current || !flyerRenderData) return;
+    setFlyerNotice(null);
+    setIsDownloadingFlyer('jpg');
+    try {
+      await downloadNodeAsRasterImage(flyerPreviewRef.current, buildFlyerFileName(flyerItem), 'jpg');
+    } catch {
+      setFlyerNotice('Could not create JPG. Please try again.');
+    } finally {
+      setIsDownloadingFlyer(null);
+    }
+  };
+
+  const shareFlyer = async (): Promise<void> => {
+    if (!flyerItem || !flyerData) return;
+    const shareText = `Property flyer: ${flyerData.title} | ${flyerData.price} | Ref ${flyerData.reference}`;
+    const shareMessage = flyerShareUrl ? `${shareText} ${flyerShareUrl}` : shareText;
+
+    setFlyerNotice(null);
+    setIsSharingFlyer(true);
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: flyerData.title, text: shareText, url: flyerShareUrl ?? undefined });
+        return;
+      }
+
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareMessage);
+        setFlyerNotice('Flyer share text copied. Paste into WhatsApp, email, or social media.');
+        return;
+      }
+
+      setFlyerNotice('Share is not supported on this browser. Please download and share the file manually.');
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : '';
+      if (errorName !== 'AbortError') {
+        setFlyerNotice('Sharing did not complete. You can still download the flyer.');
+      }
+    } finally {
+      setIsSharingFlyer(false);
+    }
   };
 
   // Sub-type options based on selected property type
@@ -1479,16 +2008,20 @@ export default function Listings() {
         sort_order: 0,
       }];
     }
-    setForm({ ...emptyForm, agents: initialAgents });
+    setForm({ ...emptyForm, agents: initialAgents, listing_validation_required: ENFORCE_LISTING_VALIDATION });
+      // Pre-fill on_market_since_date with today — backend will confirm/lock on save.
+      setForm((p) => ({ ...p, on_market_since_date: new Date().toISOString().slice(0, 10) }));
     setEditingId(null);
-    setActiveSection('info');
+    setActiveSection(ENFORCE_LISTING_VALIDATION ? 'validation' : 'info');
     setFormError(null);
+    setValidationConflict(null);
     setOriginalListingPayload({});
     setSelectedProperty24SuburbId(null);
     setP24Result(null);
     setPpResult(null);
     setKwwResult(null);
     setEntegralResult(null);
+    setPendingMandateDocuments([]);
     setIsFormOpen(true);
   }
 
@@ -1501,6 +2034,7 @@ export default function Listings() {
     setPpResult(null);
     setKwwResult(null);
     setEntegralResult(null);
+    setPendingMandateDocuments([]);
     setIsFormOpen(true);
 
     try {
@@ -1511,6 +2045,12 @@ export default function Listings() {
       const b = (key: string) => parseBooleanLike(listing[key]);
       const payload = typeof listing.listing_payload === 'object' && listing.listing_payload !== null
         ? (listing.listing_payload as Record<string, unknown>)
+        : {};
+      const validationPayload = (payload.listing_validation && typeof payload.listing_validation === 'object')
+        ? (payload.listing_validation as Record<string, unknown>)
+        : {};
+      const validationAddress = (validationPayload.address && typeof validationPayload.address === 'object')
+        ? (validationPayload.address as Record<string, unknown>)
         : {};
       const property24SuburbId = extractProperty24SuburbId(payload);
       const payloadBool = (...keys: string[]): boolean => keys.some((key) => parseBooleanLike(payload[key]));
@@ -1673,6 +2213,15 @@ export default function Listings() {
         listing_status_tag: deriveListingStatusTag(resolvedListingStatusTag, resolvedSaleOrRent),
         ownership_type: s('ownership_type') || 'Full Title',
         sale_or_rent: resolvedSaleOrRent || 'For Sale',
+        listing_validation_required: parseBooleanLike(validationPayload.required),
+        listing_validation_approved: parseBooleanLike(validationPayload.approved),
+        listing_validation_code: String(validationPayload.validationCode ?? ''),
+        listing_validated_at: String(validationPayload.validatedAt ?? ''),
+        seller_name: String(validationPayload.sellerName ?? ''),
+        seller_surname: String(validationPayload.sellerSurname ?? ''),
+        seller_phone: String(validationPayload.sellerPhone ?? ''),
+        seller_email: String(validationPayload.sellerEmail ?? ''),
+        seller_id: String(validationPayload.sellerId ?? ''),
         is_draft: Boolean(listing.is_draft ?? true),
         is_published: b('is_published'),
         expiry_date: toInputDate(s('expiry_date')),
@@ -1691,17 +2240,17 @@ export default function Listings() {
         descriptive_feature: s('descriptive_feature'),
         retirement_living: b('retirement_living'),
         address_line: s('address_line'),
-        suburb: s('suburb'),
-        city: s('city'),
-        province: s('province'),
-        country: s('country') || 'South Africa',
+        suburb: String(validationAddress.suburb ?? s('suburb')),
+        city: String(validationAddress.city ?? s('city')),
+        province: String(validationAddress.province ?? s('province')),
+        country: String(validationAddress.country ?? (s('country') || 'South Africa')),
         erf_number: s('erf_number'),
-        unit_number: s('unit_number'),
-        door_number: s('door_number'),
-        estate_name: s('estate_name'),
-        street_number: s('street_number'),
-        street_name: s('street_name'),
-        postal_code: s('postal_code'),
+        unit_number: String(validationAddress.unitNumber ?? s('unit_number')),
+        door_number: String(validationAddress.doorNumber ?? s('door_number')),
+        estate_name: String(validationAddress.estateName ?? s('estate_name')),
+        street_number: String(validationAddress.streetNumber ?? s('street_number')),
+        street_name: String(validationAddress.streetName ?? s('street_name')),
+        postal_code: String(validationAddress.postalCode ?? s('postal_code')),
         longitude: s('longitude'),
         latitude: s('latitude'),
         override_display_location: b('override_display_location'),
@@ -1734,7 +2283,7 @@ export default function Listings() {
         rates_and_taxes: s('rates_and_taxes'),
         monthly_levy: s('monthly_levy'),
         occupation_date: toInputDate(s('occupation_date')),
-        rental_rate: s('rental_rate'),
+        rental_rate: normalizeRentalRateOption(s('rental_rate')),
         lease_period: s('lease_period'),
         deposit_requirements: s('deposit_requirements'),
         mandate_type: s('mandate_type') || 'Sole Mandate',
@@ -1849,6 +2398,117 @@ export default function Listings() {
     }
   }
 
+  async function runListingValidation(): Promise<void> {
+    setFormError(null);
+    setValidationConflict(null);
+
+    if (form.listing_validation_approved) {
+      setFormError('Validation has already been approved and is now read-only.');
+      return;
+    }
+
+    const requiredFields: Array<[string, string]> = [
+      ['seller_name', form.seller_name],
+      ['seller_surname', form.seller_surname],
+      ['seller_phone', form.seller_phone],
+      ['seller_email', form.seller_email],
+      ['seller_id', form.seller_id],
+      ['sale_or_rent', form.sale_or_rent],
+      ['suburb', form.suburb],
+      ['city', form.city],
+      ['province', form.province],
+      ['street_name', form.street_name],
+    ];
+
+    const missing = requiredFields.filter(([, value]) => !String(value ?? '').trim());
+    if (missing.length > 0) {
+      setFormError('Please complete all required seller and address fields before validating this listing.');
+      return;
+    }
+
+    setIsValidatingListing(true);
+    try {
+      const res = await fetch('/api/listings/validate-new-listing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentListingId: editingId,
+          sale_or_rent: form.sale_or_rent,
+          validationCode: form.listing_validation_code,
+          sellerId: form.seller_id,
+          address_line: form.address_line,
+          street_number: form.street_number,
+          street_name: form.street_name,
+          unit_number: form.unit_number,
+          door_number: form.door_number,
+          estate_name: form.estate_name,
+          suburb: form.suburb,
+          city: form.city,
+          province: form.province,
+          postal_code: form.postal_code,
+          country: form.country,
+        }),
+      });
+
+      const body = (await res.json().catch(() => ({}))) as {
+        approved?: boolean;
+        validationCode?: string;
+        message?: string;
+        conflict?: ListingValidationConflict;
+        error?: string;
+      };
+
+      if (!res.ok) {
+        setFormError(body.error ?? body.message ?? 'Failed to validate listing.');
+        return;
+      }
+
+      if (!body.approved) {
+        setForm((prev) => ({ ...prev, listing_validation_approved: false, listing_validation_code: '', listing_validated_at: '' }));
+        setValidationConflict({
+          message: body.message ?? 'A conflicting active listing already exists for this property.',
+          details: body.conflict ?? null,
+        });
+        return;
+      }
+
+      const validatedAt = new Date().toISOString();
+      const sellerFullName = `${form.seller_name} ${form.seller_surname}`.trim();
+      setForm((prev) => {
+        const nextContacts = [...prev.contacts];
+        if (nextContacts.length === 0) {
+          nextContacts.push({
+            full_name: sellerFullName,
+            phone_number: prev.seller_phone,
+            email_address: prev.seller_email,
+          });
+        } else {
+          nextContacts[0] = {
+            ...nextContacts[0],
+            full_name: nextContacts[0].full_name?.trim() ? nextContacts[0].full_name : sellerFullName,
+            phone_number: nextContacts[0].phone_number?.trim() ? nextContacts[0].phone_number : prev.seller_phone,
+            email_address: nextContacts[0].email_address?.trim() ? nextContacts[0].email_address : prev.seller_email,
+          };
+        }
+
+        return {
+          ...prev,
+          listing_validation_approved: true,
+          listing_validation_code: String(body.validationCode ?? prev.listing_validation_code ?? ''),
+          listing_validated_at: validatedAt,
+          contacts: nextContacts,
+        };
+      });
+
+      setFormSuccess(body.message ?? 'Listing validation approved. You can continue to the next tab.');
+      setActiveSection('info');
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Failed to validate listing');
+    } finally {
+      setIsValidatingListing(false);
+    }
+  }
+
   async function saveListing(publish: boolean): Promise<void> {
     setIsSaving(true);
     setFormError(null);
@@ -1859,6 +2519,12 @@ export default function Listings() {
     setEntegralResult(null);
 
     try {
+      if (isValidationLocked) {
+        setActiveSection('validation');
+        setFormError('Please validate this listing first. Draft save, save and publish are locked until validation is approved.');
+        return;
+      }
+
       // Auto-generate listing number on first save if not already set
       let listingNumber = form.listing_number;
       if (!listingNumber) {
@@ -1904,6 +2570,31 @@ export default function Listings() {
         image_urls: normalizeImageUrls([...form.normalized_images.map(ni => ni.file_url ?? '').filter(u => u), ...form.image_urls]),
         listing_payload: {
           ...originalListingPayload,
+          listing_validation: {
+            required: effectiveForm.listing_validation_required,
+            approved: effectiveForm.listing_validation_approved,
+            validationCode: effectiveForm.listing_validation_code || null,
+            validatedAt: effectiveForm.listing_validated_at || null,
+            sellerName: effectiveForm.seller_name,
+            sellerSurname: effectiveForm.seller_surname,
+            sellerPhone: effectiveForm.seller_phone,
+            sellerEmail: effectiveForm.seller_email,
+            sellerId: effectiveForm.seller_id,
+            listingType: effectiveForm.sale_or_rent,
+            address: {
+              streetNumber: effectiveForm.street_number,
+              streetName: effectiveForm.street_name,
+              unitNumber: effectiveForm.unit_number,
+              doorNumber: effectiveForm.door_number,
+              estateName: effectiveForm.estate_name,
+              suburb: effectiveForm.suburb,
+              city: effectiveForm.city,
+              province: effectiveForm.province,
+              postalCode: effectiveForm.postal_code,
+              country: effectiveForm.country,
+              addressLine: effectiveForm.address_line,
+            },
+          },
           EntegralReference: form.entegral_reference_id,
           EntegralId: form.entegral_reference_id,
           entegral_reference: form.entegral_reference_id,
@@ -1976,6 +2667,44 @@ export default function Listings() {
         const body = (await res.json()) as { id: string };
         setEditingId(body.id);
         savedId = body.id;
+      }
+
+      if (!editingId && savedId && pendingMandateDocuments.length > 0) {
+        const filesToUpload = pendingMandateDocuments.map((item) => item.file);
+        const payloadFiles = await Promise.all(
+          filesToUpload.map(async (file) => ({
+            name: file.name,
+            mimeType: file.type,
+            contentBase64: await fileToBase64(file),
+          }))
+        );
+        const uploadRes = await fetch(`/api/listings/${savedId}/mandate-documents/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: payloadFiles }),
+        });
+
+        if (!uploadRes.ok) {
+          setFormError('Listing saved, but mandate document upload failed. Open the listing again and upload the files.');
+        } else {
+          const uploadBody = (await uploadRes.json()) as { document_urls?: string[] };
+          const documentUrls = Array.isArray(uploadBody.document_urls) ? uploadBody.document_urls : [];
+
+          if (documentUrls.length > 0) {
+            const uploadedDocs: MandateDocumentEntry[] = documentUrls.map((url, index) => ({
+              file_name: filesToUpload[index]?.name ?? url.split('/').pop() ?? 'Document',
+              file_url: url,
+              file_type: filesToUpload[index]?.type || undefined,
+              sort_order: form.mandate_documents.length + index,
+            }));
+            setForm((previous) => ({
+              ...previous,
+              mandate_documents: [...previous.mandate_documents, ...uploadedDocs],
+            }));
+          }
+
+          setPendingMandateDocuments([]);
+        }
       }
 
       // Approval flow: submit for admin review instead of direct publish
@@ -2091,6 +2820,7 @@ export default function Listings() {
   function closeListingWorkspace(): void {
     setFormError(null);
     setFormSuccess(null);
+    setValidationConflict(null);
     setP24Result(null);
     setPpResult(null);
     setKwwResult(null);
@@ -2176,7 +2906,17 @@ export default function Listings() {
   }
 
   async function uploadMandateDocuments(files: FileList | null): Promise<void> {
-    if (!files || files.length === 0 || !editingId) return;
+    if (!files || files.length === 0) return;
+
+    if (!editingId) {
+      const incoming = Array.from(files).map((file) => ({
+        id: `${file.name}-${file.lastModified}-${file.size}-${Math.random().toString(36).slice(2)}`,
+        file,
+      }));
+      setPendingMandateDocuments((previous) => [...previous, ...incoming]);
+      return;
+    }
+
     setIsUploadingDocs(true);
     setFormError(null);
     try {
@@ -2269,31 +3009,34 @@ export default function Listings() {
     );
   }
 
-  function chk(label: string, key: keyof ListingFormState) {
+  function chk(label: string, key: keyof ListingFormState, opts?: { disabled?: boolean }) {
     const val = Boolean(form[key]);
+    const isDisabled = Boolean(opts?.disabled);
     return (
-      <label key={key} className="flex items-center gap-2 cursor-pointer">
+      <label key={key} className={`flex items-center gap-2 ${isDisabled ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}>
         <input
           type="checkbox"
           className="h-4 w-4 rounded border-slate-300 text-red-600"
           checked={val}
-          onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.checked }))}
+          disabled={isDisabled}
+          onChange={(e) => !isDisabled && setForm((p) => ({ ...p, [key]: e.target.checked }))}
         />
         <span className="text-sm text-slate-700">{label}</span>
       </label>
     );
   }
 
-  function sel(label: string, key: keyof ListingFormState, choices: string[], opts?: { span?: number }) {
+  function sel(label: string, key: keyof ListingFormState, choices: string[], opts?: { span?: number; readOnly?: boolean }) {
     const val = String(form[key] ?? '');
     const colSpan = opts?.span ? `md:col-span-${opts.span}` : '';
     return (
       <label key={key} className={`flex flex-col gap-1 ${colSpan}`}>
         <span className="text-xs font-medium text-slate-600">{label}</span>
         <select
-          className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
+          className={`rounded-lg border border-slate-300 px-3 py-2 text-sm ${opts?.readOnly ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-white'}`}
           value={val}
-          onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
+          disabled={Boolean(opts?.readOnly)}
+          onChange={(e) => !opts?.readOnly && setForm((p) => ({ ...p, [key]: e.target.value }))}
         >
           <option value="">-- Select --</option>
           {choices.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -2302,7 +3045,7 @@ export default function Listings() {
     );
   }
 
-  function property24ProvinceField() {
+  function property24ProvinceField(readOnly = false, label = 'Province') {
     const allProvinces = (property24ProvinceData?.items ?? []).length > 0
       ? (property24ProvinceData?.items ?? [])
       : (options?.provinces ?? []).length > 0
@@ -2311,14 +3054,16 @@ export default function Listings() {
     const provinceOptions = Array.from(new Set(allProvinces.map((p) => p.name))).sort((a, b) => a.localeCompare(b));
     return (
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">Province</span>
+        <span className="text-xs font-medium text-slate-600">{label}</span>
         <input
-          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          className={`rounded-lg border border-slate-300 px-3 py-2 text-sm ${readOnly ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
           list="listing-province-options"
           value={form.province}
           name="listingProvince"
           autoComplete="new-password"
+          readOnly={readOnly}
           onChange={(e) => {
+            if (readOnly) return;
             const nextValue = e.target.value;
             setForm((p) => ({ ...p, province: nextValue, city: '', suburb: '' }));
             setSelectedProperty24SuburbId(null);
@@ -2334,18 +3079,20 @@ export default function Listings() {
     );
   }
 
-  function property24SuburbField() {
+  function property24SuburbField(readOnly = false, label = 'Suburb') {
     const suburbOptions = Array.from(new Set(suburbPickerOptions.map((option) => option.name))).sort((a, b) => a.localeCompare(b));
     return (
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">Suburb</span>
+        <span className="text-xs font-medium text-slate-600">{label}</span>
         <input
-          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          className={`rounded-lg border border-slate-300 px-3 py-2 text-sm ${readOnly ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
           list="listing-suburb-options"
           name="listingSuburb"
           autoComplete="new-password"
           value={form.suburb}
+          readOnly={readOnly}
           onChange={(e) => {
+            if (readOnly) return;
             const nextValue = e.target.value;
             const matched = suburbPickerOptions.find((option) => option.name.toLowerCase() === nextValue.trim().toLowerCase());
             setForm((p) => ({ ...p, suburb: nextValue }));
@@ -2370,18 +3117,20 @@ export default function Listings() {
     );
   }
 
-  function property24CityField() {
+  function property24CityField(readOnly = false, label = 'City') {
     const cityOptions = Array.from(new Set(cityPickerOptions.map((option) => option.name))).sort((a, b) => a.localeCompare(b));
     return (
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">City</span>
+        <span className="text-xs font-medium text-slate-600">{label}</span>
         <input
-          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          className={`rounded-lg border border-slate-300 px-3 py-2 text-sm ${readOnly ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
           list="listing-city-options"
           name="listingCity"
           autoComplete="new-password"
           value={form.city}
+          readOnly={readOnly}
           onChange={(e) => {
+            if (readOnly) return;
             const nextValue = e.target.value;
             setForm((p) => ({ ...p, city: nextValue, suburb: '' }));
             setSelectedProperty24SuburbId(null);
@@ -2591,7 +3340,7 @@ export default function Listings() {
                 <button
                   className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-1.5 text-sm font-medium text-amber-800 hover:bg-amber-100"
                   type="button"
-                  disabled={isSaving}
+                  disabled={isSaving || isValidationLocked}
                   onClick={() => void saveListing(false)}
                 >
                   {isSaving ? 'Saving...' : 'Save Draft'}
@@ -2599,7 +3348,7 @@ export default function Listings() {
                 <button
                   className="primary-btn"
                   type="button"
-                  disabled={isSaving}
+                  disabled={isSaving || isValidationLocked}
                   onClick={() => void saveListing(true)}
                 >
                   {isSaving
@@ -2627,20 +3376,23 @@ export default function Listings() {
               <aside className="w-full shrink-0 border-b border-slate-200 bg-slate-50 p-2 sm:p-3 lg:w-56 lg:border-b-0 lg:border-r">
                 <div className="flex gap-1 overflow-x-auto scrollbar-none lg:block lg:space-y-1">
                   {([
+                    ['validation', 'Validation'],
                     ['info', 'Listing Info'],
-                    ['address', 'Address & Validation'],
+                    ['address', 'Address Info'],
                     ['marketing', 'Marketing'],
                     ['images', 'Images'],
                     ['mandate', 'Mandate'],
                     ['property', 'Property Details'],
                   ] as [ListingSection, string][]).map(([key, label]) => {
                     const sectionHasError = publishValidationErrors.some((e) => e.section === key);
+                    const locked = isValidationLocked && key !== 'validation';
                     return (
                       <button
                         key={key}
                         type="button"
-                        onClick={() => setActiveSection(key)}
-                        className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm font-medium flex items-center justify-between gap-2 lg:w-full ${activeSection === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'}`}
+                        onClick={() => { if (!locked) setActiveSection(key); }}
+                        disabled={locked}
+                        className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm font-medium flex items-center justify-between gap-2 lg:w-full ${activeSection === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'} ${locked ? 'cursor-not-allowed opacity-50' : ''}`}
                       >
                         <span>{label}</span>
                         {sectionHasError && (
@@ -2653,10 +3405,57 @@ export default function Listings() {
               </aside>
 
               {/* Content Panel */}
-              <div className="flex-1 overflow-auto p-4 sm:p-6 space-y-6">
+              <div ref={workspaceContentRef} className="flex-1 overflow-auto p-4 sm:p-6 space-y-6">
                 {isLoadingDetails && <p className="text-sm text-slate-500">Loading listing details...</p>}
                 {formSuccess && <p className="text-sm text-green-700 rounded-lg bg-green-50 p-3 border border-green-200">{formSuccess}</p>}
                 {formError && <p className="text-sm text-amber-700 rounded-lg bg-amber-50 p-3 border border-amber-200">{formError}</p>}
+                {isValidationLocked && (
+                  <div className="rounded-xl border border-blue-200 bg-blue-50/90 p-4 text-sm text-blue-900 shadow-sm">
+                    <p className="font-semibold">Validation is required before you continue.</p>
+                    <p className="mt-1 text-blue-800">
+                      Complete seller details and the property address, then click Validate Listing to unlock the remaining tabs.
+                    </p>
+                  </div>
+                )}
+                {isLegacyValidationGrandfathered && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/90 p-4 text-sm text-emerald-900 shadow-sm">
+                    <p className="font-semibold">Legacy listing recognized as pre-validated.</p>
+                    <p className="mt-1 text-emerald-800">
+                      This listing was Loom-validated before the MAPP validation update. You can continue updating and publishing this listing without running the new validation step.
+                    </p>
+                  </div>
+                )}
+                {validationConflict && (
+                  <div className="rounded-xl border border-red-300 bg-red-50/90 p-4 space-y-4 shadow-sm">
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-red-800">Active duplicate found</p>
+                      <p className="text-sm text-red-700">{validationConflict.message}</p>
+                    </div>
+                    {validationConflict.details && (
+                      <div className="rounded-lg border border-red-200 bg-white p-4 text-sm text-slate-700">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <p><strong>Agent:</strong> {[validationConflict.details.agentName, validationConflict.details.agentSurname].filter(Boolean).join(' ') || '-'}</p>
+                          <p><strong>Phone:</strong> {validationConflict.details.agentPhone || '-'}</p>
+                          <p><strong>Email:</strong> {validationConflict.details.agentEmail || '-'}</p>
+                          <p><strong>Market Centre:</strong> {validationConflict.details.marketCenterName || '-'}</p>
+                          <p className="sm:col-span-2"><strong>Listing:</strong> {validationConflict.details.listingNumber || validationConflict.details.listingId || '-'}</p>
+                        </div>
+                      </div>
+                    )}
+                    <p className="text-xs leading-5 text-red-700">
+                      Contact the existing listing agent if a shared deal is appropriate. This listing stays locked until the active conflict is resolved.
+                    </p>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm text-red-700 hover:bg-red-100"
+                        onClick={() => setValidationConflict(null)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {publishValidationErrors.length > 0 && (
                   <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 space-y-3">
                     <div className="flex items-start gap-2">
@@ -2783,6 +3582,68 @@ export default function Listings() {
                     </div>
                     <button type="button" className="text-xs opacity-60 hover:opacity-100 shrink-0" onClick={() => setEntegralResult(null)}>Dismiss</button>
                   </div>
+                )}
+
+                {/* ------------------ VALIDATION ------------------ */}
+                {activeSection === 'validation' && (
+                  <section className="space-y-6">
+                    <h3 className="text-lg font-semibold text-slate-900">Listing Validation</h3>
+                    <p className="text-sm text-slate-600">
+                      This step is required before a new listing can be saved. Capture seller details, choose listing type, and confirm the exact property address.
+                    </p>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      {inp('Validation Code', 'listing_validation_code', { readOnly: true })}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      {inp('Seller Name *', 'seller_name', { readOnly: form.listing_validation_approved })}
+                      {inp('Seller Surname *', 'seller_surname', { readOnly: form.listing_validation_approved })}
+                      {inp('Seller Phone *', 'seller_phone', { readOnly: form.listing_validation_approved })}
+                      {inp('Seller Email *', 'seller_email', { readOnly: form.listing_validation_approved })}
+                      {inp('Seller ID *', 'seller_id', { readOnly: form.listing_validation_approved })}
+                      {sel('For Sale or Rent *', 'sale_or_rent', options?.sale_or_rent_types ?? [], { readOnly: form.listing_validation_approved })}
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                      <p className="text-xs text-slate-500">
+                        Use the same address process as the Address tab so Property24 suburb/city/province mapping stays aligned.
+                      </p>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                        {inp('Country *', 'country', { readOnly: form.listing_validation_approved })}
+                        {property24ProvinceField(form.listing_validation_approved, 'Province *')}
+                        {property24CityField(form.listing_validation_approved, 'City *')}
+                        {property24SuburbField(form.listing_validation_approved, 'Suburb *')}
+                        {inp('Street Number', 'street_number', { readOnly: form.listing_validation_approved })}
+                        {inp('Street Name', 'street_name', { readOnly: form.listing_validation_approved })}
+                        {inp('Unit Number', 'unit_number', { readOnly: form.listing_validation_approved })}
+                        {inp('Door Number', 'door_number', { readOnly: form.listing_validation_approved })}
+                        {inp('Estate Name', 'estate_name', { readOnly: form.listing_validation_approved })}
+                        {inp('Postal Code', 'postal_code', { readOnly: form.listing_validation_approved })}
+                        {inp('Address Line (Full)', 'address_line', { span: 2, readOnly: form.listing_validation_approved })}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        disabled={isValidatingListing || form.listing_validation_approved || isLegacyValidationGrandfathered}
+                        onClick={() => void runListingValidation()}
+                      >
+                        {isValidatingListing
+                          ? 'Validating...'
+                          : isLegacyValidationGrandfathered
+                            ? 'Legacy Listing - Validation Not Required'
+                            : (form.listing_validation_approved ? 'Validation Locked' : 'Validate Listing')}
+                      </button>
+                      {form.listing_validation_approved && (
+                        <span className="inline-flex items-center rounded-full border border-green-300 bg-green-50 px-3 py-1 text-sm font-medium text-green-700">
+                          Validation Approved
+                        </span>
+                      )}
+                    </div>
+                  </section>
                 )}
 
                 {/* ------------------ LISTING INFO ------------------ */}
@@ -2971,7 +3832,7 @@ export default function Listings() {
                 {/* ------------------ ADDRESS ------------------ */}
                 {activeSection === 'address' && (
                   <section className="space-y-6">
-                    <h3 className="text-lg font-semibold text-slate-900">Address & Validation</h3>
+                    <h3 className="text-lg font-semibold text-slate-900">Address Info</h3>
 
                     {/* Structured address entry — cascading P24 dropdowns, then street details */}
                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
@@ -3006,26 +3867,13 @@ export default function Listings() {
                       {inp('Longitude', 'longitude')}
                       {inp('Latitude', 'latitude')}
                     </div>
-
-                    <h4 className="text-base font-semibold text-slate-800 border-t pt-4">Override Display Location</h4>
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                      <div className="flex flex-col gap-2 pt-1">
-                        {chk('Override Display Location', 'override_display_location')}
+                    {form.feed_to_private_property && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        {isSectionalTitleSubType(form)
+                          ? 'Private Property rule: for sectional/townhouse listings, Unit Number and Estate/Complex Name are required.'
+                          : 'Private Property rule: for non-sectional listings, Unit Number and Estate/Complex Name must be left blank.'}
                       </div>
-                      {form.override_display_location && (
-                        <>
-                          {inp('Override Display Longitude', 'override_display_longitude')}
-                          {inp('Override Display Latitude', 'override_display_latitude')}
-                        </>
-                      )}
-                    </div>
-
-                    <h4 className="text-base font-semibold text-slate-800 border-t pt-4">Loom Validation</h4>
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                      {inp('Loom Validation Status', 'loom_validation_status')}
-                      {inp('Loom Property ID', 'loom_property_id')}
-                      {inp('Loom Address', 'loom_address', { span: 2 })}
-                    </div>
+                    )}
                   </section>
                 )}
 
@@ -3042,16 +3890,21 @@ export default function Listings() {
                     {/* Portal Integrations */}
                     <div className="space-y-4">
                       <h4 className="text-base font-semibold text-slate-800 border-t pt-4">Third Party Integrations</h4>
+                      {isThirdPartyIntegrationLockActive && (
+                        <p className="text-xs text-slate-500">
+                          Third-party feed selections are locked while this listing is active and published. Withdraw the listing to change them.
+                        </p>
+                      )}
 
                       {/* Private Property */}
                       <div className="rounded-lg border border-slate-200 p-4 space-y-3">
                         <div className="flex items-center gap-3">
-                          {chk('Feed to Private Property', 'feed_to_private_property')}
+                          {chk('Feed to Private Property', 'feed_to_private_property', { disabled: isThirdPartyIntegrationLockActive })}
                         </div>
                         {(form.feed_to_private_property || Boolean(firstReference(form.private_property_ref1, form.private_property_ref2, form.private_property_sync_status))) && (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                            {inp('Private Property Reference', 'private_property_ref1')}
-                            {inp('Sync Status', 'private_property_sync_status')}
+                            {inp('Private Property Reference', 'private_property_ref1', { readOnly: isThirdPartyReferenceReadOnly })}
+                            {inp('Sync Status', 'private_property_sync_status', { readOnly: isThirdPartyReferenceReadOnly })}
                           </div>
                         )}
                       </div>
@@ -3059,12 +3912,12 @@ export default function Listings() {
                       {/* KWW */}
                       <div className="rounded-lg border border-slate-200 p-4 space-y-3">
                         <div className="flex items-center gap-3">
-                          {chk('Feed to KWW', 'feed_to_kww')}
+                          {chk('Feed to KWW', 'feed_to_kww', { disabled: isThirdPartyIntegrationLockActive })}
                         </div>
                         {(form.feed_to_kww || Boolean(firstReference(form.kww_property_reference, form.kww_ref1, form.kww_ref2, form.kww_sync_status))) && (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                            {inp('KWW Property Reference', 'kww_property_reference')}
-                            {inp('Sync Status', 'kww_sync_status')}
+                            {inp('KWW Property Reference', 'kww_property_reference', { readOnly: isThirdPartyReferenceReadOnly })}
+                            {inp('Sync Status', 'kww_sync_status', { readOnly: isThirdPartyReferenceReadOnly })}
                           </div>
                         )}
                       </div>
@@ -3072,12 +3925,12 @@ export default function Listings() {
                       {/* Entegral */}
                       <div className="rounded-lg border border-slate-200 p-4 space-y-3">
                         <div className="flex items-center gap-3">
-                          {chk('Feed to Entegral', 'feed_to_entegral')}
+                          {chk('Feed to Entegral', 'feed_to_entegral', { disabled: isThirdPartyIntegrationLockActive })}
                         </div>
                         {(form.feed_to_entegral || Boolean(firstReference(form.entegral_reference_id, form.entegral_sync_status))) && (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                            {inp('Entegral Reference', 'entegral_reference_id')}
-                            {inp('Sync Status', 'entegral_sync_status')}
+                            {inp('Entegral Reference', 'entegral_reference_id', { readOnly: isThirdPartyReferenceReadOnly })}
+                            {inp('Sync Status', 'entegral_sync_status', { readOnly: isThirdPartyReferenceReadOnly })}
                           </div>
                         )}
                       </div>
@@ -3086,7 +3939,7 @@ export default function Listings() {
                       <div className={`rounded-lg border p-4 space-y-3 ${form.feed_to_property24 ? 'border-red-300 bg-red-50/30' : 'border-slate-200'}`}>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
-                            {chk('Feed to Property24', 'feed_to_property24')}
+                            {chk('Feed to Property24', 'feed_to_property24', { disabled: isThirdPartyIntegrationLockActive })}
                           </div>
                           {form.feed_to_property24 && (
                             <span className="text-xs text-red-700 font-medium bg-red-100 rounded-full px-2 py-0.5">
@@ -3096,8 +3949,8 @@ export default function Listings() {
                         </div>
                         {(form.feed_to_property24 || Boolean(firstReference(form.property24_ref1, form.property24_ref2, form.property24_sync_status))) && (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                            {inp('Property24 Reference', 'property24_ref1')}
-                            {inp('Sync Status', 'property24_sync_status')}
+                            {inp('Property24 Reference', 'property24_ref1', { readOnly: isThirdPartyReferenceReadOnly })}
+                            {inp('Sync Status', 'property24_sync_status', { readOnly: isThirdPartyReferenceReadOnly })}
                           </div>
                         )}
                         {form.feed_to_property24 && (
@@ -3247,7 +4100,7 @@ export default function Listings() {
 
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                       {inp('Signed Date', 'signed_date', { type: 'date' })}
-                      {inp('On Market Since Date', 'on_market_since_date', { type: 'date' })}
+                      {inp('On Market Since Date', 'on_market_since_date', { type: 'date', readOnly: true })}
                       {inp('Rates & Taxes', 'rates_and_taxes', { placeholder: 'Monthly amount' })}
                       {inp('Monthly Levy', 'monthly_levy', { placeholder: 'Monthly levy' })}
                       {inp('Occupation Date', 'occupation_date', { type: 'date' })}
@@ -3260,12 +4113,7 @@ export default function Listings() {
                         <h4 className="text-sm font-semibold text-amber-800">Rental Details</h4>
                         <p className="text-xs text-amber-700">These fields apply to To Rent listings and feed directly to Property24 and Private Property portals.</p>
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                          {sel('Rental Rate', 'rental_rate', [
-                            'R0 - R2 500', 'R2 500 - R5 000', 'R5 000 - R7 500', 'R7 500 - R10 000',
-                            'R10 000 - R15 000', 'R15 000 - R20 000', 'R20 000 - R25 000',
-                            'R25 000 - R30 000', 'R30 000 - R35 000', 'R35 000 - R40 000',
-                            'R40 000 - R50 000', 'R50 000+',
-                          ])}
+                          {sel('Rental Rate', 'rental_rate', options?.rental_rate_options?.length ? options.rental_rate_options : [...CANONICAL_RENTAL_RATE_OPTIONS])}
                           {inp('Lease Period', 'lease_period', { placeholder: '1 to 12 Months' })}
                           {inp('Deposit Requirements', 'deposit_requirements', { placeholder: '1 Month Deposit' })}
                         </div>
@@ -3306,7 +4154,7 @@ export default function Listings() {
                       <h4 className="text-base font-semibold text-slate-800">Mandate Documents</h4>
 
                       {/* Existing documents list */}
-                      {form.mandate_documents.length > 0 && (
+                      {(form.mandate_documents.length > 0 || pendingMandateDocuments.length > 0) && (
                         <div className="space-y-2">
                           {form.mandate_documents
                             .slice()
@@ -3344,21 +4192,41 @@ export default function Listings() {
                                 </button>
                               </div>
                             ))}
+
+                          {pendingMandateDocuments.map((item, index) => (
+                            <div
+                              key={item.id}
+                              className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm"
+                            >
+                              <span className="flex-1 truncate text-slate-800 font-medium" title={item.file.name}>
+                                {item.file.name || `Document ${index + 1}`}
+                              </span>
+                              <span className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 text-[11px] font-medium text-amber-700">
+                                Pending Save
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setPendingMandateDocuments((previous) => previous.filter((pending) => pending.id !== item.id))}
+                                className="shrink-0 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
                         </div>
                       )}
 
-                      {editingId ? (
-                        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center">
-                          <label className="cursor-pointer rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-100 inline-block">
-                            {isUploadingDocs ? 'Uploading...' : '+ Upload Documents'}
-                            <input type="file" multiple className="hidden" disabled={isUploadingDocs}
-                              onChange={(e) => { void uploadMandateDocuments(e.target.files); e.currentTarget.value = ''; }} />
-                          </label>
-                          <p className="mt-2 text-xs text-slate-400">PDF, images or any file. Multiple files allowed.</p>
-                        </div>
-                      ) : (
-                        <p className="text-xs text-slate-500">Save the listing first, then upload mandate documents.</p>
-                      )}
+                      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center">
+                        <label className="cursor-pointer rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-100 inline-block">
+                          {isUploadingDocs ? 'Uploading...' : '+ Upload Documents'}
+                          <input type="file" multiple className="hidden" disabled={isUploadingDocs}
+                            onChange={(e) => { void uploadMandateDocuments(e.target.files); e.currentTarget.value = ''; }} />
+                        </label>
+                        <p className="mt-2 text-xs text-slate-400">PDF, images or any file. Multiple files allowed.</p>
+                        {!editingId && (
+                          <p className="mt-2 text-xs text-amber-700">Files are staged now and will upload automatically on first save.</p>
+                        )}
+                      </div>
                     </div>
                   </section>
                 )}
@@ -3576,6 +4444,82 @@ export default function Listings() {
         </div>
       )}
 
+      {/* Flyer Modal */}
+      {ENABLE_LISTING_FLYER && flyerItem && (
+        <div className="fixed inset-0 z-[70] bg-slate-950/70 backdrop-blur-sm" onClick={closeFlyer}>
+          <div className="absolute inset-4 overflow-hidden rounded-2xl border border-slate-200 bg-[#f6f1e8] shadow-2xl md:inset-8" onClick={(e) => e.stopPropagation()}>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e8dac6] bg-white/80 px-4 py-3 md:px-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Marketing Flyer</p>
+                <p className="text-sm text-slate-700">Styled for printing and client sharing</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <label className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={flyerDisplayAddress}
+                    onChange={(event) => setFlyerDisplayAddress(event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300"
+                  />
+                  Display Address
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={flyerDisplayMandateType}
+                    onChange={(event) => setFlyerDisplayMandateType(event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300"
+                  />
+                  Display Mandate Type
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-red-300 bg-red-600 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => void downloadFlyerPdf()}
+                  disabled={!flyerRenderData || isPreparingFlyerAssets || isDownloadingFlyer !== null || isSharingFlyer}
+                >
+                  {isDownloadingFlyer === 'pdf' ? 'Preparing PDF...' : 'Download PDF'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => void downloadFlyerJpg()}
+                  disabled={!flyerRenderData || isPreparingFlyerAssets || isDownloadingFlyer !== null || isSharingFlyer}
+                >
+                  {isDownloadingFlyer === 'jpg' ? 'Preparing JPG...' : 'Download JPG'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => void shareFlyer()}
+                  disabled={!flyerRenderData || isPreparingFlyerAssets || isDownloadingFlyer !== null || isSharingFlyer}
+                >
+                  {isSharingFlyer ? 'Sharing...' : 'Share'}
+                </button>
+                <button type="button" className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600 hover:bg-slate-50" onClick={closeFlyer}>Close</button>
+              </div>
+            </div>
+            {flyerNotice ? <p className="border-b border-[#e8dac6] bg-amber-50 px-4 py-2 text-sm text-amber-700 md:px-6">{flyerNotice}</p> : null}
+            <div className="h-[calc(100%-72px)] overflow-auto p-4 md:p-6">
+              {flyerRenderData ? (
+                <FlyerPreviewComponent
+                  ref={flyerPreviewRef}
+                  data={flyerRenderData}
+                  isLoadingAssociate={isLoadingFlyerProfile}
+                  isLoadingListingDetails={isPreparingFlyerAssets}
+                />
+              ) : (
+                <div className="mx-auto flex min-h-[360px] w-full max-w-[794px] items-center justify-center rounded-2xl border border-dashed border-[#d8c8b1] bg-white/70 p-10 text-center text-sm text-slate-600">
+                  Preparing flyer assets. If this takes too long, close and click Flyer again.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Listing Preview Modal */}
       {previewItem && (
         <div className="fixed inset-0 z-[60] bg-slate-950/60 backdrop-blur-sm" onClick={closePreview}>
@@ -3650,9 +4594,9 @@ export default function Listings() {
                   <p className="mt-1 text-sm text-slate-600">{[[previewItem.street_number, previewItem.street_name].filter(Boolean).join(' '), previewItem.suburb, previewItem.city].filter(Boolean).join(', ') || previewItem.address_line || '-'}</p>
                   {(() => {
                     const previewStats = [
-                      { key: 'bedrooms', icon: 'bed' as const, value: numericValue(previewItem.bedroom_count), suffix: '' },
-                      { key: 'bathrooms', icon: 'bath' as const, value: numericValue(previewItem.bathroom_count), suffix: '' },
-                      { key: 'garages', icon: 'garage' as const, value: numericValue(previewItem.garage_count), suffix: '' },
+                      { key: 'bedrooms', icon: 'bed' as const, value: positiveStatValue(previewItem.bedroom_count, previewItem.bedrooms), suffix: '' },
+                      { key: 'bathrooms', icon: 'bath' as const, value: positiveStatValue(previewItem.bathroom_count, previewItem.bathrooms), suffix: '' },
+                      { key: 'garages', icon: 'garage' as const, value: positiveStatValue(previewItem.garage_count, previewItem.garages), suffix: '' },
                       { key: 'parking', icon: 'parking' as const, value: numericValue(previewItem.parking_count), suffix: '' },
                       { key: 'erf', icon: 'erf' as const, value: numericValue(previewItem.erf_size), suffix: ' m2' },
                       { key: 'floor', icon: 'floor' as const, value: numericValue(previewItem.floor_area), suffix: ' m2' },
@@ -3677,11 +4621,12 @@ export default function Listings() {
                   <h4 className="text-sm font-semibold text-slate-900">Listing Agent</h4>
                   {previewItem.market_center_logo_url && (
                     <img
-                      src={previewItem.market_center_logo_url}
+                      src={normalizeRenderableImageUrl(previewItem.market_center_logo_url)}
                       alt="Market Centre"
                       className="absolute right-3 top-3 h-20 max-w-[280px] shrink-0 object-contain"
                       loading="lazy"
                       decoding="async"
+                        onError={applyMarketCentreLogoFallback}
                     />
                   )}
                   <div className="mt-2 flex items-start gap-3">
@@ -3707,7 +4652,7 @@ export default function Listings() {
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold leading-5 text-slate-900">{previewItem.primary_agent_name ?? previewItem.primary_contact_name ?? 'Assigned Agent'}</p>
                         <p className="truncate text-xs leading-5 text-slate-600">{previewItem.primary_agent_phone ?? previewItem.primary_contact_phone ?? '-'}</p>
-                        <p className="truncate text-xs leading-5 text-slate-600">{previewItem.primary_agent_email ?? previewItem.primary_contact_email ?? '-'}</p>
+                        <p className="truncate text-xs leading-5 text-slate-600">{previewItem.primary_agent_email ?? '-'}</p>
                       </div>
                     </div>
                   </div>
@@ -3815,7 +4760,7 @@ export default function Listings() {
           <div className="grid grid-cols-1 gap-3 md:grid-cols-7">
             <select
               value={saleOrRentFilter}
-              onChange={(e) => { setSaleOrRentFilter(e.target.value); setPage(1); setScopeActive(false); }}
+              onChange={(e) => { setSaleOrRentFilter(e.target.value); setPage(1); }}
               className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm"
             >
               <option value="">For Sale or Rent</option>
@@ -3825,7 +4770,7 @@ export default function Listings() {
             </select>
             <select
               value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); setScopeActive(false); }}
+              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
               className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm"
             >
               <option value="">All Statuses</option>
@@ -3835,8 +4780,8 @@ export default function Listings() {
             </select>
             <input
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); setScopeActive(false); }}
-              placeholder="Search agent, area, address, KWL number, P24 number, Private Property number..."
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              placeholder="Search agent, area, address, KWL number, P24 number, Private Property number... (use commas for multiple areas)"
               className="md:col-span-4 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none"
             />
             <button type="button" className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700" onClick={() => void refetch()}>
@@ -3845,27 +4790,32 @@ export default function Listings() {
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-7">
-            <select value={propertyTypeFilter} onChange={(e) => { setPropertyTypeFilter(e.target.value); setPage(1); setScopeActive(false); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <select value={propertyTypeFilter} onChange={(e) => { setPropertyTypeFilter(e.target.value); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">Property Type</option>
               {propertyTypeOptions.map((type) => <option key={type} value={type}>{type}</option>)}
             </select>
 
-            <select value={minPriceFilter} onChange={(e) => { setMinPriceFilter(e.target.value); setPage(1); setScopeActive(false); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <select value={minPriceFilter} onChange={(e) => { setMinPriceFilter(e.target.value); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">Min Price</option>
               {priceOptions.map((v) => <option key={`min-${v}`} value={v}>{toMoney(v)}</option>)}
             </select>
 
-            <select value={maxPriceFilter} onChange={(e) => { setMaxPriceFilter(e.target.value); setPage(1); setScopeActive(false); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <select value={maxPriceFilter} onChange={(e) => { setMaxPriceFilter(e.target.value); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">Max Price</option>
-              {priceOptions.map((v) => <option key={`max-${v}`} value={v}>{toMoney(v)}</option>)}
+              {priceOptions.map((v) => {
+                const isHighest = v === highestPriceOption;
+                const optionValue = isHighest ? maxPriceOpenEndedToken : v;
+                const optionLabel = isHighest ? `${toMoney(v)} +` : toMoney(v);
+                return <option key={`max-${optionValue}`} value={optionValue}>{optionLabel}</option>;
+              })}
             </select>
 
-            <select value={minBedroomsFilter} onChange={(e) => { setMinBedroomsFilter(e.target.value); setPage(1); setScopeActive(false); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <select value={minBedroomsFilter} onChange={(e) => { setMinBedroomsFilter(e.target.value); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">Bedrooms</option>
               {bedroomCountOptions.filter(Boolean).map((n) => <option key={`bed-${n}`} value={n}>{n}+</option>)}
             </select>
 
-            <select value={minBathroomsFilter} onChange={(e) => { setMinBathroomsFilter(e.target.value); setPage(1); setScopeActive(false); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <select value={minBathroomsFilter} onChange={(e) => { setMinBathroomsFilter(e.target.value); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">Bathrooms</option>
               {bathroomCountOptions.filter(Boolean).map((n) => <option key={`bath-${n}`} value={n}>{n}+</option>)}
             </select>
@@ -3906,15 +4856,15 @@ export default function Listings() {
           {showOptionalFilters && (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
               <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={petFriendlyFilter} onChange={(e) => { setPetFriendlyFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Pet Friendly</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={poolFilter} onChange={(e) => { setPoolFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Pool</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={gardenFilter} onChange={(e) => { setGardenFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Garden</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={flatletFilter} onChange={(e) => { setFlatletFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Flatlet</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={retirementFilter} onChange={(e) => { setRetirementFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Retirement</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={onShowFilter} onChange={(e) => { setOnShowFilter(e.target.checked); setPage(1); setScopeActive(false); }} />On Show</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={auctionFilter} onChange={(e) => { setAuctionFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Auction</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={securityEstateFilter} onChange={(e) => { setSecurityEstateFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Security Estate / Cluster</label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={repossessedFilter} onChange={(e) => { setRepossessedFilter(e.target.checked); setPage(1); setScopeActive(false); }} />Repossessed</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={petFriendlyFilter} onChange={(e) => { setPetFriendlyFilter(e.target.checked); setPage(1); }} />Pet Friendly</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={poolFilter} onChange={(e) => { setPoolFilter(e.target.checked); setPage(1); }} />Pool</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={gardenFilter} onChange={(e) => { setGardenFilter(e.target.checked); setPage(1); }} />Garden</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={flatletFilter} onChange={(e) => { setFlatletFilter(e.target.checked); setPage(1); }} />Flatlet</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={retirementFilter} onChange={(e) => { setRetirementFilter(e.target.checked); setPage(1); }} />Retirement</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={onShowFilter} onChange={(e) => { setOnShowFilter(e.target.checked); setPage(1); }} />On Show</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={auctionFilter} onChange={(e) => { setAuctionFilter(e.target.checked); setPage(1); }} />Auction</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={securityEstateFilter} onChange={(e) => { setSecurityEstateFilter(e.target.checked); setPage(1); }} />Security Estate / Cluster</label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={repossessedFilter} onChange={(e) => { setRepossessedFilter(e.target.checked); setPage(1); }} />Repossessed</label>
               </div>
             </div>
           )}
@@ -3953,7 +4903,7 @@ export default function Listings() {
               const listingStatus = (item.status_name ?? '').trim();
               const agentDisplayName = item.primary_agent_name || item.primary_contact_name || 'Assigned Agent';
               const agentImageUrl = (item.primary_agent_image_url ?? '').trim();
-              const marketCenterLogoUrl = (item.market_center_logo_url ?? '').trim();
+              const marketCenterLogoUrl = normalizeRenderableImageUrl(item.market_center_logo_url ?? '').trim();
               const agentInitials = agentDisplayName
                 .split(' ')
                 .filter(Boolean)
@@ -3961,9 +4911,9 @@ export default function Listings() {
                 .map((v) => v[0]?.toUpperCase() ?? '')
                 .join('') || 'AG';
               const cardDescription = (item.property_description ?? item.short_description ?? '').trim();
-              const bedroomCount = numericValue(item.bedroom_count);
-              const bathroomCount = numericValue(item.bathroom_count);
-              const garageCount = numericValue(item.garage_count);
+              const bedroomCount = positiveStatValue(item.bedroom_count, item.bedrooms);
+              const bathroomCount = positiveStatValue(item.bathroom_count, item.bathrooms);
+              const garageCount = positiveStatValue(item.garage_count, item.garages);
               const parkingCount = numericValue(item.parking_count);
               const erfSize = numericValue(item.erf_size);
               const floorArea = numericValue(item.floor_area);
@@ -3997,7 +4947,7 @@ export default function Listings() {
                         <p className="mt-3 text-center text-sm font-semibold text-slate-900">{agentDisplayName}</p>
                         <div className="mt-2 space-y-1 text-[13px] text-slate-700">
                           <p className="text-center">{item.primary_agent_phone || item.primary_contact_phone || '-'}</p>
-                          <p className="break-all text-center">{item.primary_agent_email || item.primary_contact_email || '-'}</p>
+                          <p className="break-all text-center">{item.primary_agent_email || '-'}</p>
                         </div>
                         <div className="mt-4">
                           <div className="space-y-2">
@@ -4021,14 +4971,38 @@ export default function Listings() {
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate text-xl font-semibold leading-tight text-slate-900">{item.property_title ?? item.short_title ?? item.listing_number ?? 'Untitled'}</p>
                         <div className="flex items-center gap-2">
-                          {(item.can_edit ?? canEditListing(item.source_market_center_id, item.primary_agent_email)) && (
-                            <button className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-600 hover:bg-slate-50" type="button" onClick={(e) => { e.stopPropagation(); void openEditForm(item); }}>Edit</button>
+                          {ENABLE_LISTING_FLYER && (
+                            <button
+                              type="button"
+                              className="h-9 rounded-md border border-red-200 bg-red-50 px-3 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-100"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                openFlyer(item);
+                              }}
+                            >
+                              Flyer
+                            </button>
                           )}
                         </div>
                     </div>
                     <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 items-start">
                       <div className="space-y-2">
-                        <p className="text-sm text-slate-500">{item.listing_number ?? item.source_listing_id}</p>
+                        <p className="text-sm text-slate-500">
+                          {shareKwuid && item.listing_number ? (
+                            <a
+                              href={buildPublicLandingUrl(shareKwuid, item.listing_number)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-red-700 hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {item.listing_number}
+                            </a>
+                          ) : (
+                            item.listing_number ?? item.source_listing_id
+                          )}
+                        </p>
                         <p className="text-sm text-slate-600">{[[item.street_number, item.street_name].filter(Boolean).join(' '), item.suburb, item.city].filter(Boolean).join(', ') || item.address_line || '-'}</p>
                         <div className="flex items-center gap-2 text-xs flex-wrap">
                           {statusTag && <span className="rounded-full bg-blue-100 px-2 py-0.5 font-semibold text-blue-700">{statusTag}</span>}
@@ -4037,7 +5011,7 @@ export default function Listings() {
                       </div>
                       {marketCenterLogoUrl && (
                         <div className="flex min-w-[116px] justify-end overflow-visible pt-1">
-                          <img src={marketCenterLogoUrl} alt="Market Centre" className="h-11 max-w-[126px] origin-top-right scale-[1.9] object-contain" loading="lazy" decoding="async" />
+                          <img src={marketCenterLogoUrl} alt="Market Centre" className="h-11 max-w-[126px] origin-top-right scale-[1.9] object-contain" loading="lazy" decoding="async" onError={applyMarketCentreLogoFallback} />
                         </div>
                       )}
                     </div>
@@ -4055,7 +5029,12 @@ export default function Listings() {
                       </div>
                     )}
                     <div className="border-t border-slate-100 pt-4">
-                      <p className="text-[1.55rem] font-bold leading-none text-slate-900">{toMoney(item.price)}</p>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-[1.55rem] font-bold leading-none text-slate-900">{toMoney(item.price)}</p>
+                        {(item.can_edit ?? canEditListing(item.source_market_center_id, item.primary_agent_email)) && (
+                          <button className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-600 hover:bg-slate-50" type="button" onClick={(e) => { e.stopPropagation(); void openEditForm(item); }}>Edit</button>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
@@ -4136,7 +5115,21 @@ export default function Listings() {
                     <tr key={item.id} className="cursor-pointer hover:bg-slate-50" onClick={() => openPreview(item)}>
                       <td className="px-3 py-2">
                         <div className="font-medium text-slate-900">{item.property_title ?? item.short_title ?? item.listing_number ?? '-'}</div>
-                        <div className="text-xs text-slate-500">{item.listing_number ?? item.source_listing_id}</div>
+                        <div className="text-xs text-slate-500">
+                          {shareKwuid && item.listing_number ? (
+                            <a
+                              href={buildPublicLandingUrl(shareKwuid, item.listing_number)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-red-700 hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {item.listing_number}
+                            </a>
+                          ) : (
+                            item.listing_number ?? item.source_listing_id
+                          )}
+                        </div>
                       </td>
                       <td className="px-3 py-2">
                         {images[0] ? <img src={images[0]} alt="" loading="lazy" decoding="async" className="h-12 w-16 rounded border border-slate-200 object-cover" /> : <span className="text-xs text-slate-400">No image</span>}
@@ -4207,6 +5200,9 @@ export default function Listings() {
                           {(item.can_edit ?? canEditListing(item.source_market_center_id, item.primary_agent_email)) && (
                             <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={(e) => { e.stopPropagation(); void openEditForm(item); }}>Edit</button>
                           )}
+                          {ENABLE_LISTING_FLYER && (
+                            <button className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-100" type="button" onClick={(e) => { e.stopPropagation(); openFlyer(item); }}>Flyer</button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -4219,8 +5215,8 @@ export default function Listings() {
 
         {/* Pagination */}
         <div className="mt-4 flex items-center justify-end gap-2">
-          <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 disabled:opacity-50" type="button" onClick={() => setPage((p) => p - 1)} disabled={!canGoPrev}>Previous</button>
-          <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 disabled:opacity-50" type="button" onClick={() => setPage((p) => p + 1)} disabled={!canGoNext}>Next</button>
+          <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 disabled:opacity-50" type="button" onClick={() => handlePageNavigation(-1)} disabled={!canGoPrev}>Previous</button>
+          <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 disabled:opacity-50" type="button" onClick={() => handlePageNavigation(1)} disabled={!canGoNext}>Next</button>
         </div>
       </section>
     </div>

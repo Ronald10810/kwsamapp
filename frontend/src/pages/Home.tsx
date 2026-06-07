@@ -3,6 +3,14 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
+const HOUR_MS = 60 * 60 * 1000;
+
+function msUntilNextHourWindow(): number {
+  const now = Date.now();
+  const remainder = now % HOUR_MS;
+  return remainder === 0 ? HOUR_MS : HOUR_MS - remainder;
+}
+
 type HomeSummary = {
   generated_at: string;
   email: string;
@@ -42,6 +50,10 @@ type HomeSummary = {
       price: string | null;
     }>;
   };
+  registered_mtd: {
+    total_transactions: number;
+    total_gci: number;
+  };
   transactions_by_status: Array<{
     status: 'Start' | 'Working' | 'Submitted' | 'Pending' | 'Registered';
     total_transactions: number;
@@ -51,6 +63,7 @@ type HomeSummary = {
 
 type DocHubDoc = {
   id: string;
+  folder_id: string | null;
   title: string;
   description: string | null;
   file_url: string;
@@ -58,6 +71,18 @@ type DocHubDoc = {
   mime_type: string;
   file_size: string | null;
   created_at: string;
+};
+
+type DocHubFolder = {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+};
+
+type DocHubAgentResponse = {
+  folders?: DocHubFolder[];
+  documents?: DocHubDoc[];
 };
 
 async function fetchHomeSummary(activeContextId: string): Promise<HomeSummary> {
@@ -70,11 +95,14 @@ async function fetchHomeSummary(activeContextId: string): Promise<HomeSummary> {
   return response.json() as Promise<HomeSummary>;
 }
 
-async function fetchMCDocs(): Promise<DocHubDoc[]> {
+async function fetchMCDocs(): Promise<DocHubAgentResponse> {
   const res = await fetch('/api/mc-document-hub/agent');
-  if (!res.ok) return [];
-  const data = await res.json() as { documents?: DocHubDoc[] };
-  return data.documents ?? [];
+  if (!res.ok) return { folders: [], documents: [] };
+  const data = await res.json() as DocHubAgentResponse;
+  return {
+    folders: data.folders ?? [],
+    documents: data.documents ?? [],
+  };
 }
 
 function formatDocBytes(bytes: number): string {
@@ -109,7 +137,7 @@ function capStatusLabel(progressPct: number): string {
 const publicKwHomesBaseUrl = ((import.meta.env.VITE_PUBLIC_KWHOMES_BASE_URL as string | undefined) ?? 'https://kwhomes.co.za').replace(/\/$/, '');
 
 function buildPublicLandingUrl(kwuid: string, listingNumber: string): string {
-  return `${publicKwHomesBaseUrl}/${encodeURIComponent(kwuid)}/listing/${encodeURIComponent(listingNumber)}`;
+  return `${publicKwHomesBaseUrl}/${encodeURIComponent(kwuid)}/${encodeURIComponent(listingNumber)}`;
 }
 
 function listingBadgeClass(text: string): string {
@@ -278,11 +306,61 @@ function CapDial({ achieved, total }: { achieved: number; total: number }) {
 }
 
 function MCDocumentPanel({ onClose }: { onClose: () => void }) {
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
   const { data, isLoading, isError } = useQuery({
     queryKey: ['mc-doc-hub-agent'],
     queryFn: fetchMCDocs,
     staleTime: 1000 * 60 * 5,
   });
+
+  const folders = data?.folders ?? [];
+  const documents = data?.documents ?? [];
+  const rootDocs = documents.filter((doc) => !doc.folder_id);
+
+  const docsByFolder = documents.reduce<Record<string, DocHubDoc[]>>((acc, doc) => {
+    if (!doc.folder_id) return acc;
+    if (!acc[doc.folder_id]) acc[doc.folder_id] = [];
+    acc[doc.folder_id].push(doc);
+    return acc;
+  }, {});
+
+  function renderDocRow(doc: DocHubDoc) {
+    const isPdf = doc.mime_type === 'application/pdf';
+    const sizeBytes = doc.file_size ? Number(doc.file_size) : null;
+    const uploadDate = new Date(doc.created_at).toLocaleDateString('en-ZA', {
+      day: '2-digit', month: 'short', year: 'numeric',
+    });
+
+    return (
+      <div key={doc.id} className="flex items-center gap-4 px-5 py-3.5">
+        <div className={`h-9 w-9 rounded-lg flex items-center justify-center shrink-0 ${isPdf ? 'bg-red-100' : 'bg-blue-100'}`}>
+          {isPdf ? (
+            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-red-600"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/><path d="M14 2v6h6M9 13h6M9 17h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+          ) : (
+            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-blue-600"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.8"/><path d="M3 9l5 5 4-4 9 9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-slate-800 truncate">{doc.title}</p>
+          {doc.description && <p className="text-xs text-slate-500 truncate">{doc.description}</p>}
+          <p className="text-[11px] text-slate-400 mt-0.5">
+            {isPdf ? 'PDF' : doc.mime_type.split('/')[1].toUpperCase()}
+            {sizeBytes !== null && <> · {formatDocBytes(sizeBytes)}</>}
+            {' '}· {uploadDate}
+          </p>
+        </div>
+        <a
+          href={doc.file_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="shrink-0 flex items-center gap-1.5 rounded-lg bg-white border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+        >
+          <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/><path d="M15 3h6v6M10 14L21 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          Open
+        </a>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50">
@@ -305,45 +383,43 @@ function MCDocumentPanel({ onClose }: { onClose: () => void }) {
         <p className="px-5 py-4 text-sm text-red-600">Failed to load documents.</p>
       )}
 
-      {!isLoading && !isError && (!data || data.length === 0) && (
+      {!isLoading && !isError && documents.length === 0 && folders.length === 0 && (
         <p className="px-5 py-6 text-sm text-slate-500 text-center">No documents have been uploaded for your market centre yet.</p>
       )}
 
-      {!isLoading && data && data.length > 0 && (
+      {!isLoading && !isError && (documents.length > 0 || folders.length > 0) && (
         <div className="divide-y divide-slate-200">
-          {data.map((doc) => {
-            const isPdf = doc.mime_type === 'application/pdf';
-            const sizeBytes = doc.file_size ? Number(doc.file_size) : null;
-            const uploadDate = new Date(doc.created_at).toLocaleDateString('en-ZA', {
-              day: '2-digit', month: 'short', year: 'numeric',
-            });
+          {rootDocs.map((doc) => renderDocRow(doc))}
+
+          {folders.map((folder) => {
+            const folderDocs = docsByFolder[folder.id] ?? [];
+            const expanded = Boolean(expandedFolders[folder.id]);
+
             return (
-              <div key={doc.id} className="flex items-center gap-4 px-5 py-3.5">
-                <div className={`h-9 w-9 rounded-lg flex items-center justify-center shrink-0 ${isPdf ? 'bg-red-100' : 'bg-blue-100'}`}>
-                  {isPdf ? (
-                    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-red-600"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/><path d="M14 2v6h6M9 13h6M9 17h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
-                  ) : (
-                    <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-blue-600"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.8"/><path d="M3 9l5 5 4-4 9 9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-800 truncate">{doc.title}</p>
-                  {doc.description && <p className="text-xs text-slate-500 truncate">{doc.description}</p>}
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    {isPdf ? 'PDF' : doc.mime_type.split('/')[1].toUpperCase()}
-                    {sizeBytes !== null && <> · {formatDocBytes(sizeBytes)}</>}
-                    {' '}· {uploadDate}
-                  </p>
-                </div>
-                <a
-                  href={doc.file_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="shrink-0 flex items-center gap-1.5 rounded-lg bg-white border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+              <div key={folder.id}>
+                <button
+                  type="button"
+                  onClick={() => setExpandedFolders((prev) => ({ ...prev, [folder.id]: !expanded }))}
+                  className="w-full flex items-center justify-between px-5 py-3 text-left hover:bg-slate-100/70 transition-colors"
                 >
-                  <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/><path d="M15 3h6v6M10 14L21 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  Open
-                </a>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                      <span className="inline-flex h-5 w-5 items-center justify-center rounded border border-slate-300 bg-white text-xs text-slate-700">{expanded ? '-' : '+'}</span>
+                      {folder.name}
+                    </p>
+                    {folder.description && <p className="text-xs text-slate-500 mt-0.5 truncate">{folder.description}</p>}
+                  </div>
+                  <span className="text-xs text-slate-500">{folderDocs.length} file{folderDocs.length === 1 ? '' : 's'}</span>
+                </button>
+                {expanded && (
+                  <div className="border-t border-slate-200 bg-white">
+                    {folderDocs.length === 0 ? (
+                      <p className="px-5 py-3 text-xs text-slate-500">No files in this folder.</p>
+                    ) : (
+                      folderDocs.map((doc) => renderDocRow(doc))
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -358,11 +434,14 @@ export default function HomePage() {
   const [showDocs, setShowDocs] = useState(false);
   const [copiedLandingListingId, setCopiedLandingListingId] = useState<string | null>(null);
   const activeContextId = activeContext?.id ?? '';
-  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['home-summary', user?.email, activeContextId],
     queryFn: () => fetchHomeSummary(activeContextId),
     enabled: Boolean(user?.email),
-    refetchInterval: 30000,
+    refetchInterval: () => msUntilNextHourWindow(),
+    refetchOnWindowFocus: false,
+    staleTime: HOUR_MS,
+    gcTime: HOUR_MS,
   });
 
   const statusCards = data?.transactions_by_status ?? [
@@ -378,6 +457,7 @@ export default function HomePage() {
     : null;
   const transactionsThisMonth = statusCards.reduce((sum, item) => sum + item.total_transactions, 0);
   const registeredStatus = statusCards.find((item) => item.status === 'Registered');
+  const registeredGciMtd = data?.registered_mtd?.total_gci ?? registeredStatus?.total_gci ?? 0;
   const pendingApprovalCount = data
     ? data.active_listings.items.filter((item) => {
         const source = `${item.listing_status_tag ?? ''} ${item.status_name ?? ''}`.toLowerCase();
@@ -425,7 +505,7 @@ export default function HomePage() {
     },
     {
       title: 'Registered GCI MTD',
-      value: toMoney(registeredStatus?.total_gci ?? 0),
+      value: toMoney(registeredGciMtd),
       note: 'Registered status only',
       icon: 'gci' as const,
       tone: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -452,9 +532,6 @@ export default function HomePage() {
         </div>
         <div className="flex items-center gap-2">
           <span className="status-chip info">{data?.associate ? data.associate.full_name ?? user?.name : user?.email}</span>
-          <button onClick={() => refetch()} className="primary-btn" type="button">
-            {isFetching ? 'Refreshing...' : 'Refresh'}
-          </button>
         </div>
       </header>
 

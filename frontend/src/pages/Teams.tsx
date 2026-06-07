@@ -3,6 +3,26 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { useAuth } from '../contexts/AuthContext';
 
+const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+
+function msUntilNextTeamsRefreshWindow(): number {
+  const now = new Date();
+  const windows = [4, 12];
+
+  for (const hour of windows) {
+    const next = new Date(now);
+    next.setHours(hour, 0, 0, 0);
+    if (next.getTime() > now.getTime()) {
+      return next.getTime() - now.getTime();
+    }
+  }
+
+  const tomorrowMorning = new Date(now);
+  tomorrowMorning.setDate(now.getDate() + 1);
+  tomorrowMorning.setHours(4, 0, 0, 0);
+  return tomorrowMorning.getTime() - now.getTime();
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type TeamRow = {
@@ -317,6 +337,10 @@ export default function TeamsPage() {
         return r.json() as Promise<TeamsResponse>;
       }),
     placeholderData: (prev) => prev,
+    refetchInterval: () => msUntilNextTeamsRefreshWindow(),
+    refetchOnWindowFocus: false,
+    staleTime: TWELVE_HOURS_MS,
+    gcTime: TWELVE_HOURS_MS,
   });
 
   // Market center options
@@ -327,6 +351,10 @@ export default function TeamsPage() {
         if (!r.ok) throw new Error('Unable to load market centres');
         return r.json() as Promise<{ items: MarketCenterOption[] }>;
       }),
+    refetchInterval: () => msUntilNextTeamsRefreshWindow(),
+    refetchOnWindowFocus: false,
+    staleTime: TWELVE_HOURS_MS,
+    gcTime: TWELVE_HOURS_MS,
   });
 
   const { data: teamPermissions } = useQuery({
@@ -336,6 +364,10 @@ export default function TeamsPage() {
         if (!r.ok) throw new Error('Unable to load team permissions');
         return r.json() as Promise<TeamPermissionsResponse>;
       }),
+    refetchInterval: () => msUntilNextTeamsRefreshWindow(),
+    refetchOnWindowFocus: false,
+    staleTime: TWELVE_HOURS_MS,
+    gcTime: TWELVE_HOURS_MS,
   });
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil((data?.total ?? 0) / pageSize)), [data?.total, pageSize]);
@@ -438,6 +470,8 @@ export default function TeamsPage() {
       }
       setIsFormOpen(false);
       void queryClient.invalidateQueries({ queryKey: ['teams'] });
+      void queryClient.invalidateQueries({ queryKey: ['ops-summary'] });
+      void queryClient.invalidateQueries({ queryKey: ['mc-dashboard'] });
       await refetch();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Failed to save team');
@@ -995,6 +1029,10 @@ function MembersSection({ teamId }: { teamId: string }) {
         if (!r.ok) throw new Error('Failed to load');
         return (r.json() as Promise<TeamDetail>).then((d) => d.members);
       }),
+    refetchInterval: () => msUntilNextTeamsRefreshWindow(),
+    refetchOnWindowFocus: false,
+    staleTime: TWELVE_HOURS_MS,
+    gcTime: TWELVE_HOURS_MS,
   });
 
   if (isLoading) return <div className="text-sm text-slate-400 py-4">Loading members…</div>;
