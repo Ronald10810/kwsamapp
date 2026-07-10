@@ -96,7 +96,7 @@ export default function NotificationsPage() {
       const response = await fetch(`/api/listings/${listingId}/${action}-approval`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ review_comment: reviewComment || undefined }),
+        body: JSON.stringify({ comment: reviewComment || undefined }),
       });
 
       if (!response.ok) {

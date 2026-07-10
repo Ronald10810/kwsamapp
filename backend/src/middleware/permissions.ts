@@ -10,12 +10,13 @@
  * Scopes:
  *  - GLOBAL       — Regional Admin: may read/write everything
  *  - MARKET_CENTRE — Office Admin: may read all, write only within their assigned MC
- *  - OWN          — Agent: may read all, write only their own records
+ *  - OWN          — Agent/Team roles: may read all, write only their own records
  */
 
 import type { Request, Response, NextFunction } from 'express';
 import { getRequiredPgPool } from '../config/db.js';
 import { logger } from '../config/logger.js';
+import { resolveAssociateIdForAuth } from '../utils/associateAuth.js';
 
 export type PermissionScope = 'GLOBAL' | 'MARKET_CENTRE' | 'OWN';
 
@@ -54,19 +55,20 @@ export async function resolvePermissions(req: Request, res: Response, next: Next
   try {
     const pool = getRequiredPgPool();
     const email = req.user.email;
+    const displayName = String(req.user.name ?? '').trim();
     const activeContextId = String(req.headers['x-active-context'] ?? '').trim();
 
-    // Fetch the associate record
-    const assocResult = await pool.query<{
+    const assocId = await resolveAssociateIdForAuth(pool, email, displayName);
+    const assocResult = assocId ? await pool.query<{
       id: string;
       source_market_center_id: string | null;
     }>(
       `SELECT id::text, source_market_center_id
          FROM migration.core_associates
-        WHERE LOWER(email) = LOWER($1)
+        WHERE id = $1
         LIMIT 1`,
-      [email]
-    );
+      [assocId]
+    ) : { rows: [] };
 
     if (!assocResult.rows[0]) {
       // No associate record — deny writes entirely
@@ -126,8 +128,11 @@ export async function resolvePermissions(req: Request, res: Response, next: Next
       }
       scope = 'MARKET_CENTRE';
       marketCenterId = claimedMcId;
+    } else if (activeContextId === 'agent' || activeContextId === 'lead_agent' || activeContextId === 'team_admin' || activeContextId === 'team_agent' || !activeContextId) {
+      // Agent/team contexts or no context — restrict to own records
+      scope = 'OWN';
     } else {
-      // Agent context or no context — restrict to own records
+      // Unknown context IDs are treated as OWN; callers still cannot escalate privileges.
       scope = 'OWN';
     }
 

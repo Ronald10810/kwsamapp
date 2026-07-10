@@ -80,7 +80,12 @@ export default function LoginPage() {
           await login(response.credential);
           navigate('/', { replace: true });
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Login failed');
+          const message = err instanceof Error ? err.message : 'Login failed';
+          if (canUseLocalDevLogin && /Failed to complete Google login/i.test(message)) {
+            setError('Google sign-in is temporarily unavailable. Use Local Dev Login below.');
+            return;
+          }
+          setError(message);
         }
       },
     });
@@ -92,13 +97,44 @@ export default function LoginPage() {
       shape: 'rectangular',
       width: 280,
     });
-  }, [scriptReady, login, navigate]);
+  }, [scriptReady, login, navigate, canUseLocalDevLogin]);
 
   async function handleDevLogin() {
     setError(null);
     setIsDevLoginLoading(true);
     try {
-      await loginAsDev();
+      const envDevEmail = String(import.meta.env.VITE_DEV_LOGIN_EMAIL ?? '').trim();
+      const cachedDevEmail = String(localStorage.getItem('kwsa_dev_login_email') ?? '').trim();
+      const candidateEmails = [
+        cachedDevEmail,
+        envDevEmail,
+        'ronald.vanscheltema@kwsa.co.za',
+        'dian.muller@kwsa.co.za',
+        'garth.mulder@kwsa.co.za',
+        '',
+      ].filter((value, index, array) => array.indexOf(value) === index);
+
+      let lastError: unknown = null;
+      let loggedIn = false;
+      for (const email of candidateEmails) {
+        try {
+          if (email) {
+            await loginAsDev({ email, name: 'Ronald' });
+            localStorage.setItem('kwsa_dev_login_email', email);
+          } else {
+            await loginAsDev();
+          }
+          loggedIn = true;
+          break;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      if (!loggedIn) {
+        throw (lastError instanceof Error ? lastError : new Error('Dev login failed'));
+      }
+
       navigate('/', { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Dev login failed');
@@ -132,7 +168,7 @@ export default function LoginPage() {
               <h1 className="font-['Space_Grotesk'] text-[38px] font-semibold leading-[1.02] tracking-[-0.02em] text-white">
                 KWSA MAPP
               </h1>
-              <p className="mt-2 text-sm text-[#dbc7ca]">Sign in with your Google account to continue.</p>
+              <p className="mt-2 text-sm text-[#dbc7ca]">Only registered KWSA associates can sign into MAPP.</p>
             </div>
           </div>
 
@@ -160,7 +196,7 @@ export default function LoginPage() {
           </div>
 
           <p className="mt-6 text-xs text-[#d0b9bc]">
-            Access is restricted to approved KWSA users. Contact your administrator if your account is blocked.
+            Access is restricted to registered KWSA associates. Contact your administrator if your account is not linked.
           </p>
         </div>
       </div>

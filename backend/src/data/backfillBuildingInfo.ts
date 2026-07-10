@@ -7,7 +7,7 @@
 import { createReadStream } from 'node:fs';
 import { parse } from 'csv-parse';
 import { closePool, runInTransaction } from './db.js';
-import { getValue, toNumeric } from './csv.js';
+import { detectCsvEncoding, getValue, toNumeric } from './csv.js';
 
 interface BuildingRow {
   source_listing_id: string;
@@ -17,10 +17,11 @@ interface BuildingRow {
 
 async function main(): Promise<void> {
   const filePath = 'data/incoming/listings.csv';
+  const csvEncoding = await detectCsvEncoding(filePath);
 
   const rows: BuildingRow[] = [];
 
-  const parser = createReadStream(filePath, { encoding: 'latin1' }).pipe(
+  const parser = createReadStream(filePath, { encoding: csvEncoding }).pipe(
     parse({
       columns: true,
       skip_empty_lines: true,

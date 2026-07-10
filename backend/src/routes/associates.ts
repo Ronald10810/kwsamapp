@@ -59,7 +59,7 @@ router.get('/', async (req, res) => {
       params.push(`%${searchInput}%`);
       const searchParam = `$${params.length}`;
       whereClauses.push(
-        `(ca.full_name ILIKE ${searchParam} OR ca.first_name ILIKE ${searchParam} OR ca.last_name ILIKE ${searchParam} OR ca.email ILIKE ${searchParam} OR ca.kwuid ILIKE ${searchParam} OR ca.source_associate_id ILIKE ${searchParam} OR mc.name ILIKE ${searchParam})`
+        `(ca.full_name ILIKE ${searchParam} OR ca.first_name ILIKE ${searchParam} OR ca.last_name ILIKE ${searchParam} OR ca.email ILIKE ${searchParam} OR ca.kwuid ILIKE ${searchParam} OR ca.national_id ILIKE ${searchParam} OR ca.source_associate_id ILIKE ${searchParam} OR mc.name ILIKE ${searchParam})`
       );
     }
 

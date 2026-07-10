@@ -8,9 +8,20 @@ import { assertLocalUploadStorageEnabled, resolveLocalUploadDir, storageConfig }
 import { uploadToGcs } from '../services/gcsStorage.js';
 import { env } from '../config/env.js';
 import { resolvePermissions } from '../middleware/permissions.js';
+import { normalizeMarketingUrl, normalizeMarketingUrlRecord, normalizeMarketingUrlType } from '../utils/marketingUrls.js';
 
 const router = Router();
 const pool = getOptionalPgPool();
+let rentalOptionalColumnsEnsured = false;
+let sharpModulePromise: Promise<unknown> | null = null;
+let listingAreaDecimalEnsurePromise: Promise<void> | null = null;
+
+async function loadSharp(): Promise<unknown> {
+  if (!sharpModulePromise) {
+    sharpModulePromise = import('sharp');
+  }
+  return sharpModulePromise;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -39,9 +50,179 @@ function toBool(value: unknown): boolean {
   return false;
 }
 
+function normalizeListingCategory(value: string | null | undefined): 'sale' | 'rental' | 'unknown' {
+  const normalized = (value ?? '').trim().toLowerCase();
+  if (normalized === 'for sale') return 'sale';
+  if (normalized.includes('rent')) return 'rental';
+  return 'unknown';
+}
+
+function normalizeAddressPart(value: unknown): string {
+  return (toText(value) ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+const STREET_SUFFIX_ALIASES: Record<string, string> = {
+  rd: 'road',
+  road: 'road',
+  st: 'street',
+  str: 'street',
+  street: 'street',
+  ave: 'avenue',
+  av: 'avenue',
+  avenue: 'avenue',
+  ln: 'lane',
+  lane: 'lane',
+  dr: 'drive',
+  drv: 'drive',
+  drive: 'drive',
+  blvd: 'boulevard',
+  boulevard: 'boulevard',
+  cres: 'crescent',
+  crescent: 'crescent',
+  ct: 'court',
+  court: 'court',
+  pl: 'place',
+  place: 'place',
+  ter: 'terrace',
+  terrace: 'terrace',
+  way: 'way',
+  close: 'close',
+  hwy: 'highway',
+  highway: 'highway',
+  pkwy: 'parkway',
+  parkway: 'parkway',
+};
+
+const STREET_SUFFIX_CANONICAL = new Set(Object.values(STREET_SUFFIX_ALIASES));
+
+function normalizeStreetLikePart(value: unknown): string {
+  const raw = normalizeAddressPart(value)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!raw) return '';
+
+  const tokens = raw
+    .split(' ')
+    .map((token) => STREET_SUFFIX_ALIASES[token] ?? token);
+
+  // Treat omitted suffixes as equivalent to common suffix variants.
+  const lastToken = tokens[tokens.length - 1];
+  if (lastToken && STREET_SUFFIX_CANONICAL.has(lastToken)) {
+    tokens.pop();
+  }
+
+  return tokens.join(' ').trim();
+}
+
+function buildNormalizedAddressFromSource(source: {
+  streetNumber?: unknown;
+  streetName?: unknown;
+  unitNumber?: unknown;
+  doorNumber?: unknown;
+  estateName?: unknown;
+  suburb?: unknown;
+  city?: unknown;
+  province?: unknown;
+  postalCode?: unknown;
+  country?: unknown;
+  addressLine?: unknown;
+}): string {
+  const structuredParts = [
+    normalizeAddressPart(source.streetNumber),
+    normalizeStreetLikePart(source.streetName),
+    normalizeAddressPart(source.unitNumber),
+    normalizeAddressPart(source.doorNumber),
+    normalizeAddressPart(source.estateName),
+    normalizeAddressPart(source.suburb),
+    normalizeAddressPart(source.city),
+    normalizeAddressPart(source.province),
+    normalizeAddressPart(source.postalCode),
+    normalizeAddressPart(source.country),
+  ];
+
+  if (structuredParts.some((part) => part.length > 0)) {
+    return structuredParts.join('|');
+  }
+
+  return `addressline:${normalizeStreetLikePart(source.addressLine)}`;
+}
+
+function isValidationCode(value: string | null | undefined): value is string {
+  return typeof value === 'string' && /^KWV\d{4,}$/.test(value);
+}
+
+async function generateNextValidationCode(db: Pool): Promise<string> {
+  const result = await db.query<{ max_code: number | null }>(
+    `SELECT COALESCE(MAX((substring(COALESCE(cl.listing_payload->'listing_validation'->>'validationCode', '') FROM '^KWV([0-9]+)$'))::int), 1000) AS max_code
+       FROM migration.core_listings cl`,
+  );
+  const next = (result.rows[0]?.max_code ?? 1000) + 1;
+  return `KWV${next}`;
+}
+
+async function ensureValidationCode(db: Pool, listingId: number | null, preferredCode: string | null): Promise<string> {
+  if (isValidationCode(preferredCode)) {
+    const existing = await db.query<{ id: string }>(
+      `SELECT id::text
+         FROM migration.core_listings
+        WHERE id <> COALESCE($1::int, -1)
+          AND COALESCE(listing_payload->'listing_validation'->>'validationCode', '') = $2
+        LIMIT 1`,
+      [listingId, preferredCode],
+    );
+    if ((existing.rowCount ?? 0) === 0) {
+      return preferredCode;
+    }
+  }
+
+  return generateNextValidationCode(db);
+}
+
+function toInteger(value: unknown, fallback: number): number {
+  const numeric = toNumber(value);
+  if (numeric === null) return fallback;
+  return Math.trunc(numeric);
+}
+
 function isUuid(value: string | null): boolean {
   if (!value) return false;
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function deriveApprovedListingStatusTag(
+  saleOrRentRaw: unknown,
+  currentTagRaw: unknown,
+  preSubmitTagRaw?: unknown,
+): string {
+  const saleOrRent = (toText(saleOrRentRaw) ?? '').toLowerCase().trim();
+  if (saleOrRent.includes('rent')) return 'To Rent';
+  if (saleOrRent.includes('sale')) return 'For Sale';
+
+  const blockedTags = new Set([
+    'pending approval',
+    'approved',
+    'approval declined',
+    'available',
+    'draft',
+  ]);
+
+  const candidates = [toText(preSubmitTagRaw), toText(currentTagRaw)];
+  for (const candidate of candidates) {
+    const value = (candidate ?? '').trim();
+    if (!value) continue;
+    const normalized = value.toLowerCase();
+    if (blockedTags.has(normalized)) continue;
+    if (normalized.includes('rent')) return 'To Rent';
+    if (normalized.includes('sale')) return 'For Sale';
+    return value;
+  }
+
+  return 'For Sale';
 }
 
 function mapKwwPropertyType(rawType: string, rawSubType: string): { propType: string; propTypeId: number; propSubtypeId: number } {
@@ -96,12 +277,55 @@ function mapKwwListType(rawMandate: string, propTypeId: number): { listType: str
   return { listType: 'Prospective', listTypeId: 1 };
 }
 
+function mapKwwParkingFeatures(values: Iterable<string>): string[] {
+  const result = new Set<string>();
+
+  for (const rawValue of values) {
+    const normalized = rawValue.trim().toLowerCase();
+    if (!normalized) continue;
+
+    if (normalized.includes('carport')) {
+      result.add('Carport');
+    }
+    if (normalized.includes('secure')) {
+      result.add('Secured');
+    }
+    if (normalized.includes('covered') || normalized.includes('shade net') || normalized.includes('underground')) {
+      result.add('Covered');
+    }
+
+    if (
+      normalized.includes('parking') ||
+      normalized.includes('visitor') ||
+      normalized.includes('communal') ||
+      normalized.includes('street') ||
+      normalized.includes('tandem') ||
+      normalized.includes('double') ||
+      normalized.includes('triple')
+    ) {
+      result.add('Other');
+    }
+  }
+
+  return [...result];
+}
+
 function toDateValue(value: unknown): string | null {
   const text = toText(value);
   if (!text) return null;
   const date = new Date(text);
   if (Number.isNaN(date.getTime())) return null;
   return date.toISOString().slice(0, 10);
+}
+
+function toDateTimeValue(value: unknown): string | null {
+  const text = toText(value)?.trim();
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(text)) return `${text}:00`;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(text)) return text;
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 19);
 }
 
 function parseImageUrls(value: unknown): string[] {
@@ -129,6 +353,126 @@ function parseImageUrls(value: unknown): string[] {
   return [];
 }
 
+async function ensureRentalOptionalColumns(): Promise<void> {
+  if (!pool || rentalOptionalColumnsEnsured) return;
+
+  await pool.query(`
+    ALTER TABLE migration.core_listings
+      ADD COLUMN IF NOT EXISTS rental_rate TEXT,
+      ADD COLUMN IF NOT EXISTS lease_period TEXT,
+      ADD COLUMN IF NOT EXISTS deposit_requirements TEXT
+  `);
+
+  rentalOptionalColumnsEnsured = true;
+}
+
+type PortalShowWindow = { startDate: string; endDate: string };
+
+function normalizeTimeValue(raw: unknown, fallback: string): string {
+  const value = toText(raw);
+  if (!value) return fallback;
+  const match = value.match(/^(\d{2}):(\d{2})/);
+  if (!match) return fallback;
+  const hh = Number(match[1]);
+  const mm = Number(match[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return fallback;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function toShowDateTime(dateValue: unknown, timeValue: unknown, fallbackTime: string): string | null {
+  const date = toDateValue(dateValue);
+  if (!date) return null;
+  const time = normalizeTimeValue(timeValue, fallbackTime);
+  return `${date}T${time}:00`;
+}
+
+async function loadListingShowWindows(pg: Pool, listingId: number): Promise<PortalShowWindow[]> {
+  const [showTimesResult, openHouseResult] = await Promise.all([
+    pg.query<{
+      from_date: string | null;
+      from_time: string | null;
+      to_date: string | null;
+      to_time: string | null;
+      sort_order: number | null;
+    }>(
+      `SELECT from_date::text, from_time, to_date::text, to_time, sort_order
+         FROM migration.listing_show_times
+        WHERE listing_id = $1
+        ORDER BY sort_order ASC, id ASC`,
+      [listingId],
+    ),
+    pg.query<{
+      open_house_date: string | null;
+      from_time: string | null;
+      to_time: string | null;
+      sort_order: number | null;
+    }>(
+      `SELECT open_house_date::text, from_time, to_time, sort_order
+         FROM migration.listing_open_house
+        WHERE listing_id = $1
+        ORDER BY sort_order ASC, id ASC`,
+      [listingId],
+    ),
+  ]);
+
+  const windows: PortalShowWindow[] = [];
+
+  for (const row of showTimesResult.rows) {
+    const startDate = toShowDateTime(row.from_date, row.from_time, '00:00');
+    const endDate = toShowDateTime(row.to_date ?? row.from_date, row.to_time, '23:59');
+    if (!startDate || !endDate) continue;
+    windows.push({ startDate, endDate });
+  }
+
+  for (const row of openHouseResult.rows) {
+    const startDate = toShowDateTime(row.open_house_date, row.from_time, '00:00');
+    const endDate = toShowDateTime(row.open_house_date, row.to_time, '23:59');
+    if (!startDate || !endDate) continue;
+    windows.push({ startDate, endDate });
+  }
+
+  const deduped = [...new Map(windows.map((window) => [`${window.startDate}|${window.endDate}`, window])).values()];
+  deduped.sort((left, right) => left.startDate.localeCompare(right.startDate));
+  return deduped;
+}
+
+function appendShowWindowSummary(description: string, windows: PortalShowWindow[]): string {
+  const base = description.trim();
+  if (windows.length === 0) return base;
+  if (/Viewing Schedule:/i.test(base) || /ON SHOW/i.test(base)) return base;
+
+  const lines = windows.slice(0, 6).map((window) => {
+    const start = window.startDate.replace('T', ' ').slice(0, 16);
+    const end = window.endDate.replace('T', ' ').slice(0, 16);
+    return `- ${start} to ${end}`;
+  });
+
+  const scheduleBlock = `Viewing Schedule:\n${lines.join('\n')}`;
+  return base ? `${base}\n\n${scheduleBlock}` : scheduleBlock;
+}
+
+function toPpDateTimeValue(value: unknown): string | null {
+  const normalized = toDateTimeValue(value);
+  if (!normalized) return null;
+  // PP SOAP client expects ISO 8601 format with T separator (xsd:dateTime)
+  // Do not replace T with space - that causes deserialization errors
+  return normalized;
+}
+
+function buildPpShowdayEventsXml(propertyId: string, windows: PortalShowWindow[]): string {
+  if (windows.length === 0) return '';
+  const items = windows
+    .map((window) => {
+      const startDate = toPpDateTimeValue(window.startDate);
+      const endDate = toPpDateTimeValue(window.endDate);
+      if (!startDate || !endDate) return '';
+      return `<ShowdayEvent><PropertyId>${xmlEscape(propertyId)}</PropertyId><StartDate>${startDate}</StartDate><EndDate>${endDate}</EndDate><Active>true</Active></ShowdayEvent>`;
+    })
+    .filter(Boolean)
+    .join('');
+  return items ? `<ShowdayEvents>${items}</ShowdayEvents>` : '';
+}
+
 async function resolveListingImageUrls(pg: Pool, listingId: number, rawValue: unknown): Promise<string[]> {
   const direct = parseImageUrls(rawValue);
   if (direct.length > 0) return direct;
@@ -149,21 +493,183 @@ async function resolveListingImageUrls(pg: Pool, listingId: number, rawValue: un
   )];
 }
 
-type P24Photo = { bytes: string; mimeContentType: string; caption: string; isFloorPlan: boolean };
+type ListingMarketingUrl = {
+  url: string;
+  url_type: string;
+};
 
-async function fetchPhotoAsBase64(url: string): Promise<P24Photo | null> {
+function extractYouTubeVideoIdFromUrl(value: string | null | undefined): string | null {
+  const raw = (value ?? '').trim();
+  if (!raw) return null;
+
+  const normalized = raw.replace(/^\/+/, '');
+  const patterns = [
+    /(?:^|[?&])v=([A-Za-z0-9_-]{4,})/i,
+    /(?:^|\/)shorts\/([A-Za-z0-9_-]{4,})/i,
+    /(?:^|\/)embed\/([A-Za-z0-9_-]{4,})/i,
+    /(?:^|\/)live\/([A-Za-z0-9_-]{4,})/i,
+    /youtu\.be\/([A-Za-z0-9_-]{4,})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern) ?? raw.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+
+  const firstSegment = normalized.split(/[?&#/]/)[0];
+  if (/^[A-Za-z0-9_-]{4,}$/.test(firstSegment)) {
+    return firstSegment;
+  }
+
+  return null;
+}
+
+function extractMatterportSpaceIdFromUrl(value: string | null | undefined): string | null {
+  const raw = (value ?? '').trim();
+  if (!raw) return null;
+
+  try {
+    const url = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+    const paramSpaceId = url.searchParams.get('m')?.trim();
+    if (paramSpaceId && /^[A-Za-z0-9]{6,}$/.test(paramSpaceId)) {
+      return paramSpaceId;
+    }
+  } catch {
+    // Continue to regex fallback when URL parsing fails.
+  }
+
+  const match = raw.match(/[?&]m=([A-Za-z0-9]{6,})/i)
+    ?? raw.match(/\/show\/?\?m=([A-Za-z0-9]{6,})/i)
+    ?? raw.match(/(?:^|\/)m\/([A-Za-z0-9]{6,})(?:$|[/?#])/i);
+
+  return match?.[1] ?? null;
+}
+
+function pickPortalMediaFromMarketingUrls(marketingUrls: ListingMarketingUrl[]): {
+  youTubeVideoId: string | null;
+  matterportSpaceId: string | null;
+  eyeSpy360Url: string | null;
+} {
+  const youtubeRow = marketingUrls.find((row) => {
+    const type = row.url_type.trim().toLowerCase();
+    return type === 'youtube' || type === '1';
+  }) ?? marketingUrls.find((row) => /youtube|youtu\.be/i.test(row.url));
+
+  const matterportRow = marketingUrls.find((row) => {
+    const type = row.url_type.trim().toLowerCase();
+    return type === 'matterport' || type === '2';
+  }) ?? marketingUrls.find((row) => /matterport/i.test(row.url));
+
+  const eyeSpyRow = marketingUrls.find((row) => {
+    const type = row.url_type.trim().toLowerCase();
+    return type === 'eyespy360' || type === '3';
+  }) ?? marketingUrls.find((row) => /eyespy360/i.test(row.url));
+
+  return {
+    youTubeVideoId: extractYouTubeVideoIdFromUrl(youtubeRow?.url),
+    matterportSpaceId: extractMatterportSpaceIdFromUrl(matterportRow?.url),
+    eyeSpy360Url: eyeSpyRow?.url?.trim() || null,
+  };
+}
+
+type P24Photo = { bytes: string; mimeContentType: string; caption: string; isFloorPlan: boolean };
+const PROPERTY24_MAX_SOURCE_IMAGE_BYTES = 30 * 1024 * 1024;
+const PROPERTY24_TARGET_IMAGE_BYTES = 2.5 * 1024 * 1024;
+const PROPERTY24_MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+const PROPERTY24_MAX_TOTAL_IMAGE_BYTES = 60 * 1024 * 1024;
+
+type P24PhotoCandidate = P24Photo & { byteLength: number };
+
+type P24PhotoSelection = {
+  photos: P24Photo[];
+  sourceCount: number;
+  selectedCount: number;
+  skippedCount: number;
+  totalBytes: number;
+  warnings: string[];
+};
+
+async function optimizePhotoForProperty24(sourceBuffer: Buffer, mimeType: string): Promise<Buffer> {
+  if (sourceBuffer.length <= PROPERTY24_TARGET_IMAGE_BYTES && mimeType.toLowerCase().includes('jpeg')) {
+    return sourceBuffer;
+  }
+
+  try {
+    const sharpModule = await loadSharp() as Record<string, unknown> | ((input: Buffer) => {
+      rotate: (...args: unknown[]) => unknown;
+      resize: (...args: unknown[]) => unknown;
+      jpeg: (...args: unknown[]) => unknown;
+      toBuffer: () => Promise<Buffer>;
+    });
+    const sharpFactory = (typeof sharpModule === 'function'
+      ? sharpModule
+      : sharpModule.default) as (input: Buffer) => {
+      rotate: () => {
+        resize: (options: { width: number; height: number; fit: 'inside'; withoutEnlargement: boolean }) => {
+          jpeg: (options: { quality: number; progressive: boolean; mozjpeg: boolean }) => {
+            toBuffer: () => Promise<Buffer>;
+          };
+        };
+      };
+    };
+
+    let quality = 82;
+    let optimized = await sharpFactory(sourceBuffer)
+      .rotate()
+      .resize({ width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality, progressive: true, mozjpeg: true })
+      .toBuffer();
+
+    while (optimized.length > PROPERTY24_TARGET_IMAGE_BYTES && quality > 68) {
+      quality -= 6;
+      optimized = await sharpFactory(sourceBuffer)
+        .rotate()
+        .resize({ width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality, progressive: true, mozjpeg: true })
+        .toBuffer();
+    }
+
+    return optimized.length < sourceBuffer.length ? optimized : sourceBuffer;
+  } catch {
+    return sourceBuffer;
+  }
+}
+
+async function fetchPhotoAsBase64(url: string): Promise<P24PhotoCandidate | null> {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
     if (!response.ok) return null;
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const contentLength = Number(response.headers.get('content-length') ?? '0');
+    if (Number.isFinite(contentLength) && contentLength > PROPERTY24_MAX_SOURCE_IMAGE_BYTES) {
+      console.warn(`[Property24] Skipping source image larger than 30MB (content-length): ${url}`);
+      return null;
+    }
+    const sourceBuffer = Buffer.from(await response.arrayBuffer());
+    if (sourceBuffer.length > PROPERTY24_MAX_SOURCE_IMAGE_BYTES) {
+      console.warn(`[Property24] Skipping source image larger than 30MB: ${url}`);
+      return null;
+    }
+
     const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim() ?? 'image/jpeg';
-    return { bytes: buffer.toString('base64'), mimeContentType: mimeType, caption: '', isFloorPlan: false };
+    const optimizedBuffer = await optimizePhotoForProperty24(sourceBuffer, mimeType);
+    if (optimizedBuffer.length > PROPERTY24_MAX_IMAGE_BYTES) {
+      console.warn(`[Property24] Skipping image larger than 6MB after optimization: ${url}`);
+      return null;
+    }
+
+    return {
+      bytes: optimizedBuffer.toString('base64'),
+      mimeContentType: 'image/jpeg',
+      caption: '',
+      isFloorPlan: false,
+      byteLength: optimizedBuffer.length,
+    };
   } catch {
     return null;
   }
 }
 
-async function selectPhotosForProperty24(urls: string[]): Promise<P24Photo[]> {
+async function selectPhotosForProperty24(urls: string[]): Promise<P24PhotoSelection> {
   const allowedExt = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
   const localBase = `http://127.0.0.1:${env.port ?? 3000}`;
   const validUrls = urls
@@ -179,11 +685,44 @@ async function selectPhotosForProperty24(urls: string[]): Promise<P24Photo[]> {
       } catch {
         return false;
       }
-    })
-    .slice(0, 30);
+    });
 
-  const results = await Promise.all(validUrls.map((url) => fetchPhotoAsBase64(url)));
-  return results.filter((photo): photo is P24Photo => photo !== null);
+  const selectedPhotos: P24Photo[] = [];
+  let totalBytes = 0;
+  let skippedCount = 0;
+  const warnings: string[] = [];
+
+  for (const url of validUrls) {
+    const candidate = await fetchPhotoAsBase64(url);
+    if (!candidate) {
+      skippedCount += 1;
+      if (warnings.length < 5) warnings.push(`Skipped unreadable/oversized image: ${url}`);
+      continue;
+    }
+
+    if (totalBytes + candidate.byteLength > PROPERTY24_MAX_TOTAL_IMAGE_BYTES) {
+      skippedCount += 1;
+      if (warnings.length < 5) warnings.push(`Skipped to stay under Property24 payload budget: ${url}`);
+      continue;
+    }
+
+    totalBytes += candidate.byteLength;
+    selectedPhotos.push({
+      bytes: candidate.bytes,
+      mimeContentType: candidate.mimeContentType,
+      caption: candidate.caption,
+      isFloorPlan: candidate.isFloorPlan,
+    });
+  }
+
+  return {
+    photos: selectedPhotos,
+    sourceCount: validUrls.length,
+    selectedCount: selectedPhotos.length,
+    skippedCount,
+    totalBytes,
+    warnings,
+  };
 }
 
 function getRequestBaseUrl(req: Request): string {
@@ -309,6 +848,55 @@ async function fetchWithRetries(
   throw (lastError instanceof Error ? lastError : new Error('Property24 request failed after retries.'));
 }
 
+async function waitMs(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureListingAreaCountSupportsDecimals(pg: Pool): Promise<void> {
+  if (listingAreaDecimalEnsurePromise) {
+    await listingAreaDecimalEnsurePromise;
+    return;
+  }
+
+  listingAreaDecimalEnsurePromise = (async () => {
+    const columnResult = await pg.query<{
+      data_type: string;
+      udt_name: string;
+      numeric_scale: number | string | null;
+    }>(
+      `SELECT data_type, udt_name, numeric_scale
+       FROM information_schema.columns
+       WHERE table_schema = 'migration'
+         AND table_name = 'listing_property_areas'
+         AND column_name = 'count'
+       LIMIT 1`
+    );
+
+    const column = columnResult.rows[0];
+    const normalizedDataType = (column?.data_type ?? '').trim().toLowerCase();
+    const normalizedUdtName = (column?.udt_name ?? '').trim().toLowerCase();
+    const numericScale = toNumber(column?.numeric_scale);
+    const isIntegerLike =
+      normalizedDataType === 'smallint'
+      || normalizedDataType === 'integer'
+      || normalizedDataType === 'bigint'
+      || normalizedUdtName === 'int2'
+      || normalizedUdtName === 'int4'
+      || normalizedUdtName === 'int8';
+    const isZeroScaleNumeric = normalizedDataType === 'numeric' && numericScale === 0;
+
+    if (isIntegerLike || isZeroScaleNumeric) {
+      await pg.query(`
+        ALTER TABLE migration.listing_property_areas
+        ALTER COLUMN count TYPE NUMERIC(12,2)
+        USING count::numeric
+      `);
+    }
+  })();
+
+  await listingAreaDecimalEnsurePromise;
+}
+
 function parseTextArray(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value
@@ -322,6 +910,163 @@ function parseTextArray(value: unknown): string[] {
       .filter((entry) => entry.length > 0);
   }
   return [];
+}
+
+const LEGACY_PROPERTY_AREA_TYPE_BY_ID: Record<string, string> = {
+  '1': 'Bedroom',
+  '2': 'Bathroom',
+  '3': 'Bar',
+  '4': 'Closet',
+  '5': 'Dining Room',
+  '6': 'Family TV Room',
+  '7': 'Garage',
+  '8': 'Garden',
+  '9': 'Kitchen',
+  '10': 'Lounge',
+  '11': 'Loft',
+  '12': 'Office',
+  '13': 'Outbuilding',
+  '14': 'Pool',
+  '15': 'Entrance Hall',
+  '16': 'Parking',
+  '17': 'Security',
+  '18': 'Sewing Room',
+  '19': 'Special Feature',
+  '21': 'Temperature Control',
+  '22': 'Utility Room',
+  '23': 'Braai Room',
+  '24': 'Other',
+};
+
+function normalizeAreaType(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return '';
+
+  const mapped = LEGACY_PROPERTY_AREA_TYPE_BY_ID[raw];
+  if (mapped) return mapped;
+
+  const numeric = Number(raw);
+  if (Number.isInteger(numeric)) {
+    const legacy = LEGACY_PROPERTY_AREA_TYPE_BY_ID[String(numeric)];
+    if (legacy) return legacy;
+  }
+
+  return raw;
+}
+
+type LegacyFeatureRow = {
+  id?: string;
+  feature_category?: string | null;
+  feature_value?: string | null;
+  sort_order?: number | string | null;
+};
+
+type LegacyAreaRow = {
+  id?: string;
+  area_type?: string | null;
+  count?: number | string | null;
+  size?: number | string | null;
+  description?: string | null;
+  sub_features?: unknown;
+  sort_order?: number | string | null;
+};
+
+function normalizeListingPropertyAreas(
+  areaRows: LegacyAreaRow[],
+  featureRows: LegacyFeatureRow[],
+): Array<{ id: string; area_type: string; count: number | null; size: string | null; description: string | null; sub_features: string[]; sort_order: number }> {
+  const legacyAreaFeatures = new Map<string, Set<string>>();
+
+  for (const feature of featureRows) {
+    const areaType = normalizeAreaType(feature.feature_category);
+    const featureValue = toText(feature.feature_value);
+    if (!areaType || !featureValue) continue;
+    if (!LEGACY_PROPERTY_AREA_TYPE_BY_ID[String(Number(feature.feature_category ?? ''))]) continue;
+    if (!legacyAreaFeatures.has(areaType)) legacyAreaFeatures.set(areaType, new Set<string>());
+    legacyAreaFeatures.get(areaType)!.add(featureValue);
+  }
+
+  const grouped = new Map<string, {
+    id: string;
+    area_type: string;
+    explicitCount: number | null;
+    rowCount: number;
+    size: string | null;
+    description: string | null;
+    subFeatures: Set<string>;
+    sort_order: number;
+  }>();
+
+  for (const [index, area] of areaRows.entries()) {
+    const areaType = normalizeAreaType(area.area_type);
+    if (!areaType) continue;
+    const key = areaType.toLowerCase();
+    const sortOrder = toNumber(area.sort_order) ?? index;
+    const existing = grouped.get(key) ?? {
+      id: String(area.id ?? `${key}-${index}`),
+      area_type: areaType,
+      explicitCount: null,
+      rowCount: 0,
+      size: null,
+      description: null,
+      subFeatures: new Set<string>(),
+      sort_order: sortOrder,
+    };
+
+    existing.rowCount += 1;
+    existing.sort_order = Math.min(existing.sort_order, sortOrder);
+
+    const numericCount = toNumber(area.count);
+    if (numericCount !== null && numericCount > 0) {
+      existing.explicitCount = Math.max(existing.explicitCount ?? 0, numericCount);
+    }
+
+    if (!existing.size) {
+      const sizeText = toText(area.size);
+      if (sizeText) existing.size = sizeText;
+    }
+
+    if (!existing.description) {
+      existing.description = toText(area.description);
+    }
+
+    for (const entry of parseTextArray(area.sub_features)) existing.subFeatures.add(entry);
+    grouped.set(key, existing);
+  }
+
+  for (const [areaType, values] of legacyAreaFeatures.entries()) {
+    const existing = grouped.get(areaType.toLowerCase());
+    if (!existing) continue;
+    for (const value of values) existing.subFeatures.add(value);
+  }
+
+  return [...grouped.values()]
+    .sort((left, right) => left.sort_order - right.sort_order || left.area_type.localeCompare(right.area_type))
+    .map((entry, index) => ({
+      id: entry.id,
+      area_type: entry.area_type,
+      count: entry.explicitCount !== null ? Math.max(entry.explicitCount, entry.rowCount) : entry.rowCount,
+      size: entry.size,
+      description: entry.description,
+      sub_features: [...entry.subFeatures],
+      sort_order: Number.isFinite(entry.sort_order) ? entry.sort_order : index,
+    }));
+}
+
+function normalizeListingFeatures(featureRows: LegacyFeatureRow[]): LegacyFeatureRow[] {
+  const result: LegacyFeatureRow[] = [];
+  for (const feature of featureRows) {
+    const catKey = String(Number(feature.feature_category ?? ''));
+    if (catKey === '24') {
+      // Category 24 = 'Other' in ListingPropertyAreaType stores Property Descriptives
+      result.push({ ...feature, feature_category: 'Property Descriptive' });
+    } else if (!LEGACY_PROPERTY_AREA_TYPE_BY_ID[catKey]) {
+      // Not a room area type — pass through as-is (named category from new system)
+      result.push(feature);
+    }
+    // All other numeric room-area categories (1-23 excl. 24) are handled in property_areas
+  }
+  return result;
 }
 
 type UploadFilePayload = { name?: string; mimeType?: string; contentBase64?: string };
@@ -405,15 +1150,46 @@ async function storeUploadedFiles(files: UploadFilePayload[], subdir = 'listings
 }
 
 async function generateNextListingNumber(): Promise<string> {
-  if (!pool) return 'KWLM9000';
-  const result = await pool.query<{ max_num: string | null }>(
-    `SELECT MAX(CAST(SUBSTRING(listing_number FROM 5) AS INTEGER))::text AS max_num
-     FROM migration.core_listings
-     WHERE listing_number ~ '^KWLM[0-9]+$'`
-  );
-  const current = Number(result.rows[0]?.max_num ?? 0);
-  const next = Math.max(current + 1, 9000);
-  return `KWLM${next}`;
+  if (!pool) return 'KWL9000';
+  const client = await pool.connect();
+  try {
+    await client.query(`SELECT pg_advisory_lock(hashtext('app.kwl_listing_number_seq'))`);
+
+    await client.query(`CREATE SCHEMA IF NOT EXISTS app`);
+    await client.query(`CREATE SEQUENCE IF NOT EXISTS app.kwl_listing_number_seq START 9000 INCREMENT 1`);
+
+    const maxResult = await client.query<{ max_num: string | null }>(
+      `SELECT MAX(CAST(SUBSTRING(listing_number FROM 4) AS BIGINT))::text AS max_num
+       FROM migration.core_listings
+       WHERE listing_number ~ '^KWL[0-9]+$'`
+    );
+    const maxKwl = Number(maxResult.rows[0]?.max_num ?? 8999);
+
+    await client.query(
+      `SELECT setval('app.kwl_listing_number_seq', GREATEST(
+         COALESCE((SELECT last_value FROM app.kwl_listing_number_seq), 8999),
+         $1::bigint
+       ), true)`,
+      [maxKwl]
+    );
+
+    const nextResult = await client.query<{ next_num: string }>(
+      `SELECT nextval('app.kwl_listing_number_seq')::text AS next_num`
+    );
+    const next = Number(nextResult.rows[0]?.next_num ?? 9000);
+    return `KWL${Math.max(next, 9000)}`;
+  } finally {
+    try {
+      await client.query(`SELECT pg_advisory_unlock(hashtext('app.kwl_listing_number_seq'))`);
+    } catch {
+      // Release failures should not hide the original error.
+    }
+    client.release();
+  }
+}
+
+function isCanonicalKwlListingNumber(value: string | null | undefined): value is string {
+  return typeof value === 'string' && /^KWL[0-9]+$/.test(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -423,7 +1199,7 @@ async function generateNextListingNumber(): Promise<string> {
 router.get('/options', async (_req, res) => {
   const base = {
     listing_statuses: ['Active', 'Inactive', 'Draft'],
-    listing_status_tags: ['For Sale', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'],
+    listing_status_tags: ['For Sale', 'To Rent', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'],
     ownership_types: ['Full Title', 'Sectional Title', 'Fractional', 'Leasehold', 'Share Block', 'Time Share'],
     sale_or_rent_types: ['For Sale', 'Procurement Rental', 'Management Rental'],
     property_types: ['Residential', 'Commercial', 'Industrial', 'Business', 'Farm'],
@@ -641,6 +1417,217 @@ router.get('/next-number', async (_req, res) => {
   }
 });
 
+router.post('/validate-new-listing', resolvePermissions, async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+
+  try {
+    const body = req.body as Record<string, unknown>;
+    const candidateId = toNumber(body.currentListingId);
+    const listingType = toText(body.sale_or_rent) ?? toText(body.listingType);
+    const listingCategory = normalizeListingCategory(listingType);
+    const sellerId = (toText(body.sellerId) ?? '').trim().toLowerCase();
+    const normalizedAddress = buildNormalizedAddressFromSource({
+      streetNumber: body.street_number,
+      streetName: body.street_name,
+      unitNumber: body.unit_number,
+      doorNumber: body.door_number,
+      estateName: body.estate_name,
+      suburb: body.suburb,
+      city: body.city,
+      province: body.province,
+      postalCode: body.postal_code,
+      country: body.country,
+      addressLine: body.address_line,
+    });
+
+    if (!normalizedAddress.replace(/\|/g, '').trim()) {
+      return res.status(400).json({
+        approved: false,
+        message: 'Please complete the property address before running validation.',
+      });
+    }
+
+    if (!toText(listingType)) {
+      return res.status(400).json({
+        approved: false,
+        message: 'Please choose a listing type before running validation.',
+      });
+    }
+
+    const conflictSql = `
+      SELECT
+        cl.id::text AS listing_id,
+        cl.listing_number,
+        cl.sale_or_rent,
+        cl.street_number,
+        cl.street_name,
+        cl.unit_number,
+        cl.door_number,
+        cl.estate_name,
+        cl.suburb,
+        cl.city,
+        cl.province,
+        cl.postal_code,
+        cl.country,
+        cl.address_line,
+        COALESCE(a.first_name, split_part(COALESCE(a.full_name, la.agent_name, ''), ' ', 1), '') AS agent_name,
+        COALESCE(a.last_name, NULLIF(regexp_replace(COALESCE(a.full_name, ''), '^\\S+\\s*', ''), ''), '') AS agent_surname,
+        COALESCE(a.mobile_number, a.office_number, '') AS agent_phone,
+        COALESCE(a.kwsa_email, a.private_email, a.email, '') AS agent_email,
+        COALESCE(mc.name, cl.source_market_center_id, '') AS market_center_name
+      FROM migration.core_listings cl
+      LEFT JOIN LATERAL (
+        SELECT la.associate_id, la.agent_name, la.market_center_id
+        FROM migration.listing_agents la
+        WHERE la.listing_id = cl.id
+        ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
+        LIMIT 1
+      ) la ON TRUE
+      LEFT JOIN migration.core_associates a ON a.id = la.associate_id
+      LEFT JOIN migration.core_market_centers mc ON mc.id = COALESCE(a.market_center_id, la.market_center_id, cl.market_center_id)
+      WHERE cl.id <> COALESCE($1::int, -1)
+        AND LOWER(COALESCE(cl.status_name, '')) = 'active'
+        AND COALESCE(cl.is_published, false) = true
+        AND COALESCE(cl.is_draft, false) = false
+        AND (
+          CASE
+            WHEN LOWER(COALESCE(cl.sale_or_rent, '')) = 'for sale' THEN 'sale'
+            WHEN LOWER(COALESCE(cl.sale_or_rent, '')) LIKE '%rent%' THEN 'rental'
+            ELSE 'unknown'
+          END
+        ) = $2::text
+    `;
+
+    const conflictCandidates = await pool.query<{
+      listing_id: string;
+      listing_number: string | null;
+      sale_or_rent: string | null;
+      street_number: string | null;
+      street_name: string | null;
+      unit_number: string | null;
+      door_number: string | null;
+      estate_name: string | null;
+      suburb: string | null;
+      city: string | null;
+      province: string | null;
+      postal_code: string | null;
+      country: string | null;
+      address_line: string | null;
+      agent_name: string | null;
+      agent_surname: string | null;
+      agent_phone: string | null;
+      agent_email: string | null;
+      market_center_name: string | null;
+    }>(conflictSql, [candidateId ?? null, listingCategory]);
+
+    const conflictRow = conflictCandidates.rows.find((row) => {
+      const rowAddress = buildNormalizedAddressFromSource({
+        streetNumber: row.street_number,
+        streetName: row.street_name,
+        unitNumber: row.unit_number,
+        doorNumber: row.door_number,
+        estateName: row.estate_name,
+        suburb: row.suburb,
+        city: row.city,
+        province: row.province,
+        postalCode: row.postal_code,
+        country: row.country,
+        addressLine: row.address_line,
+      });
+      return rowAddress === normalizedAddress;
+    });
+
+    if (conflictRow) {
+      return res.json({
+        approved: false,
+        message: 'This property is already actively listed and published in KWSA. Please connect with the existing listing agent to discuss a collaborative shared-deal approach where appropriate.',
+        conflict: {
+          listingId: conflictRow.listing_id,
+          listingNumber: conflictRow.listing_number,
+          listingType: conflictRow.sale_or_rent,
+          agentName: conflictRow.agent_name,
+          agentSurname: conflictRow.agent_surname,
+          agentPhone: conflictRow.agent_phone,
+          agentEmail: conflictRow.agent_email,
+          marketCenterName: conflictRow.market_center_name,
+        },
+      });
+    }
+
+    if (sellerId) {
+      const sellerConflictCandidates = await pool.query<{
+        listing_id: string;
+        street_number: string | null;
+        street_name: string | null;
+        unit_number: string | null;
+        door_number: string | null;
+        estate_name: string | null;
+        suburb: string | null;
+        city: string | null;
+        province: string | null;
+        postal_code: string | null;
+        country: string | null;
+        address_line: string | null;
+      }>(
+        `SELECT cl.id::text AS listing_id,
+                cl.street_number,
+                cl.street_name,
+                cl.unit_number,
+                cl.door_number,
+                cl.estate_name,
+                cl.suburb,
+                cl.city,
+                cl.province,
+                cl.postal_code,
+                cl.country,
+                cl.address_line
+         FROM migration.core_listings cl
+         WHERE cl.id <> COALESCE($1::int, -1)
+           AND LOWER(COALESCE(cl.status_name, '')) = 'active'
+           AND COALESCE(cl.is_published, false) = true
+           AND COALESCE(cl.is_draft, false) = false
+           AND LOWER(TRIM(COALESCE(cl.listing_payload->'listing_validation'->>'sellerId', ''))) = $2`,
+        [candidateId ?? null, sellerId],
+      );
+
+      const sellerConflict = sellerConflictCandidates.rows.find((row) => {
+        const rowAddress = buildNormalizedAddressFromSource({
+          streetNumber: row.street_number,
+          streetName: row.street_name,
+          unitNumber: row.unit_number,
+          doorNumber: row.door_number,
+          estateName: row.estate_name,
+          suburb: row.suburb,
+          city: row.city,
+          province: row.province,
+          postalCode: row.postal_code,
+          country: row.country,
+          addressLine: row.address_line,
+        });
+        return rowAddress === normalizedAddress;
+      });
+
+      if (sellerConflict) {
+        return res.json({
+          approved: false,
+          message: 'This seller ID and address combination is already linked to an active published listing in KWSA.',
+        });
+      }
+    }
+
+    const validationCode = await ensureValidationCode(pool, candidateId ?? null, toText(body.validationCode));
+
+    return res.json({
+      approved: true,
+      message: 'Listing validation approved. You may proceed to complete the listing tabs.',
+      validationCode,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ error: message });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // List listings
 // ---------------------------------------------------------------------------
@@ -687,7 +1674,7 @@ router.get('/', resolvePermissions, async (req, res) => {
     if (!exists.rows[0]?.exists) return res.json({ total: 0, limit, offset, items: [] });
 
     const whereClauses: string[] = [];
-    const params: Array<string | number> = [];
+    const params: Array<string | number | string[]> = [];
     const perms = req.permissions!;
     let permsMarketCenterDbId: number | null = null;
 
@@ -699,7 +1686,25 @@ router.get('/', resolvePermissions, async (req, res) => {
       permsMarketCenterDbId = mcResult.rows[0]?.id ? Number(mcResult.rows[0].id) : null;
     }
 
-    if (searchInput) {
+    const areaSearchTerms = searchInput.includes(',')
+      ? [...new Set(
+        searchInput
+          .split(',')
+          .map((term) => term.trim().toLowerCase())
+          .filter((term) => term.length > 0)
+      )].slice(0, 5)
+      : [];
+
+    if (areaSearchTerms.length > 0) {
+      // Fast multi-area mode: exact matching on locality fields only.
+      params.push(areaSearchTerms);
+      const p = `$${params.length}`;
+      whereClauses.push(`(
+        LOWER(TRIM(COALESCE(cl.suburb, ''))) = ANY(${p}::text[])
+        OR LOWER(TRIM(COALESCE(cl.city, ''))) = ANY(${p}::text[])
+        OR LOWER(TRIM(COALESCE(cl.estate_name, ''))) = ANY(${p}::text[])
+      )`);
+    } else if (searchInput) {
       params.push(`%${searchInput}%`);
       const p = `$${params.length}`;
       whereClauses.push(`(
@@ -758,32 +1763,52 @@ router.get('/', resolvePermissions, async (req, res) => {
       params.push(minPrice);
       whereClauses.push(`COALESCE(cl.price, 0) >= $${params.length}`);
     }
-    const maxPrice = Number(maxPriceInput);
-    if (maxPriceInput && Number.isFinite(maxPrice)) {
-      params.push(maxPrice);
-      whereClauses.push(`COALESCE(cl.price, 0) <= $${params.length}`);
+    const openEndedMaxPriceInput = maxPriceInput === '20000000_plus' || maxPriceInput === '20000000+';
+    if (openEndedMaxPriceInput) {
+      params.push(20_000_000);
+      whereClauses.push(`COALESCE(cl.price, 0) >= $${params.length}`);
+    } else {
+      const maxPrice = Number(maxPriceInput);
+      if (maxPriceInput && Number.isFinite(maxPrice)) {
+        params.push(maxPrice);
+        whereClauses.push(`COALESCE(cl.price, 0) <= $${params.length}`);
+      }
     }
 
     if (Number.isFinite(minBedroomsInput) && minBedroomsInput > 0) {
       params.push(minBedroomsInput);
-      whereClauses.push(`EXISTS (
-        SELECT 1
+      whereClauses.push(`(
+        SELECT COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(lpa.count, 0) > 0 THEN lpa.count::int
+              ELSE 1
+            END
+          ),
+          0
+        )::int
         FROM migration.listing_property_areas lpa
         WHERE lpa.listing_id = cl.id
           AND LOWER(TRIM(COALESCE(lpa.area_type, ''))) = 'bedroom'
-          AND COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(lpa.count::text, ''), '[^0-9.]', '', 'g'), ''), '0')::numeric >= $${params.length}
-      )`);
+      ) >= $${params.length}`);
     }
 
     if (Number.isFinite(minBathroomsInput) && minBathroomsInput > 0) {
       params.push(minBathroomsInput);
-      whereClauses.push(`EXISTS (
-        SELECT 1
+      whereClauses.push(`(
+        SELECT COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(lpa.count, 0) > 0 THEN lpa.count::int
+              ELSE 1
+            END
+          ),
+          0
+        )::int
         FROM migration.listing_property_areas lpa
         WHERE lpa.listing_id = cl.id
           AND LOWER(TRIM(COALESCE(lpa.area_type, ''))) = 'bathroom'
-          AND COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(lpa.count::text, ''), '[^0-9.]', '', 'g'), ''), '0')::numeric >= $${params.length}
-      )`);
+      ) >= $${params.length}`);
     }
 
     if (petFriendlyInput) whereClauses.push(`COALESCE(cl.pet_friendly, false) = true`);
@@ -926,30 +1951,97 @@ router.get('/', resolvePermissions, async (req, res) => {
           NULLIF(TRIM(cl.listing_payload->>'KWWReference'), '')
         ) AS kww_reference_id,
         COALESCE(NULLIF(TRIM(cl.listing_payload->>'EntegralId'), ''), NULLIF(TRIM(cl.listing_payload->>'entegral_id'), ''), NULLIF(TRIM(cl.listing_payload->>'EntegralReference'), '')) AS entegral_reference_id,
-        (SELECT COALESCE(a.full_name, la.agent_name)
-         FROM migration.listing_agents la
-         LEFT JOIN migration.core_associates a ON a.id = la.associate_id
-         WHERE la.listing_id = cl.id
-         ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
-         LIMIT 1) AS primary_agent_name,
-        (SELECT a.image_url
-         FROM migration.listing_agents la
-         LEFT JOIN migration.core_associates a ON a.id = la.associate_id
-         WHERE la.listing_id = cl.id
-         ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
-         LIMIT 1) AS primary_agent_image_url,
-        (SELECT COALESCE(a.mobile_number, a.office_number)
-         FROM migration.listing_agents la
-         LEFT JOIN migration.core_associates a ON a.id = la.associate_id
-         WHERE la.listing_id = cl.id
-         ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
-         LIMIT 1) AS primary_agent_phone,
-        (SELECT COALESCE(a.kwsa_email, a.private_email, a.email)
-         FROM migration.listing_agents la
-         LEFT JOIN migration.core_associates a ON a.id = la.associate_id
-         WHERE la.listing_id = cl.id
-         ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
-         LIMIT 1) AS primary_agent_email,
+        COALESCE(
+          (SELECT COALESCE(a.full_name, la.agent_name)
+           FROM migration.listing_agents la
+           LEFT JOIN migration.core_associates a ON a.id = la.associate_id
+           WHERE la.listing_id = cl.id
+           ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
+           LIMIT 1),
+          (SELECT pub_a."firstName" || ' ' || pub_a."lastName"
+           FROM listing_associates pub_la
+           JOIN associates pub_a ON pub_a.id = pub_la."associateId"
+           JOIN listings pub_l ON pub_l.id = pub_la."listingId"
+           WHERE pub_l."listingNumber" = cl.listing_number
+           ORDER BY pub_la."isPrimary" DESC, pub_la.id ASC
+           LIMIT 1)
+        ) AS primary_agent_name,
+        COALESCE(
+          (SELECT a.image_url
+           FROM migration.listing_agents la
+           LEFT JOIN migration.core_associates a ON a.id = la.associate_id
+           WHERE la.listing_id = cl.id
+           ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
+           LIMIT 1),
+          (SELECT ca.image_url
+           FROM listing_associates pub_la
+           JOIN associates pub_a ON pub_a.id = pub_la."associateId"
+           LEFT JOIN migration.core_associates ca ON ca.national_id = pub_a."nationalId"
+           JOIN listings pub_l ON pub_l.id = pub_la."listingId"
+           WHERE pub_l."listingNumber" = cl.listing_number
+           ORDER BY pub_la."isPrimary" DESC, pub_la.id ASC
+           LIMIT 1)
+        ) AS primary_agent_image_url,
+        COALESCE(
+          (SELECT COALESCE(a.mobile_number, a.office_number)
+           FROM migration.listing_agents la
+           LEFT JOIN migration.core_associates a ON a.id = la.associate_id
+           WHERE la.listing_id = cl.id
+           ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
+           LIMIT 1),
+          (SELECT COALESCE(ca.mobile_number, ca.office_number)
+           FROM listing_associates pub_la
+           JOIN associates pub_a ON pub_a.id = pub_la."associateId"
+           LEFT JOIN migration.core_associates ca ON ca.national_id = pub_a."nationalId"
+           JOIN listings pub_l ON pub_l.id = pub_la."listingId"
+           WHERE pub_l."listingNumber" = cl.listing_number
+           ORDER BY pub_la."isPrimary" DESC, pub_la.id ASC
+           LIMIT 1)
+        ) AS primary_agent_phone,
+        COALESCE(
+          (SELECT NULLIF(TRIM(a.kwsa_email), '')
+           FROM migration.listing_agents la
+           LEFT JOIN migration.core_associates a ON a.id = la.associate_id
+           WHERE la.listing_id = cl.id
+           ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
+           LIMIT 1),
+          (SELECT NULLIF(TRIM(ca.kwsa_email), '')
+           FROM listing_associates pub_la
+           JOIN associates pub_a ON pub_a.id = pub_la."associateId"
+           LEFT JOIN migration.core_associates ca ON ca.national_id = pub_a."nationalId"
+           JOIN listings pub_l ON pub_l.id = pub_la."listingId"
+           WHERE pub_l."listingNumber" = cl.listing_number
+           ORDER BY pub_la."isPrimary" DESC, pub_la.id ASC
+           LIMIT 1),
+          (SELECT NULLIF(TRIM(a.email), '')
+           FROM migration.listing_agents la
+           LEFT JOIN migration.core_associates a ON a.id = la.associate_id
+           WHERE la.listing_id = cl.id
+           ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
+           LIMIT 1),
+          (SELECT NULLIF(TRIM(ca.email), '')
+           FROM listing_associates pub_la
+           JOIN associates pub_a ON pub_a.id = pub_la."associateId"
+           LEFT JOIN migration.core_associates ca ON ca.national_id = pub_a."nationalId"
+           JOIN listings pub_l ON pub_l.id = pub_la."listingId"
+           WHERE pub_l."listingNumber" = cl.listing_number
+           ORDER BY pub_la."isPrimary" DESC, pub_la.id ASC
+           LIMIT 1),
+          (SELECT NULLIF(TRIM(a.private_email), '')
+           FROM migration.listing_agents la
+           LEFT JOIN migration.core_associates a ON a.id = la.associate_id
+           WHERE la.listing_id = cl.id
+           ORDER BY la.is_primary DESC, la.sort_order ASC, la.id ASC
+           LIMIT 1),
+          (SELECT NULLIF(TRIM(ca.private_email), '')
+           FROM listing_associates pub_la
+           JOIN associates pub_a ON pub_a.id = pub_la."associateId"
+           LEFT JOIN migration.core_associates ca ON ca.national_id = pub_a."nationalId"
+           JOIN listings pub_l ON pub_l.id = pub_la."listingId"
+           WHERE pub_l."listingNumber" = cl.listing_number
+           ORDER BY pub_la."isPrimary" DESC, pub_la.id ASC
+           LIMIT 1)
+        ) AS primary_agent_email,
         COALESCE(
           (SELECT mc.logo_image_url
            FROM migration.listing_agents la
@@ -961,6 +2053,19 @@ router.get('/', resolvePermissions, async (req, res) => {
           (SELECT mc.logo_image_url
            FROM migration.core_market_centers mc
            WHERE mc.id = cl.market_center_id
+           LIMIT 1),
+          (SELECT mc.logo_image_url
+           FROM migration.core_market_centers mc
+           WHERE mc.source_market_center_id = cl.source_market_center_id
+           LIMIT 1),
+          (SELECT mc.logo_image_url
+           FROM listing_associates pub_la
+           JOIN associates pub_a ON pub_a.id = pub_la."associateId"
+           LEFT JOIN migration.core_associates ca ON ca.national_id = pub_a."nationalId"
+           LEFT JOIN migration.core_market_centers mc ON mc.id = ca.market_center_id
+           JOIN listings pub_l ON pub_l.id = pub_la."listingId"
+           WHERE pub_l."listingNumber" = cl.listing_number
+           ORDER BY pub_la."isPrimary" DESC, pub_la.id ASC
            LIMIT 1)
         ) AS market_center_logo_url,
         COALESCE(
@@ -1006,25 +2111,37 @@ router.get('/', resolvePermissions, async (req, res) => {
            LIMIT 1)
         ) AS primary_contact_email,
         (
-          SELECT MAX(lpa.count)::int
+          SELECT COALESCE(
+            SUM(CASE WHEN COALESCE(lpa.count, 0) > 0 THEN lpa.count::numeric ELSE 1 END),
+            0
+          )::numeric(12,2)
           FROM migration.listing_property_areas lpa
           WHERE lpa.listing_id = cl.id
             AND LOWER(TRIM(COALESCE(lpa.area_type, ''))) = 'bedroom'
         ) AS bedroom_count,
         (
-          SELECT MAX(lpa.count)::int
+          SELECT COALESCE(
+            SUM(CASE WHEN COALESCE(lpa.count, 0) > 0 THEN lpa.count::numeric ELSE 1 END),
+            0
+          )::numeric(12,2)
           FROM migration.listing_property_areas lpa
           WHERE lpa.listing_id = cl.id
             AND LOWER(TRIM(COALESCE(lpa.area_type, ''))) = 'bathroom'
         ) AS bathroom_count,
         (
-          SELECT MAX(lpa.count)::int
+          SELECT COALESCE(
+            SUM(CASE WHEN COALESCE(lpa.count, 0) > 0 THEN lpa.count::numeric ELSE 1 END),
+            0
+          )::numeric(12,2)
           FROM migration.listing_property_areas lpa
           WHERE lpa.listing_id = cl.id
             AND LOWER(TRIM(COALESCE(lpa.area_type, ''))) = 'garage'
         ) AS garage_count,
         (
-          SELECT MAX(lpa.count)::int
+          SELECT COALESCE(
+            SUM(CASE WHEN COALESCE(lpa.count, 0) > 0 THEN lpa.count::numeric ELSE 1 END),
+            0
+          )::numeric(12,2)
           FROM migration.listing_property_areas lpa
           WHERE lpa.listing_id = cl.id
             AND LOWER(TRIM(COALESCE(lpa.area_type, ''))) = 'parking'
@@ -1048,8 +2165,8 @@ router.get('/', resolvePermissions, async (req, res) => {
         updated_at::text
        FROM migration.core_listings cl
        ${whereSql}
-             ORDER BY CASE WHEN cl.listing_number ~ '^KWL[0-9]+$'
-              THEN CAST(SUBSTRING(cl.listing_number FROM 4) AS BIGINT)
+             ORDER BY CASE WHEN cl.listing_number ~* '^KWLM?[0-9]+$'
+              THEN CAST(REGEXP_REPLACE(cl.listing_number, '^[^0-9]+', '') AS BIGINT)
               ELSE 0 END DESC,
                cl.updated_at DESC,
                cl.id DESC
@@ -1060,6 +2177,46 @@ router.get('/', resolvePermissions, async (req, res) => {
     const rowIds = dataResult.rows
       .map((row: Record<string, unknown>) => Number(row.id))
       .filter((id) => Number.isFinite(id));
+
+    const parsedImageUrlsById = new Map<number, string[]>();
+    const rowsMissingImageUrls: number[] = [];
+    for (const row of dataResult.rows as Array<Record<string, unknown>>) {
+      const rowId = Number(row.id ?? 0);
+      if (!Number.isFinite(rowId)) continue;
+      const parsedImageUrls = parseImageUrls(row.listing_images_json);
+      parsedImageUrlsById.set(rowId, parsedImageUrls);
+      if (parsedImageUrls.length === 0) {
+        rowsMissingImageUrls.push(rowId);
+      }
+    }
+
+    const fallbackImageUrlsById = new Map<number, string[]>();
+    if (rowsMissingImageUrls.length > 0) {
+      const fallbackImagesResult = await pool.query<{
+        listing_id: string;
+        file_url: string | null;
+      }>(
+        `SELECT listing_id::text, file_url
+           FROM migration.listing_images
+          WHERE listing_id = ANY($1::int[])
+            AND COALESCE(TRIM(file_url), '') <> ''
+          ORDER BY listing_id ASC, sort_order ASC, id ASC`,
+        [rowsMissingImageUrls]
+      );
+
+      for (const row of fallbackImagesResult.rows) {
+        const listingId = Number(row.listing_id);
+        if (!Number.isFinite(listingId)) continue;
+        const fileUrl = typeof row.file_url === 'string' ? row.file_url.trim() : '';
+        if (!fileUrl) continue;
+        if (!/^https?:\/\//i.test(fileUrl) && !fileUrl.startsWith('/uploads/')) continue;
+        const current = fallbackImageUrlsById.get(listingId) ?? [];
+        if (!current.includes(fileUrl)) {
+          current.push(fileUrl);
+          fallbackImageUrlsById.set(listingId, current);
+        }
+      }
+    }
 
     let ownEditableIds = new Set<number>();
     if (perms.scope === 'OWN' && perms.associateDbId && rowIds.length > 0) {
@@ -1077,11 +2234,15 @@ router.get('/', resolvePermissions, async (req, res) => {
     if (perms.scope === 'MARKET_CENTRE' && rowIds.length > 0) {
       if (permsMarketCenterDbId !== null) {
         const mcEditRows = await pool.query<{ listing_id: string }>(
-          `SELECT DISTINCT la.listing_id::text
-             FROM migration.listing_agents la
+          `SELECT DISTINCT cl.id::text AS listing_id
+             FROM migration.core_listings cl
+             LEFT JOIN migration.listing_agents la ON la.listing_id = cl.id
              LEFT JOIN migration.core_associates a ON a.id = la.associate_id
-            WHERE la.listing_id = ANY($1::int[])
+            WHERE cl.id = ANY($1::int[])
               AND (
+                REGEXP_REPLACE(LOWER(TRIM(COALESCE(cl.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($2)), '[^a-z0-9]+', '', 'g')
+                OR cl.market_center_id = $3
+                OR
                 REGEXP_REPLACE(LOWER(TRIM(COALESCE(a.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($2)), '[^a-z0-9]+', '', 'g')
                 OR a.market_center_id = $3
                 OR la.market_center_id = $3
@@ -1091,11 +2252,15 @@ router.get('/', resolvePermissions, async (req, res) => {
         marketCentreEditableIds = new Set(mcEditRows.rows.map((r) => Number(r.listing_id)).filter((id) => Number.isFinite(id)));
       } else {
         const mcEditRows = await pool.query<{ listing_id: string }>(
-          `SELECT DISTINCT la.listing_id::text
-             FROM migration.listing_agents la
+          `SELECT DISTINCT cl.id::text AS listing_id
+             FROM migration.core_listings cl
+             LEFT JOIN migration.listing_agents la ON la.listing_id = cl.id
              LEFT JOIN migration.core_associates a ON a.id = la.associate_id
-            WHERE la.listing_id = ANY($1::int[])
-              AND REGEXP_REPLACE(LOWER(TRIM(COALESCE(a.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($2)), '[^a-z0-9]+', '', 'g')`,
+            WHERE cl.id = ANY($1::int[])
+              AND (
+                REGEXP_REPLACE(LOWER(TRIM(COALESCE(cl.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($2)), '[^a-z0-9]+', '', 'g')
+                OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(a.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($2)), '[^a-z0-9]+', '', 'g')
+              )`,
           [rowIds, perms.marketCenterId ?? '']
         );
         marketCentreEditableIds = new Set(mcEditRows.rows.map((r) => Number(r.listing_id)).filter((id) => Number.isFinite(id)));
@@ -1107,15 +2272,17 @@ router.get('/', resolvePermissions, async (req, res) => {
       limit,
       offset,
       items: dataResult.rows.map((row: Record<string, unknown>) => {
-        const imageUrls = parseImageUrls(row.listing_images_json);
+        const rowId = Number(row.id ?? 0);
+        const parsedImageUrls = Number.isFinite(rowId) ? (parsedImageUrlsById.get(rowId) ?? []) : [];
+        const imageUrls = parsedImageUrls.length > 0
+          ? parsedImageUrls
+          : (Number.isFinite(rowId) ? (fallbackImageUrlsById.get(rowId) ?? []) : []);
         let canEdit = false;
         if (perms.scope === 'GLOBAL') {
           canEdit = true;
         } else if (perms.scope === 'MARKET_CENTRE') {
-          const rowId = Number(row.id ?? 0);
           canEdit = Number.isFinite(rowId) && marketCentreEditableIds.has(rowId);
         } else if (perms.scope === 'OWN') {
-          const rowId = Number(row.id ?? 0);
           canEdit = Number.isFinite(rowId) && ownEditableIds.has(rowId);
         }
 
@@ -1139,6 +2306,22 @@ router.get('/:id', async (req, res) => {
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid listing id.' });
 
   try {
+    await ensureRentalOptionalColumns();
+
+    const optionalColumnsResult = await pool.query<{ column_name: string }>(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'migration'
+          AND table_name = 'core_listings'
+          AND column_name = ANY($1::text[])`,
+      [['rental_rate', 'lease_period', 'deposit_requirements']]
+    );
+
+    const optionalColumns = new Set(optionalColumnsResult.rows.map((row) => row.column_name));
+    const rentalRateSelect = optionalColumns.has('rental_rate') ? 'rental_rate' : 'NULL::text AS rental_rate';
+    const leasePeriodSelect = optionalColumns.has('lease_period') ? 'lease_period' : 'NULL::text AS lease_period';
+    const depositRequirementsSelect = optionalColumns.has('deposit_requirements') ? 'deposit_requirements' : 'NULL::text AS deposit_requirements';
+
     const result = await pool.query(
       `SELECT
         id::text, source_listing_id, source_market_center_id, market_center_id::text,
@@ -1168,6 +2351,7 @@ router.get('/:id', async (req, res) => {
         feed_to_property24, property24_ref1, property24_ref2, property24_sync_status,
         signed_date::text, on_market_since_date::text, rates_and_taxes::text,
         monthly_levy::text, occupation_date::text, mandate_type,
+        ${rentalRateSelect}, ${leasePeriodSelect}, ${depositRequirementsSelect},
         erf_size::text, floor_area::text, construction_date::text,
         height_restriction::text, out_building_size::text, zoning_type,
         is_furnished, pet_friendly, has_standalone_building, has_flatlet,
@@ -1246,19 +2430,62 @@ router.get('/:id', async (req, res) => {
       }
     }
 
+    // Fallback: if migration.listing_agents is empty, try public.listing_associates
+    let agentRows = agents.rows;
+    if (agentRows.length === 0) {
+      const fallbackAgents = await pool.query(
+        `SELECT
+           la.id::text,
+           COALESCE(ca.id::text, la."associateId"::text) AS associate_id,
+           (pa."firstName" || ' ' || pa."lastName") AS agent_name,
+           'Agent' AS agent_role,
+           la."isPrimary" AS is_primary,
+           NULL::text AS market_center_id,
+           (ROW_NUMBER() OVER (ORDER BY la."isPrimary" DESC) - 1)::int AS sort_order
+         FROM listing_associates la
+         JOIN associates pa ON pa.id = la."associateId"
+         LEFT JOIN migration.core_associates ca ON ca.national_id = pa."nationalId"
+         WHERE la."listingId" = (
+           SELECT pl.id FROM listings pl
+           JOIN migration.core_listings cl ON cl.listing_number = pl."listingNumber"
+           WHERE cl.id = $1
+           LIMIT 1
+         )
+         ORDER BY la."isPrimary" DESC, la.id`,
+        [id]
+      );
+      agentRows = fallbackAgents.rows;
+    }
+
+    // Normalize signed_date: if DB column is null, extract from listing_payload
+    if (!row.signed_date && row.listing_payload) {
+      const payload = row.listing_payload as Record<string, unknown>;
+      const payloadDate = typeof payload.signed_date === 'string' ? payload.signed_date : '';
+      if (payloadDate) {
+        const m = payloadDate.match(/^(\d{4})[/-](\d{2})[/-](\d{2})/);
+        if (m) row.signed_date = `${m[1]}-${m[2]}-${m[3]}`;
+      }
+    }
+
+    const normalizedFeatures = normalizeListingFeatures(features.rows as LegacyFeatureRow[]);
+    const normalizedAreas = normalizeListingPropertyAreas(
+      areas.rows as LegacyAreaRow[],
+      features.rows as LegacyFeatureRow[],
+    );
+
     return res.json({
       ...row,
       image_urls: imageUrls,
       thumbnail_url: imageUrls[0] ?? null,
-      agents: agents.rows,
+      agents: agentRows,
       contacts: contacts.rows,
       normalized_images: images.rows,
       show_times: showTimes.rows,
       open_house: openHouse.rows,
-      marketing_urls: marketingUrls.rows,
+      marketing_urls: marketingUrls.rows.map((row) => normalizeMarketingUrlRecord(row as Record<string, unknown>)),
       mandate_documents: mandateDocs.rows,
-      features: features.rows,
-      property_areas: areas.rows,
+      features: normalizedFeatures,
+      property_areas: normalizedAreas,
       mc_entegral_portals: mcEntegralPortals,
     });
   } catch (error) {
@@ -1273,6 +2500,8 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', resolvePermissions, async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+
+  await ensureRentalOptionalColumns();
 
   const perms = req.permissions!;
   const b = req.body as Record<string, unknown>;
@@ -1313,7 +2542,8 @@ router.post('/', resolvePermissions, async (req, res) => {
     return res.status(403).json({ error: 'Permission denied: you may only create listings in your assigned market centre' });
   }
 
-  const listingNumber = toText(b.listing_number);
+  // Always allocate listing numbers server-side to prevent regressions to legacy KWLM values.
+  const listingNumber = await generateNextListingNumber();
   const isDraft = toBool(b.is_draft ?? true);
   const isPublished = toBool(b.is_published ?? false);
   const imageUrls = parseImageUrls(b.image_urls ?? b.listing_images_json);
@@ -1339,6 +2569,7 @@ router.post('/', resolvePermissions, async (req, res) => {
         feed_to_entegral, entegral_sync_status,
         feed_to_property24, property24_ref1, property24_ref2, property24_sync_status,
         signed_date, on_market_since_date, rates_and_taxes, monthly_levy, occupation_date, mandate_type,
+        rental_rate, lease_period, deposit_requirements,
         erf_size, floor_area, construction_date, height_restriction, out_building_size, zoning_type,
         is_furnished, pet_friendly, has_standalone_building, has_flatlet,
         has_backup_water, wheelchair_accessible, has_generator,
@@ -1355,9 +2586,10 @@ router.post('/', resolvePermissions, async (req, res) => {
         $38,$39::numeric,$40::numeric,$41,$42,$43,
         $44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,$61,
         $62::date,$63::date,$64::numeric,$65::numeric,$66::date,$67,
-        $68::numeric,$69::numeric,$70::date,$71::numeric,$72::numeric,$73,
-        $74,$75,$76,$77,$78,$79,$80,$81,$82,$83,$84,$85,$86,$87,$88,$89,$90,$91,$92,$93,
-        $94,$95,$96,$97,$98::jsonb,$99::jsonb
+        $68,$69,$70,
+        $71::numeric,$72::numeric,$73::date,$74::numeric,$75::numeric,$76,
+        $77,$78,$79,$80,$81,$82,$83,$84,$85,$86,$87,$88,$89,$90,$91,$92,$93,$94,$95,$96,
+        $97,$98,$99,$100,$101::jsonb,$102::jsonb
       ) RETURNING id::text`,
       params
     );
@@ -1378,6 +2610,8 @@ router.post('/', resolvePermissions, async (req, res) => {
 
 router.put('/:id', resolvePermissions, async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+
+  await ensureRentalOptionalColumns();
 
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid listing id.' });
@@ -1451,7 +2685,15 @@ router.put('/:id', resolvePermissions, async (req, res) => {
     marketCenterId = mc.rows[0]?.id ? Number(mc.rows[0].id) : null;
   }
 
-  const listingNumber = toText(b.listing_number);
+  const incomingListingNumber = toText(b.listing_number);
+  let listingNumber: string | null = incomingListingNumber;
+  if (!isCanonicalKwlListingNumber(listingNumber)) {
+    const existingListingNumber = await pool.query<{ listing_number: string | null }>(
+      `SELECT listing_number FROM migration.core_listings WHERE id = $1 LIMIT 1`,
+      [id]
+    );
+    listingNumber = existingListingNumber.rows[0]?.listing_number ?? null;
+  }
   const isDraft = toBool(b.is_draft ?? false);
   const isPublished = toBool(b.is_published ?? false);
   const imageUrls = parseImageUrls(b.image_urls ?? b.listing_images_json);
@@ -1479,16 +2721,17 @@ router.put('/:id', resolvePermissions, async (req, res) => {
         feed_to_property24=$58, property24_ref1=$59, property24_ref2=$60, property24_sync_status=$61,
         signed_date=$62::date, on_market_since_date=$63::date, rates_and_taxes=$64::numeric,
         monthly_levy=$65::numeric, occupation_date=$66::date, mandate_type=$67,
-        erf_size=$68::numeric, floor_area=$69::numeric, construction_date=$70::date,
-        height_restriction=$71::numeric, out_building_size=$72::numeric, zoning_type=$73,
-        is_furnished=$74, pet_friendly=$75, has_standalone_building=$76, has_flatlet=$77,
-        has_backup_water=$78, wheelchair_accessible=$79, has_generator=$80,
-        has_borehole=$81, has_gas_geyser=$82, has_solar_panels=$83, has_backup_battery_or_inverter=$84,
-        has_solar_geyser=$85, has_water_tank=$86,
-        adsl=$87, fibre=$88, isdn=$89, dialup=$90, fixed_wimax=$91, satellite=$92,
-        nearby_bus_service=$93, nearby_minibus_taxi_service=$94, nearby_train_service=$95,
-        is_draft=$96, is_published=$97,
-        listing_images_json=$98::jsonb, listing_payload=$99::jsonb,
+        rental_rate=$68, lease_period=$69, deposit_requirements=$70,
+        erf_size=$71::numeric, floor_area=$72::numeric, construction_date=$73::date,
+        height_restriction=$74::numeric, out_building_size=$75::numeric, zoning_type=$76,
+        is_furnished=$77, pet_friendly=$78, has_standalone_building=$79, has_flatlet=$80,
+        has_backup_water=$81, wheelchair_accessible=$82, has_generator=$83,
+        has_borehole=$84, has_gas_geyser=$85, has_solar_panels=$86, has_backup_battery_or_inverter=$87,
+        has_solar_geyser=$88, has_water_tank=$89,
+        adsl=$90, fibre=$91, isdn=$92, dialup=$93, fixed_wimax=$94, satellite=$95,
+        nearby_bus_service=$96, nearby_minibus_taxi_service=$97, nearby_train_service=$98,
+        is_draft=$99, is_published=$100,
+        listing_images_json=$101::jsonb, listing_payload=$102::jsonb,
         updated_at=NOW()
        WHERE id=$1 RETURNING id::text`,
       [id, ...params.slice(1)]
@@ -1544,21 +2787,21 @@ router.put('/:id', resolvePermissions, async (req, res) => {
           );
         }
 
+        const approvedListingStatusTag = deriveApprovedListingStatusTag(b.sale_or_rent, b.listing_status_tag);
+
         await pool.query(
           `UPDATE migration.core_listings
               SET is_draft = false,
                   is_published = true,
-                  listing_status_tag = CASE
-                    WHEN LOWER(TRIM(COALESCE(listing_status_tag, ''))) = 'pending approval' THEN 'Approved'
-                    ELSE listing_status_tag
-                  END,
-                  status_name = CASE
-                    WHEN LOWER(TRIM(COALESCE(listing_status_tag, ''))) = 'pending approval' THEN 'Approved'
-                    ELSE status_name
+                  listing_status_tag = $2,
+                  status_name = 'Active',
+                  listing_payload = CASE
+                    WHEN listing_payload IS NULL THEN NULL
+                    ELSE listing_payload - 'approval_context'
                   END,
                   updated_at = NOW()
             WHERE id = $1`,
-          [id]
+          [id, approvedListingStatusTag]
         );
 
         await pool.query(
@@ -1635,6 +2878,7 @@ function buildListingParams(
     toBool(b.feed_to_property24), toText(b.property24_ref1), toText(b.property24_ref2), toText(b.property24_sync_status),
     toDateValue(b.signed_date), toDateValue(b.on_market_since_date), toNumber(b.rates_and_taxes), toNumber(b.monthly_levy),
     toDateValue(b.occupation_date), toText(b.mandate_type),
+    toText(b.rental_rate), toText(b.lease_period), toText(b.deposit_requirements),
     toNumber(b.erf_size), toNumber(b.floor_area), toDateValue(b.construction_date),
     toNumber(b.height_restriction), toNumber(b.out_building_size), toText(b.zoning_type),
     toBool(b.is_furnished), toBool(b.pet_friendly), toBool(b.has_standalone_building), toBool(b.has_flatlet),
@@ -1649,14 +2893,14 @@ function buildListingParams(
   ];
 }
 
-type AgentEntry = { associate_id?: string | null; agent_name?: string | null; agent_role?: string; is_primary?: boolean; market_center_id?: string | null; sort_order?: number };
-type ContactEntry = { full_name?: string | null; phone_number?: string | null; email_address?: string | null; sort_order?: number };
-type ShowTimeEntry = { from_date?: string; from_time?: string; to_date?: string; to_time?: string; catch_phrase?: string; sort_order?: number };
-type OpenHouseEntry = { open_house_date?: string; from_time?: string; to_time?: string; average_price?: string; comments?: string; sort_order?: number };
-type MarketingUrlEntry = { url?: string; url_type?: string; display_name?: string; sort_order?: number };
-type FeatureEntry = { feature_category?: string; feature_value?: string; sort_order?: number };
-type PropertyAreaEntry = { area_type?: string; count?: number; size?: number; description?: string; sub_features?: string[] | string | null; sort_order?: number };
-type NormalizedImageEntry = { file_url?: string; file_name?: string; media_type?: string; uploaded_by?: string; sort_order?: number };
+type AgentEntry = { associate_id?: string | null; agent_name?: string | null; agent_role?: string; is_primary?: boolean; market_center_id?: string | null; sort_order?: number | string | null };
+type ContactEntry = { full_name?: string | null; phone_number?: string | null; email_address?: string | null; sort_order?: number | string | null };
+type ShowTimeEntry = { from_date?: string; from_time?: string; to_date?: string; to_time?: string; catch_phrase?: string; sort_order?: number | string | null };
+type OpenHouseEntry = { open_house_date?: string; from_time?: string; to_time?: string; average_price?: string; comments?: string; sort_order?: number | string | null };
+type MarketingUrlEntry = { url?: string; url_type?: string; display_name?: string; sort_order?: number | string | null };
+type FeatureEntry = { feature_category?: string; feature_value?: string; sort_order?: number | string | null };
+type PropertyAreaEntry = { area_type?: string; count?: number | string | null; size?: number | string | null; description?: string; sub_features?: string[] | string | null; sort_order?: number | string | null };
+type NormalizedImageEntry = { file_url?: string; file_name?: string; media_type?: string; uploaded_by?: string; sort_order?: number | string | null };
 
 async function saveSubTables(pg: Pool, listingId: number, b: Record<string, unknown>): Promise<void> {
   if (Array.isArray(b.agents)) {
@@ -1665,7 +2909,7 @@ async function saveSubTables(pg: Pool, listingId: number, b: Record<string, unkn
       await pg.query(
         `INSERT INTO migration.listing_agents (listing_id, associate_id, agent_name, agent_role, is_primary, market_center_id, sort_order)
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [listingId, toNumber(agent.associate_id), toText(agent.agent_name), toText(agent.agent_role) ?? 'Primary', toBool(agent.is_primary), toNumber(agent.market_center_id), agent.sort_order ?? i]
+        [listingId, toNumber(agent.associate_id), toText(agent.agent_name), toText(agent.agent_role) ?? 'Primary', toBool(agent.is_primary), toNumber(agent.market_center_id), toInteger(agent.sort_order, i)]
       );
     }
   }
@@ -1675,7 +2919,7 @@ async function saveSubTables(pg: Pool, listingId: number, b: Record<string, unkn
     for (const [i, c] of (b.contacts as ContactEntry[]).entries()) {
       await pg.query(
         `INSERT INTO migration.listing_contacts (listing_id, full_name, phone_number, email_address, sort_order) VALUES ($1,$2,$3,$4,$5)`,
-        [listingId, toText(c.full_name), toText(c.phone_number), toText(c.email_address), c.sort_order ?? i]
+        [listingId, toText(c.full_name), toText(c.phone_number), toText(c.email_address), toInteger(c.sort_order, i)]
       );
     }
   }
@@ -1686,7 +2930,7 @@ async function saveSubTables(pg: Pool, listingId: number, b: Record<string, unkn
       await pg.query(
         `INSERT INTO migration.listing_show_times (listing_id, from_date, from_time, to_date, to_time, catch_phrase, sort_order)
          VALUES ($1,$2::date,$3,$4::date,$5,$6,$7)`,
-        [listingId, toDateValue(st.from_date), toText(st.from_time), toDateValue(st.to_date), toText(st.to_time), toText(st.catch_phrase), st.sort_order ?? i]
+        [listingId, toDateValue(st.from_date), toText(st.from_time), toDateValue(st.to_date), toText(st.to_time), toText(st.catch_phrase), toInteger(st.sort_order, i)]
       );
     }
   }
@@ -1697,7 +2941,7 @@ async function saveSubTables(pg: Pool, listingId: number, b: Record<string, unkn
       await pg.query(
         `INSERT INTO migration.listing_open_house (listing_id, open_house_date, from_time, to_time, average_price, comments, sort_order)
          VALUES ($1,$2::date,$3,$4,$5,$6,$7)`,
-        [listingId, toDateValue(oh.open_house_date), toText(oh.from_time), toText(oh.to_time), toText(oh.average_price), toText(oh.comments), oh.sort_order ?? i]
+        [listingId, toDateValue(oh.open_house_date), toText(oh.from_time), toText(oh.to_time), toText(oh.average_price), toText(oh.comments), toInteger(oh.sort_order, i)]
       );
     }
   }
@@ -1705,10 +2949,12 @@ async function saveSubTables(pg: Pool, listingId: number, b: Record<string, unkn
   if (Array.isArray(b.marketing_urls)) {
     await pg.query(`DELETE FROM migration.listing_marketing_urls WHERE listing_id = $1`, [listingId]);
     for (const [i, mu] of (b.marketing_urls as MarketingUrlEntry[]).entries()) {
-      if (!toText(mu.url)) continue;
+      const normalizedUrlType = normalizeMarketingUrlType(mu.url_type);
+      const normalizedUrl = normalizeMarketingUrl(mu.url, normalizedUrlType);
+      if (!toText(normalizedUrl)) continue;
       await pg.query(
         `INSERT INTO migration.listing_marketing_urls (listing_id, url, url_type, display_name, sort_order) VALUES ($1,$2,$3,$4,$5)`,
-        [listingId, toText(mu.url), toText(mu.url_type), toText(mu.display_name), mu.sort_order ?? i]
+        [listingId, normalizedUrl, normalizedUrlType, toText(mu.display_name), toInteger(mu.sort_order, i)]
       );
     }
   }
@@ -1719,19 +2965,29 @@ async function saveSubTables(pg: Pool, listingId: number, b: Record<string, unkn
       if (!toText(f.feature_category) || !toText(f.feature_value)) continue;
       await pg.query(
         `INSERT INTO migration.listing_features (listing_id, feature_category, feature_value, sort_order) VALUES ($1,$2,$3,$4)`,
-        [listingId, toText(f.feature_category), toText(f.feature_value), f.sort_order ?? i]
+        [listingId, toText(f.feature_category), toText(f.feature_value), toInteger(f.sort_order, i)]
       );
     }
   }
 
   if (Array.isArray(b.property_areas)) {
+    await ensureListingAreaCountSupportsDecimals(pg);
     await pg.query(`DELETE FROM migration.listing_property_areas WHERE listing_id = $1`, [listingId]);
     for (const [i, pa] of (b.property_areas as PropertyAreaEntry[]).entries()) {
       if (!toText(pa.area_type)) continue;
       const subFeatures = parseTextArray(pa.sub_features);
+      const areaCount = toNumber(pa.count);
       await pg.query(
         `INSERT INTO migration.listing_property_areas (listing_id, area_type, count, size, description, sub_features, sort_order) VALUES ($1,$2,$3,$4::numeric,$5,$6::jsonb,$7)`,
-        [listingId, toText(pa.area_type), pa.count ?? null, toNumber(pa.size), toText(pa.description), JSON.stringify(subFeatures), pa.sort_order ?? i]
+        [
+          listingId,
+          toText(pa.area_type),
+          areaCount,
+          toNumber(pa.size),
+          toText(pa.description),
+          JSON.stringify(subFeatures),
+          toInteger(pa.sort_order, i),
+        ]
       );
     }
   }
@@ -1742,7 +2998,7 @@ async function saveSubTables(pg: Pool, listingId: number, b: Record<string, unkn
       if (!toText(img.file_url)) continue;
       await pg.query(
         `INSERT INTO migration.listing_images (listing_id, file_name, file_url, media_type, sort_order, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6)`,
-        [listingId, toText(img.file_name), toText(img.file_url), toText(img.media_type) ?? 'image', img.sort_order ?? i, toText(img.uploaded_by)]
+        [listingId, toText(img.file_name), toText(img.file_url), toText(img.media_type) ?? 'image', toInteger(img.sort_order, i), toText(img.uploaded_by)]
       );
     }
   }
@@ -1826,6 +3082,28 @@ router.post('/:id/mandate-documents/upload', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Delete a single mandate document
+// ---------------------------------------------------------------------------
+router.delete('/:id/mandate-documents/:docId', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+  const id = Number(req.params.id);
+  const docId = Number(req.params.docId);
+  if (!Number.isFinite(id) || !Number.isFinite(docId)) return res.status(400).json({ error: 'Invalid id.' });
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM migration.listing_mandate_documents WHERE id = $1 AND listing_id = $2 RETURNING id`,
+      [docId, id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Document not found.' });
+    return res.status(200).json({ deleted: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ error: message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Publish listing to Property24
 // ---------------------------------------------------------------------------
 
@@ -1872,6 +3150,46 @@ function mapFurnishedStatusForProperty24(value: unknown): 'Yes' | 'No' {
   return toBool(value) ? 'Yes' : 'No';
 }
 
+function buildRentalRateCandidatesForProperty24(value: unknown): Array<string | number | null> {
+  const text = (toText(value) ?? '').trim();
+  if (!text) return [null];
+
+  const normalized = text
+    .replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  const compact = normalized.replace(/[^a-z0-9]/g, '');
+
+  const enumNames = ['Monthly', 'Weekly', 'Daily', 'Yearly', 'PerSquareMeter'] as const;
+
+  const fromIndex = (index: number): Array<string | number> => {
+    const safeIndex = Math.max(0, Math.min(index, enumNames.length - 1));
+    return [enumNames[safeIndex], safeIndex, String(safeIndex)];
+  };
+
+  if (/^[0-4]$/.test(text)) return fromIndex(Number(text));
+
+  switch (compact) {
+    case 'monthly':
+      return fromIndex(0);
+    case 'weekly':
+      return fromIndex(1);
+    case 'daily':
+      return fromIndex(2);
+    case 'yearly':
+      return fromIndex(3);
+    case 'persquaremeter':
+    case 'persquaremetre':
+    case 'sqm':
+    case 'm2':
+      return ['PerSquareMeter', 'PerSquareMetre', 4, '4', 'Per Square Meter', 'Per Square Metre', null];
+    default:
+      return [text, null];
+  }
+}
+
 function pickNumericString(value: unknown): string | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
     const numeric = Math.trunc(value);
@@ -1885,6 +3203,20 @@ function pickNumericString(value: unknown): string | null {
   }
 
   return null;
+}
+
+function extractP24AgentIdFromText(value: unknown): string | null {
+  const text = toText(value);
+  if (!text) return null;
+
+  // Handles variants like: "AgentId 567457", "AgentId:567457", or "agent id already exists (567457)".
+  const explicitMatch = text.match(/agent\s*id[^0-9]*(\d{3,})/i);
+  if (explicitMatch?.[1]) {
+    return explicitMatch[1];
+  }
+
+  // Fallback for payloads that only include the numeric id text.
+  return pickNumericString(text);
 }
 
 function pickIdString(value: unknown): string | null {
@@ -2494,6 +3826,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         cl.override_display_longitude::text, cl.override_display_latitude::text,
         cl.erf_size::text, cl.floor_area::text,
         cl.rates_and_taxes::text, cl.monthly_levy::text,
+        cl.rental_rate, cl.lease_period, cl.deposit_requirements,
         cl.is_furnished, cl.pet_friendly, cl.retirement_living,
         cl.has_flatlet, cl.property_auction,
         cl.no_transfer_duty, cl.occupation_date,
@@ -2512,8 +3845,9 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     const listing = listingResult.rows[0] as Record<string, unknown>;
 
     const agentResult = await pool.query(
-      `SELECT a.id AS associate_id, a.market_center_id, a.source_market_center_id, a.source_team_id,
-              a.agent_property24_id, COALESCE(a.full_name, la.agent_name) AS agent_name,
+            `SELECT a.id AS associate_id, a.market_center_id, a.source_market_center_id, a.source_team_id,
+              a.agent_property24_id, a.property24_opt_in, a.property24_status,
+              COALESCE(a.full_name, la.agent_name) AS agent_name,
               COALESCE(a.kwsa_email, a.private_email, a.email) AS agent_email,
               COALESCE(a.mobile_number, a.office_number) AS agent_phone,
               la.is_primary, la.sort_order
@@ -2600,7 +3934,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
 
     // Load bedroom/bathroom counts from property areas
     const areasResult = await pool.query(
-      `SELECT area_type, MAX(count)::int AS count
+      `SELECT area_type, MAX(count)::numeric AS count
        FROM migration.listing_property_areas
        WHERE listing_id = $1
          AND LOWER(TRIM(COALESCE(area_type, ''))) IN ('bedroom', 'bathroom', 'garage', 'parking')
@@ -2609,12 +3943,35 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     );
 
     const areaCounts: Record<string, number> = {};
-    for (const row of areasResult.rows as Array<{ area_type: string; count: number }>) {
-      areaCounts[row.area_type.toLowerCase().trim()] = row.count ?? 0;
+    for (const row of areasResult.rows as Array<{ area_type: string; count: unknown }>) {
+      const parsedCount = toNumber(row.count) ?? 0;
+      areaCounts[row.area_type.toLowerCase().trim()] = parsedCount;
     }
+
+    const showWindows = await loadListingShowWindows(pool, id);
 
     // Load image URLs (fallback to listing_images table when legacy json cache is empty)
     const imageUrls = await resolveListingImageUrls(pool, id, listing.listing_images_json);
+    const marketingUrlsResult = await pool.query<{
+      url: string | null;
+      url_type: string | null;
+      display_name: string | null;
+      sort_order: number | null;
+    }>(
+      `SELECT url, url_type, display_name, sort_order
+       FROM migration.listing_marketing_urls
+       WHERE listing_id = $1
+       ORDER BY sort_order ASC NULLS LAST, id ASC`,
+      [id],
+    );
+    const marketingUrls = marketingUrlsResult.rows
+      .map((row) => normalizeMarketingUrlRecord(row as Record<string, unknown>))
+      .map((row) => ({
+        url: typeof row.url === 'string' ? row.url.trim() : '',
+        url_type: typeof row.url_type === 'string' ? row.url_type.trim() : '',
+      }))
+      .filter((row) => row.url.length > 0);
+    const portalMedia = pickPortalMediaFromMarketingUrls(marketingUrls);
 
     // Determine existing reference and whether this is a withdraw action
     const existingRef = toText(listing.property24_ref1) ?? toText(listing.property24_ref2);
@@ -2647,14 +4004,79 @@ router.post('/:id/publish-to-property24', async (req, res) => {
 
     const listingType = mapListingTypeToProperty24(listing.sale_or_rent);
     const description = toText(listing.property_description) ?? toText(listing.short_description) ?? '';
+    const descriptionWithShowWindows = appendShowWindowSummary(description, showWindows);
     const descriptionHeader =
       toText(listing.property_title) ??
       toText(listing.short_title) ??
       toText(listing.short_description) ??
       description.slice(0, 500);
 
+    const listingCountryName =
+      toText(listing.country) ??
+      toText(marketCenterAddress?.country) ??
+      'South Africa';
+    const listingProvinceName = toText(listing.province) ?? toText(marketCenterAddress?.province);
+    const listingCityName = toText(listing.city) ?? toText(marketCenterAddress?.city);
+
+    const listingApiBase = buildP24Url().replace(/\/listings(?:\/)?$/i, '');
+    const p24AuthHeaders: Record<string, string> = {
+      'Authorization': `Basic ${Buffer.from(p24ApiKeyValue, 'utf8').toString('base64')}`,
+    };
+    if (p24UserGroupId) {
+      p24AuthHeaders['P24-UserGroupId'] = p24UserGroupId;
+    }
+
+    let resolvedAgentCountryId: number | null = null;
+    let resolvedAgentCityId: number | null = null;
+    try {
+      const countriesResp = await fetch(`${listingApiBase}/countries`, { method: 'GET', headers: p24AuthHeaders });
+      if (countriesResp.ok) {
+        const countries = await countriesResp.json() as Array<{ id?: number | string | null; name?: string | null }>;
+        const matchingCountry = countries.find((entry) => matchesAreaName(listingCountryName, entry?.name));
+        const parsedCountryId = pickNumericString(matchingCountry?.id);
+        if (parsedCountryId) {
+          resolvedAgentCountryId = Number(parsedCountryId);
+        }
+      }
+
+      if (!resolvedAgentCountryId && matchesAreaName('South Africa', listingCountryName)) {
+        resolvedAgentCountryId = 1;
+      }
+
+      if (resolvedAgentCountryId && listingProvinceName && listingCityName) {
+        const provincesUrl = new URL(`${listingApiBase}/provinces`);
+        provincesUrl.searchParams.set('countryId', String(resolvedAgentCountryId));
+        const provincesResp = await fetch(provincesUrl.toString(), { method: 'GET', headers: p24AuthHeaders });
+        if (provincesResp.ok) {
+          const provinces = await provincesResp.json() as Array<{ id?: number | string | null; name?: string | null }>;
+          const matchingProvince = provinces.find((entry) => matchesAreaName(listingProvinceName, entry?.name));
+          const parsedProvinceId = pickNumericString(matchingProvince?.id);
+          if (parsedProvinceId) {
+            const citiesUrl = new URL(`${listingApiBase}/cities`);
+            citiesUrl.searchParams.set('provinceId', parsedProvinceId);
+            const citiesResp = await fetch(citiesUrl.toString(), { method: 'GET', headers: p24AuthHeaders });
+            if (citiesResp.ok) {
+              const cities = await citiesResp.json() as Array<{
+                id?: number | string | null;
+                name?: string | null;
+                alternateNames?: Array<{ name?: string | null }> | null;
+              }>;
+              const matchingCity = cities.find((entry) => matchesAreaName(listingCityName, entry?.name, entry?.alternateNames));
+              const parsedCityId = pickNumericString(matchingCity?.id);
+              if (parsedCityId) {
+                resolvedAgentCityId = Number(parsedCityId);
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Best effort only; registration call will still include fallback country when possible.
+    }
+
     // Auto-register any agents that have no P24 ID yet (mirrors legacy C# AddAgentsToP24ForListingFeed)
     for (const agentRow of agentResult.rows as Array<Record<string, unknown>>) {
+      if (!agentRow.property24_opt_in) continue; // Only register agents who have opted in to P24
       if (agentRow.agent_property24_id) continue;
       const assocId = agentRow.associate_id != null ? Number(agentRow.associate_id) : NaN;
       if (!Number.isFinite(assocId)) continue;
@@ -2670,11 +4092,11 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         const assocResult = await pool.query<{
           first_name: string | null; last_name: string | null; kwsa_email: string | null;
           mobile_number: string | null; office_number: string | null; national_id: string | null;
-          ffc_number: string | null; source_associate_id: string | null;
+          ffc_number: string | null; image_url: string | null; source_associate_id: string | null;
           source_market_center_id: string | null; kwuid: string | null; status_name: string | null;
         }>(
           `SELECT first_name, last_name, kwsa_email, mobile_number, office_number, national_id,
-                  ffc_number, source_associate_id, source_market_center_id, kwuid, status_name
+                  ffc_number, image_url, source_associate_id, source_market_center_id, kwuid, status_name
            FROM migration.core_associates WHERE id = $1 LIMIT 1`,
           [assocId],
         );
@@ -2687,7 +4109,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         const jobTitles = jtResult.rows.map((r) => r.job_title);
         const mc2 = mcId ?? '';
         const uid2 = ar.kwuid ?? ar.source_associate_id ?? '';
-        const agentBody = {
+        const agentBody: Record<string, unknown> = {
           firstname: ar.first_name ?? '',
           lastname: ar.last_name ?? '',
           emailAddress: ar.kwsa_email ?? '',
@@ -2702,7 +4124,28 @@ router.post('/:id/publish-to-property24', async (req, res) => {
           receiveStatsMail: true,
           status: 'Active',
         };
-        const p24AgentsBase = buildP24Url().replace(/\/listings(?:\/)?$/i, '');
+        if (resolvedAgentCountryId) {
+          agentBody.countryId = resolvedAgentCountryId;
+        }
+        if (resolvedAgentCityId) {
+          agentBody.cityId = resolvedAgentCityId;
+        }
+        const imageUrl = toText(ar.image_url);
+        if (imageUrl) {
+          try {
+            const imageResp = await fetch(imageUrl);
+            if (imageResp.ok) {
+              const imageBytes = Buffer.from(await imageResp.arrayBuffer()).toString('base64');
+              if (imageBytes.length > 0) {
+                const caption = `${ar.first_name ?? ''} ${ar.last_name ?? ''}`.trim() || 'Agent profile';
+                agentBody.profilePicture = { bytes: imageBytes, caption };
+              }
+            }
+          } catch {
+            // Optional field: continue registration even if the image fetch fails.
+          }
+        }
+        const p24AgentsBase = listingApiBase;
         const p24AuthHdrs: Record<string, string> = {
           'Authorization': `Basic ${Buffer.from(p24ApiKeyValue, 'utf8').toString('base64')}`,
           'Content-Type': 'application/json',
@@ -2726,33 +4169,200 @@ router.post('/:id/publish-to-property24', async (req, res) => {
             console.info(`[P24] Auto-registered agent ${assocId} → P24 ID ${newP24Id} during listing publish`);
           }
         } else {
-          console.warn(`[P24] Auto-register agent ${assocId} during publish HTTP ${createResp.status}: ${(await createResp.text()).slice(0, 200)}`);
+          const rawErrBody = await createResp.text();
+          const existingP24AgentId = extractP24AgentIdFromText(rawErrBody);
+          if (existingP24AgentId) {
+            agentRow.agent_property24_id = existingP24AgentId;
+            await pool.query(
+              `UPDATE migration.core_associates
+               SET agent_property24_id = $1, property24_status = 'Registered (linked existing)', updated_at = NOW()
+               WHERE id = $2`,
+              [existingP24AgentId, assocId],
+            );
+            console.info(`[P24] Linked existing agent ${assocId} -> P24 ID ${existingP24AgentId} during listing publish`);
+            continue;
+          }
+
+          const errBody = rawErrBody.slice(0, 200);
+          const p24ErrMsg = `P24 HTTP ${createResp.status}: ${errBody}`;
+          console.warn(`[P24] Auto-register agent ${assocId} during publish ${p24ErrMsg}`);
+          agentRow.p24_reg_error = p24ErrMsg;
+          await pool.query(
+            `UPDATE migration.core_associates
+             SET property24_status = $1, updated_at = NOW()
+             WHERE id = $2`,
+            [`Registration failed: ${p24ErrMsg}`.slice(0, 490), assocId],
+          );
         }
       } catch (autoRegErr) {
         console.warn(`[P24] Auto-register agent ${assocId} during publish error:`, autoRegErr);
+        await pool.query(
+          `UPDATE migration.core_associates
+           SET property24_status = 'Registration failed - retry via profile', updated_at = NOW()
+           WHERE id = $1`,
+          [assocId],
+        ).catch(() => {/* best-effort */});
+      }
+    }
+
+    // Sync agent images for existing P24 agents
+    for (const agentRow of agentResult.rows as Array<Record<string, unknown>>) {
+      if (!agentRow.property24_opt_in) continue;
+      const p24AgentId = pickNumericString(agentRow.agent_property24_id);
+      if (!p24AgentId) continue;
+      const assocId = agentRow.associate_id != null ? Number(agentRow.associate_id) : NaN;
+      if (!Number.isFinite(assocId)) continue;
+        console.info(`[P24] Attempting image sync for associate ${assocId} (P24 ${p24AgentId})`);
+
+      try {
+        const assocResult = await pool.query<{
+          first_name: string | null; last_name: string | null; image_url: string | null;
+          kwsa_email: string | null; mobile_number: string | null; office_number: string | null;
+          national_id: string | null; ffc_number: string | null; source_associate_id: string | null;
+          source_market_center_id: string | null; kwuid: string | null;
+        }>(
+          `SELECT first_name, last_name, image_url, kwsa_email, mobile_number, office_number,
+                  national_id, ffc_number, source_associate_id, source_market_center_id, kwuid
+           FROM migration.core_associates WHERE id = $1 LIMIT 1`,
+          [assocId],
+        );
+        const ar = assocResult.rows[0];
+        if (!ar || !ar.image_url) {
+          console.warn(`[P24] Skipping image sync for associate ${assocId}: no image_url`);
+          continue;
+        }
+
+        const resolved = await resolveExternalImageUrls([ar.image_url], req);
+        const imageSource = resolved.urls[0];
+        let sourceBuffer: Buffer | null = null;
+        if (imageSource) {
+          const imageResp = await fetch(imageSource);
+          if (imageResp.ok) {
+            sourceBuffer = Buffer.from(await imageResp.arrayBuffer());
+          } else {
+            console.warn(`[P24] Agent ${assocId}: image fetch failed HTTP ${imageResp.status} from ${imageSource}`);
+          }
+        }
+
+        // Local uploads may be stored as relative paths like /uploads/images/*.jpg.
+        // Fallback to reading from local disk when external URL resolution is unavailable.
+        if (!sourceBuffer && ar.image_url.startsWith('/uploads/images/')) {
+          try {
+            const imageFilename = path.basename(ar.image_url);
+            const localImagePath = path.join(resolveLocalUploadDir('images'), imageFilename);
+            sourceBuffer = await readFile(localImagePath);
+          } catch (localReadErr) {
+            console.warn(`[P24] Agent ${assocId}: local image read failed for ${ar.image_url}:`, localReadErr);
+          }
+        }
+
+        if (!sourceBuffer) {
+          console.warn(`[P24] Skipping image sync for associate ${assocId}: could not load image bytes from ${ar.image_url}`);
+          continue;
+        }
+
+        const sharpModule = await loadSharp() as Record<string, unknown> | ((input: Buffer) => {
+          resize: (...args: unknown[]) => unknown;
+          jpeg: (...args: unknown[]) => unknown;
+          toBuffer: () => Promise<Buffer>;
+        });
+        const sharpFactory = (typeof sharpModule === 'function'
+          ? sharpModule
+          : sharpModule.default) as (input: Buffer) => {
+          resize: (...args: unknown[]) => {
+            jpeg: (...args: unknown[]) => {
+              toBuffer: () => Promise<Buffer>;
+            };
+          };
+        };
+
+        const jpegBuffer = await sharpFactory(sourceBuffer)
+          .resize(1080, 1080, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
+          .jpeg({ quality: 85, progressive: true })
+          .toBuffer();
+
+        if (jpegBuffer.length === 0) continue;
+
+        const caption = `${ar.first_name ?? ''} ${ar.last_name ?? ''}`.trim() || 'Agent profile';
+        const p24AuthHdrs: Record<string, string> = {
+          'Authorization': `Basic ${Buffer.from(p24ApiKeyValue, 'utf8').toString('base64')}`,
+          'Content-Type': 'application/json',
+        };
+        if (p24UserGroupId) p24AuthHdrs['P24-UserGroupId'] = p24UserGroupId;
+
+        const mcId = toText(agentRow.source_market_center_id) ?? ar.source_market_center_id ?? '';
+        const mcResult = await pool.query<{ market_center_property24_id: string | null }>(
+          `SELECT market_center_property24_id FROM migration.core_market_centers
+           WHERE source_market_center_id = $1 LIMIT 1`,
+          [mcId],
+        );
+        const rawMcP24 = mcResult.rows[0]?.market_center_property24_id;
+        const agencyIdForAgent = rawMcP24 ? Number(rawMcP24) : (p24DefaultAgencyId ? Number(p24DefaultAgencyId) : null);
+
+        const profilePicture = { bytes: jpegBuffer.toString('base64'), caption };
+        const fullAgentPayload: Record<string, unknown> = {
+          id: Number(p24AgentId),
+          agentId: Number(p24AgentId),
+          firstname: ar.first_name ?? '',
+          lastname: ar.last_name ?? '',
+          emailAddress: ar.kwsa_email ?? '',
+          mobileNumber: (ar.mobile_number ?? '').replace(/[()]/g, ''),
+          workNumber: (ar.office_number ?? '').replace(/[()]/g, ''),
+          agencyId: agencyIdForAgent ?? 0,
+          sourceReference: `KW_${mcId}_${ar.kwuid ?? ar.source_associate_id ?? ''}`.replace(/_+$/, ''),
+          fidelityFundCertificationNumber: ar.ffc_number ?? '',
+          idNumber: ar.national_id ?? '',
+          published: true,
+          receiveStatsMail: true,
+          status: 'Active',
+          profilePicture,
+        };
+        if (resolvedAgentCountryId) fullAgentPayload.countryId = resolvedAgentCountryId;
+        if (resolvedAgentCityId) fullAgentPayload.cityId = resolvedAgentCityId;
+
+        const updateAttempts: Array<{ method: 'PUT' | 'POST' | 'PATCH'; url: string; body: Record<string, unknown> }> = [
+          { method: 'PUT', url: `${listingApiBase}/agents`, body: fullAgentPayload },
+          { method: 'PUT', url: `${listingApiBase}/agents/${p24AgentId}`, body: { profilePicture } },
+          { method: 'PATCH', url: `${listingApiBase}/agents/${p24AgentId}`, body: { profilePicture } },
+          { method: 'POST', url: `${listingApiBase}/agents/${p24AgentId}`, body: { profilePicture } },
+        ];
+
+        let synced = false;
+        for (const attempt of updateAttempts) {
+          const updateResp = await fetch(attempt.url, {
+            method: attempt.method,
+            headers: p24AuthHdrs,
+            body: JSON.stringify(attempt.body),
+          });
+          if (updateResp.ok) {
+            console.info(`[P24] Synced agent ${assocId} image to P24 via ${attempt.method} ${attempt.url.endsWith('/agents') ? '/agents' : '/agents/{id}'}`);
+            synced = true;
+            break;
+          }
+
+          const errBody = (await updateResp.text()).slice(0, 200);
+          console.warn(`[P24] Failed agent image sync attempt for ${assocId} via ${attempt.method} ${attempt.url.endsWith('/agents') ? '/agents' : '/agents/{id}'} (HTTP ${updateResp.status}): ${errBody}`);
+        }
+
+        if (!synced) {
+          console.warn(`[P24] All agent image sync attempts failed for associate ${assocId} (P24 ${p24AgentId})`);
+        }
+      } catch (syncErr) {
+        console.warn(`[P24] Agent image sync error for ${assocId}:`, syncErr);
       }
     }
 
     const contactAgentIds = agentResult.rows
-      .map((row) => pickNumericString((row as Record<string, unknown>).agent_property24_id))
+      .filter((row) => (row as Record<string, unknown>).property24_opt_in)
+      .map((row) => {
+        const record = row as Record<string, unknown>;
+        return pickNumericString(record.agent_property24_id)
+          ?? extractP24AgentIdFromText(record.property24_status);
+      })
       .filter((value): value is string => Boolean(value));
 
     const legacySuburbId = extractLegacySuburbId(listing.listing_payload);
-    const listingCountryName =
-      toText(listing.country) ??
-      toText(marketCenterAddress?.country) ??
-      'South Africa';
-    const listingProvinceName = toText(listing.province) ?? toText(marketCenterAddress?.province);
-    const listingCityName = toText(listing.city) ?? toText(marketCenterAddress?.city);
     const listingSuburbName = toText(listing.suburb) ?? toText(marketCenterAddress?.suburb);
-
-    const listingApiBase = buildP24Url().replace(/\/listings(?:\/)?$/i, '');
-    const p24AuthHeaders: Record<string, string> = {
-      'Authorization': `Basic ${Buffer.from(p24ApiKeyValue, 'utf8').toString('base64')}`,
-    };
-    if (p24UserGroupId) {
-      p24AuthHeaders['P24-UserGroupId'] = p24UserGroupId;
-    }
 
     let resolvedSuburbId = legacySuburbId;
     if (!resolvedSuburbId && listingProvinceName && listingCityName && listingSuburbName) {
@@ -2854,6 +4464,8 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         [id, prerequisiteMessage.slice(0, 490)]
       );
 
+      const hasAgentRegErrors = (agentResult.rows as Array<Record<string, unknown>>)
+        .some((r) => Boolean(r.p24_reg_error));
       return res.status(422).json({
         success: false,
         message: prerequisiteMessage,
@@ -2869,6 +4481,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
                 source_team_id: primaryAgent.source_team_id,
               }
             : null,
+          agent_registration_issue: hasAgentRegErrors ? true : undefined,
         },
       });
     }
@@ -2879,7 +4492,11 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       : '***';
 
     const price = Number(listing.price);
-    const p24Photos = await selectPhotosForProperty24(imageUrls);
+    const rentalRateCandidates = buildRentalRateCandidatesForProperty24(listing.rental_rate);
+    const p24PhotoSelection = await selectPhotosForProperty24(imageUrls);
+    const p24Photos = p24PhotoSelection.photos;
+
+    const initialRentalRate = rentalRateCandidates[0] ?? null;
 
     const p24Payload: Record<string, unknown> = {
       agencyId: Number(resolvedAgencyId),
@@ -2892,9 +4509,9 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       listingVisibility: 'public',
       occupationDate: toDateValue(listing.occupation_date),
       expiryDate: expiryDateValue,
-      description,
+      description: descriptionWithShowWindows,
       descriptionHeader,
-      showDays: null,
+      showDays: showWindows.length > 0 ? showWindows : undefined,
       photos: p24Photos.length > 0 ? p24Photos : null,
       propertyInfo: {
         showLocation: toBool(listing.display_address_on_website ?? false),
@@ -3003,7 +4620,11 @@ router.post('/:id/publish-to-property24', async (req, res) => {
           backupBatteryOrInverter: false,
         },
       },
-      rentalInfo: null,
+      rentalInfo: listingType === 'Rental' ? {
+        ...(initialRentalRate !== null ? { rentalRate: initialRentalRate } : {}),
+        leasePeriod: toText(listing.lease_period) ?? null,
+        depositRequirementsComments: toText(listing.deposit_requirements) ?? null,
+      } : null,
       complexInfo: null,
       auctionInfo: toBool(listing.property_auction) ? {} : null,
       commercialInfo: null,
@@ -3012,11 +4633,11 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       developmentId: null,
       lightstoneId: 0,
       repossessed: false,
-      youTubeVideoId: null,
-      matterportSpaceId: null,
+      youTubeVideoId: portalMedia.youTubeVideoId,
+      matterportSpaceId: portalMedia.matterportSpaceId,
       noTransferCost: toBool(listing.no_transfer_duty),
       ignoreForPriceReducedAlerts: false,
-      eyeSpy360Url: null,
+      eyeSpy360Url: portalMedia.eyeSpy360Url,
       isMultiListing: (toText(listing.mandate_type) ?? '').toLowerCase().includes('multi'),
     };
 
@@ -3029,7 +4650,23 @@ router.post('/:id/publish-to-property24', async (req, res) => {
 
     console.info(`[P24] ${apiMethod} ${apiUrl} | listing=${String(listing.listing_number)} | key=${maskedKey}`);
 
-    const p24Response = await fetchWithRetries(
+    const parseP24ResponseBody = (rawText: string): Record<string, unknown> => {
+      try {
+        return JSON.parse(rawText) as Record<string, unknown>;
+      } catch {
+        return { raw: rawText };
+      }
+    };
+
+    const hasStatusConversionError = (body: Record<string, unknown>, rawText: string): boolean => {
+      const bodyText = JSON.stringify(body).toLowerCase();
+      const fallbackText = rawText.toLowerCase();
+      return (bodyText.includes('status') && bodyText.includes('could not be converted'))
+        || (fallbackText.includes('status') && fallbackText.includes('could not be converted'));
+    };
+
+    let publishedStatus = p24Status;
+    let p24Response = await fetchWithRetries(
       apiUrl,
       {
         method: apiMethod,
@@ -3039,13 +4676,78 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       { attempts: 3, timeoutMs: 30000 }
     );
 
-    const responseText = await p24Response.text();
+    let responseText = await p24Response.text();
 
-    let responseBody: Record<string, unknown> = {};
-    try {
-      responseBody = JSON.parse(responseText) as Record<string, unknown>;
-    } catch {
-      responseBody = { raw: responseText };
+    let responseBody: Record<string, unknown> = parseP24ResponseBody(responseText);
+
+    const canRetryWithAlternateRentalRate =
+      !p24Response.ok
+      && listingType === 'Rental'
+      && rentalRateCandidates.length > 1;
+
+    if (canRetryWithAlternateRentalRate) {
+      for (const rentalRateCandidate of rentalRateCandidates.slice(1)) {
+        const baseRentalInfo = p24Payload.rentalInfo as Record<string, unknown> | null;
+        const retryRentalInfo = baseRentalInfo
+          ? (() => {
+              const { rentalRate: _ignored, ...rest } = baseRentalInfo;
+              return rentalRateCandidate !== null
+                ? { ...rest, rentalRate: rentalRateCandidate }
+                : rest;
+            })()
+          : baseRentalInfo;
+
+        const retryPayload = {
+          ...p24Payload,
+          rentalInfo: retryRentalInfo,
+        };
+
+        console.warn(
+          `[P24] Retrying listing ${String(listing.listing_number)} with alternate rentalRate=${String(rentalRateCandidate)}`,
+        );
+
+        p24Response = await fetchWithRetries(
+          apiUrl,
+          {
+            method: apiMethod,
+            headers: p24Headers,
+            body: JSON.stringify(retryPayload),
+          },
+          { attempts: 1, timeoutMs: 30000 },
+        );
+
+        responseText = await p24Response.text();
+        responseBody = parseP24ResponseBody(responseText);
+        if (p24Response.ok) break;
+      }
+    }
+
+    const canRetryWithActiveStatus =
+      p24Response.status === 400
+      && (p24Status === 'Reduced' || p24Status === 'Pending')
+      && hasStatusConversionError(responseBody, responseText);
+
+    if (!p24Response.ok && canRetryWithActiveStatus) {
+      const activeStatusPayload = { ...p24Payload, status: 'Active' };
+      console.warn(
+        `[P24] Retrying listing ${String(listing.listing_number)} with status Active after status conversion error for ${p24Status}`,
+      );
+
+      p24Response = await fetchWithRetries(
+        apiUrl,
+        {
+          method: apiMethod,
+          headers: p24Headers,
+          body: JSON.stringify(activeStatusPayload),
+        },
+        { attempts: 2, timeoutMs: 30000 },
+      );
+
+      responseText = await p24Response.text();
+      responseBody = parseP24ResponseBody(responseText);
+      if (p24Response.ok) {
+        publishedStatus = 'Active';
+      }
     }
 
     console.info(`[P24] Response HTTP ${p24Response.status}: ${JSON.stringify(responseBody).slice(0, 500)}`);
@@ -3084,7 +4786,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       existingRef
     );
 
-    const syncStatus = `${p24Status === 'Withdrawn' ? 'Withdrawn' : 'Published'} ${new Date().toISOString().slice(0, 10)}`;
+    const syncStatus = `${publishedStatus === 'Withdrawn' ? 'Withdrawn' : 'Published'} ${new Date().toISOString().slice(0, 10)}`;
 
     await pool.query(
       `UPDATE migration.core_listings
@@ -3098,13 +4800,29 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       [id, returnedRef, syncStatus, !isWithdraw]
     );
 
-    console.info(`[P24] ${p24Status} successfully: listing=${String(listing.listing_number)} ref=${returnedRef ?? 'n/a'}`);
+    console.info(`[P24] ${publishedStatus} successfully: listing=${String(listing.listing_number)} ref=${returnedRef ?? 'n/a'}`);
+
+    const photoSummary = p24PhotoSelection.sourceCount > 0
+      ? ` Photos sent: ${p24PhotoSelection.selectedCount}/${p24PhotoSelection.sourceCount}.`
+      : '';
+    const warningSummary = p24PhotoSelection.skippedCount > 0
+      ? ` ${p24PhotoSelection.skippedCount} image${p24PhotoSelection.skippedCount === 1 ? '' : 's'} skipped due size/payload limits.`
+      : '';
 
     return res.json({
       success: true,
       property24_reference_id: returnedRef,
-      message: `${p24Status === 'Withdrawn' ? 'Withdrawn from' : 'Published to'} Property24 successfully${returnedRef ? ` (ref: ${returnedRef})` : ''}.`,
-      details: responseBody,
+      message: `${publishedStatus === 'Withdrawn' ? 'Withdrawn from' : 'Published to'} Property24 successfully${returnedRef ? ` (ref: ${returnedRef})` : ''}.${photoSummary}${warningSummary}`,
+      details: {
+        property24: responseBody,
+        photo_selection: {
+          source_count: p24PhotoSelection.sourceCount,
+          selected_count: p24PhotoSelection.selectedCount,
+          skipped_count: p24PhotoSelection.skippedCount,
+          total_selected_bytes: p24PhotoSelection.totalBytes,
+          warnings: p24PhotoSelection.warnings,
+        },
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -3180,11 +4898,96 @@ function mapPpHomeType(subType: string): string {
   return 'House';
 }
 
+function mapPpBusinessType(value: string): string {
+  const s = value.toLowerCase();
+  if (s.includes('warehouse')) return 'Warehouse';
+  if (s.includes('storage') || s.includes('storeroom')) return 'Storage';
+  if (s.includes('yard')) return 'Yard';
+  if (s.includes('smallholding')) return 'Smallholding';
+  if (s.includes('new development') || s.includes('development')) return 'New Development';
+  if (s.includes('factory')) return 'Factory';
+  if (s.includes('hotel')) return 'Hotel';
+  if (s.includes('office')) return 'Office';
+  if (s.includes('retail') || s.includes('shop')) return 'Retail';
+  if (s.includes('distribution')) return 'Distribution Centre';
+  if (s.includes('guesthouse') || s.includes('guest house') || s.includes('hospitality')) return 'Guesthouse';
+  // Use a conservative fallback that is broadly accepted across PP branches.
+  return 'Office';
+}
+
+function mapPpCategory(propertyType: string, propertySubType: string, descriptiveFeature: string): 'Residential' | 'Commercial' | 'Farms' | 'Land' {
+  const type = propertyType.toLowerCase();
+  const subType = propertySubType.toLowerCase();
+  const feature = descriptiveFeature.toLowerCase();
+  const structured = `${subType} ${type}`.trim();
+
+  const normalizeTokens = (value: string): string => ` ${value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+
+  const hasAnyToken = (value: string, tokens: string[]): boolean => {
+    const normalized = normalizeTokens(value);
+    return tokens.some((token) => normalized.includes(` ${token} `));
+  };
+
+  const matchesCommercial = (value: string): boolean =>
+    hasAnyToken(value, ['commercial', 'business', 'industrial', 'warehouse', 'factory', 'office', 'retail', 'distribution', 'storage', 'yard', 'guesthouse', 'hotel']);
+
+  const matchesResidential = (value: string): boolean =>
+    hasAnyToken(value, ['residential', 'house', 'apartment', 'flat', 'townhouse', 'cluster', 'duplex', 'simplex', 'freehold', 'sectional', 'cottage', 'studio', 'loft', 'penthouse']);
+
+  // PP should treat vacant-land subtypes as Land even when the high-level property type is Residential.
+  if (subType.includes('land') || subType.includes('vacant')) return 'Land';
+  if (feature.includes('land') || feature.includes('vacant')) return 'Land';
+
+  if (type.includes('farm')) return 'Farms';
+  if (type.includes('land') || type.includes('vacant')) return 'Land';
+  if (type.includes('residential')) return 'Residential';
+  if (matchesCommercial(type)) return 'Commercial';
+
+  if (subType.includes('farm')) return 'Farms';
+  if (matchesResidential(subType)) return 'Residential';
+  if (matchesCommercial(subType)) return 'Commercial';
+
+  if (structured.length === 0) {
+    if (feature.includes('farm')) return 'Farms';
+    if (feature.includes('land') || feature.includes('vacant')) return 'Land';
+    if (matchesCommercial(feature)) return 'Commercial';
+  }
+
+  return 'Residential';
+}
+
+function getPpBusinessTypeFallbacks(preferred: string): string[] {
+  const values = [
+    preferred,
+    'Factory',
+    'Office',
+    'Retail',
+    'Distribution Centre',
+    'Storage',
+    'Yard',
+    'Smallholding',
+    'Guesthouse',
+    'Hotel',
+    'New Development',
+    'Warehouse',
+  ];
+  return values.filter((value, index, arr) => Boolean(value) && arr.indexOf(value) === index);
+}
+
 function buildPpToken(username: string, password: string): { Digest: string; UserName: string; StampTime: string; Expires: string; UID: string } {
+  const toPpDateTime = (value: Date): string => {
+    const yyyy = value.getFullYear();
+    const mm = String(value.getMonth() + 1).padStart(2, '0');
+    const dd = String(value.getDate()).padStart(2, '0');
+    const hh = String(value.getHours()).padStart(2, '0');
+    const mi = String(value.getMinutes()).padStart(2, '0');
+    const ss = String(value.getSeconds()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
+  };
   const uid = Math.floor(Math.random() * 9000000 + 1000000).toString();
   const tokenTime = new Date(Date.now() - 5 * 60 * 1000);
-  const stampTime = tokenTime.toISOString().replace(/\.\d{3}Z$/, 'Z');
-  const expires = new Date(tokenTime.getTime() + 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const stampTime = toPpDateTime(tokenTime);
+  const expires = toPpDateTime(new Date(tokenTime.getTime() + 24 * 60 * 60 * 1000));
   const digestString = `${uid}${stampTime}${password}${expires}`;
   const digest = createHash('sha1').update(Buffer.from(digestString, 'ascii')).digest('base64');
   return { Digest: digest, UserName: username, StampTime: stampTime, Expires: expires, UID: uid };
@@ -3272,7 +5075,6 @@ async function fetchPpListingStatus(args: {
   return status || null;
 }
 
-// ---------------------------------------------------------------------------
 // POST /:id/publish-to-private-property
 // ---------------------------------------------------------------------------
 
@@ -3301,6 +5103,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     const listingResult = await pool.query(
       `SELECT cl.id, cl.listing_number, cl.market_center_id, cl.source_market_center_id,
         cl.property_title, cl.property_description, cl.short_description,
+        cl.descriptive_feature,
         cl.sale_or_rent, cl.listing_status_tag, cl.status_name,
         cl.property_type, cl.property_sub_type,
         cl.price::text AS price, cl.poa,
@@ -3344,7 +5147,22 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       [id]
     );
 
-    const primaryAgent = agentResult.rows[0] as {
+    type PpPublishAgentRow = {
+      associate_id: string | null;
+      market_center_id: string | null;
+      source_associate_id: string | null;
+      private_email: string | null;
+      kwsa_email: string | null;
+      email: string | null;
+      first_name: string | null;
+      last_name: string | null;
+      mobile_number: string | null;
+      image_url: string | null;
+    };
+
+    const listingAgents = agentResult.rows as PpPublishAgentRow[];
+
+    const primaryAgent = listingAgents[0] as {
       associate_id: string | null;
       market_center_id: string | null;
       source_associate_id: string | null;
@@ -3361,22 +5179,31 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     void toText(primaryAgent?.market_center_id);
 
     const buildAgentCandidates = (): string[] => {
-      const kwsaEmail = toText(primaryAgent?.kwsa_email);
-      const publicEmail = toText(primaryAgent?.email);
-      const privateEmail = toText(primaryAgent?.private_email);
-      const kwsaEmailNoAlias = normalizeEmailAlias(kwsaEmail);
-      const publicEmailNoAlias = normalizeEmailAlias(publicEmail);
-      const privateEmailNoAlias = normalizeEmailAlias(privateEmail);
-      return [
-        kwsaEmail,
-        kwsaEmailNoAlias,
-        publicEmail,
-        publicEmailNoAlias,
-        privateEmail,
-        privateEmailNoAlias,
-        toText(primaryAgent?.source_associate_id),
-        toText(primaryAgent?.associate_id),
-      ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
+      const candidates: string[] = [];
+      for (const agent of listingAgents) {
+        const kwsaEmail = toText(agent.kwsa_email);
+        const publicEmail = toText(agent.email);
+        const privateEmail = toText(agent.private_email);
+        const kwsaEmailNoAlias = normalizeEmailAlias(kwsaEmail);
+        const publicEmailNoAlias = normalizeEmailAlias(publicEmail);
+        const privateEmailNoAlias = normalizeEmailAlias(privateEmail);
+        const values = [
+          toText(agent.associate_id),
+          toText(agent.source_associate_id),
+          kwsaEmail,
+          kwsaEmailNoAlias,
+          publicEmail,
+          publicEmailNoAlias,
+          privateEmail,
+          privateEmailNoAlias,
+        ];
+        for (const value of values) {
+          if (value && !candidates.includes(value)) {
+            candidates.push(value);
+          }
+        }
+      }
+      return candidates;
     };
 
     // Resolve branch GUID: prefer MC-specific private_property_id, fall back to env default.
@@ -3399,7 +5226,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     }
 
     const areasResult = await pool.query(
-      `SELECT LOWER(TRIM(area_type)) AS area_type, MAX(count)::int AS count
+      `SELECT LOWER(TRIM(area_type)) AS area_type, MAX(count)::numeric AS count
        FROM migration.listing_property_areas
        WHERE listing_id = $1
          AND LOWER(TRIM(COALESCE(area_type, ''))) IN ('bedroom', 'bathroom', 'garage')
@@ -3407,9 +5234,18 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       [id]
     );
     const areaCounts: Record<string, number> = {};
-    for (const row of areasResult.rows as Array<{ area_type: string; count: number }>) {
-      areaCounts[row.area_type] = row.count ?? 0;
+    for (const row of areasResult.rows as Array<{ area_type: string; count: unknown }>) {
+      const parsedCount = toNumber(row.count) ?? 0;
+      areaCounts[row.area_type] = parsedCount;
     }
+
+    const showWindows = await loadListingShowWindows(pool, id);
+    let ppAgentImageSync: 'skipped' | 'no-image' | 'unresolvable-url' | 'success' | 'fault' | 'error' = 'skipped';
+    let ppAgentImageSyncDetail = '';
+    let ppDescriptionIncludesSchedule = false;
+    let ppShowdaySync: 'skipped' | 'no-windows' | 'success' | 'partial' | 'fault' | 'error' = 'skipped';
+    let ppShowdaySyncDetail = '';
+    let ppShowdaySyncedCount = 0;
 
     const statusTag = (toText(listing.listing_status_tag) ?? '').toLowerCase().trim();
     const statusName = (toText(listing.status_name) ?? '').toLowerCase().trim();
@@ -3429,6 +5265,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
 
     let soapXml: string;
     let soapAction: string;
+    let selectedBusinessType: string | null = null;
 
     if (isWithdraw && existingRef) {
       // PP ListingStatusUpdate uses our unique listing id (KWLM...), not PP ref (T...).
@@ -3437,7 +5274,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     } else {
       // Build UpdateListing payload
       const imageResolution = await resolveExternalImageUrls(
-        (await resolveListingImageUrls(pool, id, listing.listing_images_json)).slice(0, 30),
+        await resolveListingImageUrls(pool, id, listing.listing_images_json),
         req
       );
       const imageUrls = imageResolution.urls;
@@ -3453,10 +5290,9 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       const photoUrlsXml = imageUrls.map((u) => `<string>${xmlEscape(u)}</string>`).join('');
 
       const rawSubType = (toText(listing.property_sub_type) ?? '').toLowerCase();
-      let category = 'Residential';
-      if (rawSubType.includes('commercial') || rawSubType.includes('business') || rawSubType.includes('industrial')) category = 'Commercial';
-      else if (rawSubType.includes('farm')) category = 'Farms';
-      else if (rawSubType.includes('land') || rawSubType.includes('vacant')) category = 'Land';
+      const rawPropertyType = (toText(listing.property_type) ?? '').toLowerCase();
+      const rawDescriptiveFeature = (toText(listing.descriptive_feature) ?? '').toLowerCase();
+      const category = mapPpCategory(rawPropertyType, rawSubType, rawDescriptiveFeature);
 
       let propertyStatus = listingType === 'Rental' ? 'ToLet' : 'ForSale';
       if (statusTag.includes('sold') || statusName.includes('sold')) propertyStatus = 'Sold';
@@ -3471,9 +5307,8 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       const price = toNumber(listing.price) ?? 0;
       const pricePresentation = toBool(listing.poa) ? 'Poa' : 'Standard';
 
-      // Deposit for rentals
-      const deposit = toNumber(listing.monthly_levy) ?? 0;
-      const depositXml = listingType === 'Rental' && deposit > 0 ? `<Deposit>${deposit}</Deposit>` : '';
+      // Deposit for rentals: PP <Deposit> expects a numeric value (not used here as deposit_requirements is text)
+      const depositXml = '';
 
       // AvailableFrom for rentals
       const occupationDate = toDateValue(listing.occupation_date);
@@ -3492,6 +5327,16 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
         attrs.push({ type: 'Bedrooms', value: (areaCounts['bedroom'] ?? 0).toString() });
         attrs.push({ type: 'Bathrooms', value: (areaCounts['bathroom'] ?? 0).toString() });
         attrs.push({ type: 'HomeType', value: mapPpHomeType(rawSubType) });
+      }
+      if (category === 'Commercial') {
+        const businessTypeSource =
+          toText(listing.descriptive_feature) ??
+          toText(listing.property_sub_type) ??
+          toText(listing.property_type) ??
+          toText(listing.property_title) ??
+          '';
+        selectedBusinessType = mapPpBusinessType(businessTypeSource);
+        attrs.push({ type: 'BusinessType', value: selectedBusinessType });
       }
       if (category === 'Land') {
         attrs.push({ type: 'LandArea', value: Math.round(toNumber(listing.erf_size) ?? 0).toString() });
@@ -3513,8 +5358,14 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       if (toBool(listing.has_flatlet)) attrs.push({ type: 'Flatlet', value: 'Yes' });
       const attributesXml = attrs.map((a) => `<Attribute><AttributeType>${xmlEscape(a.type)}</AttributeType><Value>${xmlEscape(a.value)}</Value></Attribute>`).join('');
 
-      // PP uses the numeric associate_id as AgentId (same as legacy MAPP system).
+      // PP listing payload follows legacy MAPP behavior:
+      // one <AgentId> field containing comma-separated listing associate IDs.
       const agentIdStr = toText(primaryAgent?.associate_id) ?? '';
+      const listingAgentIdCsv = listingAgents
+        .map((agent) => toText(agent.associate_id))
+        .filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index)
+        .join(',');
+      const listingAgentIdValue = listingAgentIdCsv || agentIdStr;
       ppAgentIdUsed = agentIdStr || null;
 
       // Ensure the agent exists in PP before publishing the listing.
@@ -3528,13 +5379,17 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
         const agentTokenXml = buildPpTokenXml(agentToken);
         const updateAgentSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateAgent xmlns="http://tempuri.org/"><Agent><Email>${xmlEscape(agentEmail)}</Email><FirstName>${xmlEscape(agentFirstName)}</FirstName><LastName>${xmlEscape(agentLastName)}</LastName><AgentId>${xmlEscape(agentIdStr)}</AgentId><PrivysealAlias></PrivysealAlias><Active>true</Active><TelCell>${xmlEscape(agentPhone)}</TelCell><TelHome></TelHome><TelWork>${xmlEscape(agentPhone)}</TelWork><BranchId>${branchGuid}</BranchId></Agent>${agentTokenXml}</UpdateAgent></soap:Body></soap:Envelope>`;
         try {
-          await fetchWithRetries(ppBaseUrl, {
+          const updateAgentResp = await fetchWithRetries(ppBaseUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'http://tempuri.org/UpdateAgent' },
             body: updateAgentSoap,
           }, { attempts: 2, timeoutMs: 20000 });
-        } catch {
-          // Non-fatal: UpdateAgent failure should not block listing publish attempt
+          const updateAgentText = await updateAgentResp.text();
+          const updateAgentFault = updateAgentText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i)?.[1]?.trim() ?? '';
+          console.log(`[PP] UpdateAgent for agent ${agentIdStr} (${agentEmail}): ${updateAgentFault ? 'FAULT: ' + updateAgentFault.slice(0, 100) : 'OK'}`);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.log(`[PP] UpdateAgent error for agent ${agentIdStr}: ${errorMsg}`);
         }
 
         // Call GetAgents to find PP's internal PrivatePropertyAgentId for this agent,
@@ -3553,6 +5408,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
           // Parse agent entries; match by email or AgentId
           const agentRegex = /<PrivatePropertyAgent[^>]*>([\s\S]*?)<\/PrivatePropertyAgent>/gi;
           let agentMatch: RegExpExecArray | null;
+          let linkedCount = 0;
           while ((agentMatch = agentRegex.exec(getAgentsText)) !== null) {
             const block = agentMatch[1];
             const ppAgentId = block.match(/<PrivatePropertyAgentId[^>]*>([^<]*)<\/PrivatePropertyAgentId>/i)?.[1]?.trim();
@@ -3564,16 +5420,24 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
               // Link PP's internal ID to our numeric associate_id
               const linkToken = buildPpToken(ppUsername, ppPassword);
               const linkSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateUniqueAgentID xmlns="http://tempuri.org/"><PrivatePropertyAgentId>${xmlEscape(ppAgentId)}</PrivatePropertyAgentId><AgentId>${xmlEscape(agentIdStr)}</AgentId>${buildPpTokenXml(linkToken)}</UpdateUniqueAgentID></soap:Body></soap:Envelope>`;
-              await fetchWithRetries(ppBaseUrl, {
+              const linkResp = await fetchWithRetries(ppBaseUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'http://tempuri.org/UpdateUniqueAgentID' },
                 body: linkSoap,
               }, { attempts: 2, timeoutMs: 20000 });
+              const linkText = await linkResp.text();
+              const linkFault = linkText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i)?.[1]?.trim() ?? '';
+              console.log(`[PP] UpdateUniqueAgentID for agent ${agentIdStr} -> ${ppAgentId}: ${linkFault ? 'FAULT: ' + linkFault.slice(0, 100) : 'OK'}`);
+              linkedCount++;
               break;
             }
           }
-        } catch {
-          // Non-fatal: agent linking failure does not block publish
+          if (linkedCount === 0) {
+            console.log(`[PP] GetAgents: no email match found for agent ${agentIdStr} (${agentEmail})`);
+          }
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.log(`[PP] Agent linking error for agent ${agentIdStr}: ${errorMsg}`);
         }
 
         // Sync agent profile image when available.
@@ -3582,30 +5446,165 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
           const rawAgentImage = toText(primaryAgent?.image_url);
           if (rawAgentImage) {
             const resolvedAgentImageUrls = await resolveExternalImageUrls([rawAgentImage], req);
-            const resolvedAgentImageUrl = resolvedAgentImageUrls.urls[0] ?? null;
+            let resolvedAgentImageUrl = resolvedAgentImageUrls.urls[0] ?? null;
+
+            // PP cannot pull from localhost/private URLs. If agent image is a local upload,
+            // upload it to GCS on demand and use the public URL for PP sync.
+            if (!resolvedAgentImageUrl && rawAgentImage.startsWith('/uploads/')) {
+              try {
+                const relativePath = rawAgentImage.replace(/^\/uploads\//, '');
+                const localPath = path.join(resolveLocalUploadDir(''), relativePath);
+                const fileName = path.basename(relativePath);
+                const dirName = path.dirname(relativePath).replace(/\\/g, '/');
+                const localContent = await readFile(localPath);
+                const uploaded = await uploadToGcs(localContent, fileName, dirName, mimeTypeFromFileName(fileName));
+                resolvedAgentImageUrl = uploaded.publicUrl;
+              } catch (uploadErr) {
+                const uploadMessage = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+                const priorFailures = resolvedAgentImageUrls.failures.slice(0, 2).join(' | ');
+                ppAgentImageSync = 'unresolvable-url';
+                ppAgentImageSyncDetail = [priorFailures, `GCS fallback failed: ${uploadMessage}`].filter(Boolean).join(' | ').slice(0, 300);
+              }
+            }
+
             if (resolvedAgentImageUrl) {
               const imageToken = buildPpToken(ppUsername, activePpPassword);
-              const updateAgentImageSoap = `<?xml version="1.0" encoding="utf-8"?><soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope"><soap12:Body><UpdateAgentImage xmlns="http://tempuri.org/"><Agent><Email>${xmlEscape(agentEmail)}</Email><FirstName>${xmlEscape(agentFirstName)}</FirstName><LastName>${xmlEscape(agentLastName)}</LastName><AgentId>${xmlEscape(agentIdStr)}</AgentId><Active>true</Active><TelCell>${xmlEscape(agentPhone)}</TelCell><TelHome></TelHome><TelWork>${xmlEscape(agentPhone)}</TelWork><BranchId>${branchGuid}</BranchId></Agent><imgurl>${xmlEscape(resolvedAgentImageUrl)}</imgurl>${buildPpTokenXml(imageToken)}</UpdateAgentImage></soap12:Body></soap12:Envelope>`;
-              await fetchWithRetries(ppBaseUrl, {
+              // Use SOAP 1.1 for consistency with UpdateAgent and proper SOAPAction support
+              const updateAgentImageSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateAgentImage xmlns="http://tempuri.org/"><Agent><Email>${xmlEscape(agentEmail)}</Email><FirstName>${xmlEscape(agentFirstName)}</FirstName><LastName>${xmlEscape(agentLastName)}</LastName><AgentId>${xmlEscape(agentIdStr)}</AgentId><Active>true</Active><TelCell>${xmlEscape(agentPhone)}</TelCell><TelHome></TelHome><TelWork>${xmlEscape(agentPhone)}</TelWork><BranchId>${branchGuid}</BranchId></Agent><imgurl>${xmlEscape(resolvedAgentImageUrl)}</imgurl>${buildPpTokenXml(imageToken)}</UpdateAgentImage></soap:Body></soap:Envelope>`;
+              const imageResponse = await fetchWithRetries(ppBaseUrl, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/soap+xml; charset=utf-8' },
+                headers: { 
+                  'Content-Type': 'text/xml; charset=utf-8',
+                  'SOAPAction': 'http://tempuri.org/UpdateAgentImage'
+                },
                 body: updateAgentImageSoap,
               }, { attempts: 2, timeoutMs: 20000 });
+              const imageResponseText = await imageResponse.text();
+              // Log result for debugging
+              const imageFault = imageResponseText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i)?.[1]?.trim() ?? '';
+              const imageResult = imageResponseText.match(/<UpdateAgentImageResult[^>]*>([\s\S]*?)<\/UpdateAgentImageResult>/i)?.[1]?.trim() ?? '';
+              if (imageFault) {
+                ppAgentImageSync = 'fault';
+                ppAgentImageSyncDetail = imageFault.slice(0, 200);
+                console.log(`[PP] Agent ${agentIdStr} image sync fault: ${imageFault}`);
+              } else if (imageResult) {
+                ppAgentImageSync = 'success';
+                ppAgentImageSyncDetail = imageResult.slice(0, 200);
+                console.log(`[PP] Agent ${agentIdStr} image sync result: ${imageResult.slice(0, 100)}`);
+              } else {
+                ppAgentImageSync = 'success';
+                ppAgentImageSyncDetail = 'No explicit UpdateAgentImageResult returned';
+                console.log(`[PP] Agent ${agentIdStr} image sync completed (no explicit result)`);
+              }
+            } else {
+              if (ppAgentImageSync === 'skipped') {
+                ppAgentImageSync = 'unresolvable-url';
+                ppAgentImageSyncDetail = resolvedAgentImageUrls.failures.slice(0, 2).join(' | ');
+              }
+            }
+          } else {
+            ppAgentImageSync = 'no-image';
+            ppAgentImageSyncDetail = 'Primary agent has no image_url';
+          }
+        } catch (err) {
+          // Non-fatal: image sync failure should not block listing publish
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          ppAgentImageSync = 'error';
+          ppAgentImageSyncDetail = errorMsg.slice(0, 200);
+          console.log(`[PP] Agent ${agentIdStr} image sync error: ${errorMsg}`);
+        }
+      }
+
+      const secondaryAgents = listingAgents.slice(1);
+      for (const secondaryAgent of secondaryAgents) {
+        const secondaryAgentId = toText(secondaryAgent.associate_id) ?? '';
+        if (!secondaryAgentId) continue;
+
+        const secondaryAgentEmail =
+          toText(secondaryAgent.kwsa_email) ??
+          toText(secondaryAgent.email) ??
+          toText(secondaryAgent.private_email) ??
+          '';
+        const secondaryFirstName = toText(secondaryAgent.first_name) ?? '';
+        const secondaryLastName = toText(secondaryAgent.last_name) ?? '';
+        const secondaryPhone = toText(secondaryAgent.mobile_number) ?? '';
+
+        try {
+          const secondaryToken = buildPpToken(ppUsername, ppPassword);
+          const secondaryUpdateSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateAgent xmlns="http://tempuri.org/"><Agent><Email>${xmlEscape(secondaryAgentEmail)}</Email><FirstName>${xmlEscape(secondaryFirstName)}</FirstName><LastName>${xmlEscape(secondaryLastName)}</LastName><AgentId>${xmlEscape(secondaryAgentId)}</AgentId><PrivysealAlias></PrivysealAlias><Active>true</Active><TelCell>${xmlEscape(secondaryPhone)}</TelCell><TelHome></TelHome><TelWork>${xmlEscape(secondaryPhone)}</TelWork><BranchId>${branchGuid}</BranchId></Agent>${buildPpTokenXml(secondaryToken)}</UpdateAgent></soap:Body></soap:Envelope>`;
+          const secondaryUpdateResp = await fetchWithRetries(ppBaseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'http://tempuri.org/UpdateAgent' },
+            body: secondaryUpdateSoap,
+          }, { attempts: 2, timeoutMs: 20000 });
+          const secondaryUpdateText = await secondaryUpdateResp.text();
+          const secondaryFault = secondaryUpdateText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i)?.[1]?.trim() ?? '';
+          console.log(`[PP] Secondary UpdateAgent for agent ${secondaryAgentId} (${secondaryAgentEmail}): ${secondaryFault ? 'FAULT: ' + secondaryFault.slice(0, 100) : 'OK'}`);
+        } catch (secondaryUpdateErr) {
+          const errorMsg = secondaryUpdateErr instanceof Error ? secondaryUpdateErr.message : String(secondaryUpdateErr);
+          console.log(`[PP] Secondary UpdateAgent error for agent ${secondaryAgentId}: ${errorMsg}`);
+        }
+
+        if (!secondaryAgentEmail) continue;
+
+        try {
+          const getAgentsToken = buildPpToken(ppUsername, ppPassword);
+          const getAgentsSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetAgents xmlns="http://tempuri.org/"><BranchId>${branchGuid}</BranchId>${buildPpTokenXml(getAgentsToken)}</GetAgents></soap:Body></soap:Envelope>`;
+          const getAgentsResp = await fetchWithRetries(ppBaseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'http://tempuri.org/GetAgents' },
+            body: getAgentsSoap,
+          }, { attempts: 2, timeoutMs: 20000 });
+          const getAgentsText = await getAgentsResp.text();
+
+          const agentRegex = /<PrivatePropertyAgent[^>]*>([\s\S]*?)<\/PrivatePropertyAgent>/gi;
+          let agentMatch: RegExpExecArray | null;
+          let linked = false;
+
+          while ((agentMatch = agentRegex.exec(getAgentsText)) !== null) {
+            const block = agentMatch[1];
+            const ppAgentId = block.match(/<PrivatePropertyAgentId[^>]*>([^<]*)<\/PrivatePropertyAgentId>/i)?.[1]?.trim();
+            const ppEmail = block.match(/<Email[^>]*>([^<]*)<\/Email>/i)?.[1]?.trim()?.toLowerCase();
+            const ppAgentCustomId = block.match(/<AgentId[^>]*>([^<]*)<\/AgentId>/i)?.[1]?.trim();
+            const alreadyLinked = ppAgentCustomId === secondaryAgentId;
+            const emailMatches = ppEmail === secondaryAgentEmail.toLowerCase();
+
+            if (ppAgentId && emailMatches && !alreadyLinked) {
+              const linkToken = buildPpToken(ppUsername, ppPassword);
+              const linkSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateUniqueAgentID xmlns="http://tempuri.org/"><PrivatePropertyAgentId>${xmlEscape(ppAgentId)}</PrivatePropertyAgentId><AgentId>${xmlEscape(secondaryAgentId)}</AgentId>${buildPpTokenXml(linkToken)}</UpdateUniqueAgentID></soap:Body></soap:Envelope>`;
+              const linkResp = await fetchWithRetries(ppBaseUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'http://tempuri.org/UpdateUniqueAgentID' },
+                body: linkSoap,
+              }, { attempts: 2, timeoutMs: 20000 });
+              const linkText = await linkResp.text();
+              const linkFault = linkText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i)?.[1]?.trim() ?? '';
+              console.log(`[PP] Secondary UpdateUniqueAgentID for agent ${secondaryAgentId} -> ${ppAgentId}: ${linkFault ? 'FAULT: ' + linkFault.slice(0, 100) : 'OK'}`);
+              linked = true;
+              break;
             }
           }
-        } catch {
-          // Non-fatal: image sync failure should not block listing publish
+
+          if (!linked) {
+            console.log(`[PP] Secondary GetAgents: no email match found for agent ${secondaryAgentId} (${secondaryAgentEmail})`);
+          }
+        } catch (secondaryLinkErr) {
+          const errorMsg = secondaryLinkErr instanceof Error ? secondaryLinkErr.message : String(secondaryLinkErr);
+          console.log(`[PP] Secondary agent linking error for agent ${secondaryAgentId}: ${errorMsg}`);
         }
       }
 
       const headline = xmlEscape(toText(listing.property_title) ?? '');
       const description = toText(listing.property_description) ?? toText(listing.short_description) ?? '';
+      const descriptionWithShowWindows = appendShowWindowSummary(description, showWindows);
+      ppDescriptionIncludesSchedule = /Viewing Schedule:/i.test(descriptionWithShowWindows);
+      const showdayEventsXml = buildPpShowdayEventsXml(propertyId, showWindows);
 
       // When "Display Address on Website" is not checked, instruct PP to hide street-level address details.
       const hideAddress = !toBool(listing.display_address_on_website ?? false);
 
       soapAction = 'UpdateListing';
-      soapXml = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateListing xmlns="http://tempuri.org/"><ListingImport><PropertyId>${xmlEscape(propertyId)}</PropertyId><BranchId>${branchGuid}</BranchId><Category><Category>${category}</Category></Category><MandateType>${mandateType}</MandateType><StreetName>${xmlEscape(toText(listing.street_name) ?? '')}</StreetName><StreetNumber>${xmlEscape(toText(listing.street_number) ?? '')}</StreetNumber><ComplexName>${xmlEscape(toText(listing.estate_name) ?? '')}</ComplexName><UnitNumber>${xmlEscape(toText(listing.unit_number) ?? '')}</UnitNumber>${addressHierarchyXml}<Headline>${headline}</Headline><Description><![CDATA[${description}]]></Description><Price>${price}</Price><SalesPricePresentation>${pricePresentation}</SalesPricePresentation>${depositXml}<ListingDate>${new Date().toISOString().slice(0, 10)}</ListingDate>${availableFromXml}<AgentId>${xmlEscape(agentIdStr)}</AgentId><PhotoUrls>${photoUrlsXml}</PhotoUrls>${xCoordXml}${yCoordXml}<ListingType>${listingType}</ListingType><PropertyStatus>${propertyStatus}</PropertyStatus><Attributes>${attributesXml}</Attributes><HideStreetName>${hideAddress}</HideStreetName><HideStreetNo>${hideAddress}</HideStreetNo><HideComplexName>${hideAddress}</HideComplexName><HideUnitNumber>${hideAddress}</HideUnitNumber></ListingImport>${tokenXml}</UpdateListing></soap:Body></soap:Envelope>`;
+      soapXml = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateListing xmlns="http://tempuri.org/"><ListingImport><PropertyId>${xmlEscape(propertyId)}</PropertyId><BranchId>${branchGuid}</BranchId><Category><Category>${category}</Category></Category><MandateType>${mandateType}</MandateType><StreetName>${xmlEscape(toText(listing.street_name) ?? '')}</StreetName><StreetNumber>${xmlEscape(toText(listing.street_number) ?? '')}</StreetNumber><ComplexName>${xmlEscape(toText(listing.estate_name) ?? '')}</ComplexName><UnitNumber>${xmlEscape(toText(listing.unit_number) ?? '')}</UnitNumber>${addressHierarchyXml}<Headline>${headline}</Headline><Description><![CDATA[${descriptionWithShowWindows}]]></Description><Price>${price}</Price><SalesPricePresentation>${pricePresentation}</SalesPricePresentation>${depositXml}<ListingDate>${new Date().toISOString().slice(0, 10)}</ListingDate>${availableFromXml}<AgentId>${xmlEscape(listingAgentIdValue)}</AgentId><PhotoUrls>${photoUrlsXml}</PhotoUrls>${xCoordXml}${yCoordXml}<ListingType>${listingType}</ListingType><PropertyStatus>${propertyStatus}</PropertyStatus>${showdayEventsXml}<Attributes>${attributesXml}</Attributes><HideStreetName>${hideAddress}</HideStreetName><HideStreetNo>${hideAddress}</HideStreetNo><HideComplexName>${hideAddress}</HideComplexName><HideUnitNumber>${hideAddress}</HideUnitNumber></ListingImport>${tokenXml}</UpdateListing></soap:Body></soap:Envelope>`;
     }
 
     // Send SOAP request
@@ -3685,6 +5684,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     let refSource: 'result' | 'responseText' | 'existing' | 'activeListingsLookup' | 'none' = 'none';
     let referenceLookupTried = false;
     let referenceLookupFound = false;
+    let referenceLookupAttempts = 0;
     let persistedReference: string | null = null;
 
     const callPpStatusUpdate = async (propertyStatus: 'Inactive' | 'Archived'): Promise<{ ok: boolean; result: string; fault: string; text: string }> => {
@@ -3705,6 +5705,35 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       const explicitFailure = /error|fault|not found|does not exist|invalid/.test(lowered);
       const ok = !statusFault && !explicitFailure && (lowered.includes('success') || statusResult === '');
       return { ok, result: statusResult, fault: statusFault, text: statusText };
+    };
+
+    const callPpShowdayUpdate = async (
+      targetBranchGuid: string,
+      targetPropertyId: string,
+      window: PortalShowWindow,
+    ): Promise<{ ok: boolean; result: string; fault: string; text: string }> => {
+      const showdayToken = buildPpToken(ppUsername, activePpPassword);
+      const startDate = toPpDateTimeValue(window.startDate);
+      const endDate = toPpDateTimeValue(window.endDate);
+      if (!startDate || !endDate) {
+        return { ok: false, result: '', fault: 'Invalid showday dates', text: '' };
+      }
+      const showdaySoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ListingShowdayUpdate xmlns="http://tempuri.org/"><BranchId>${targetBranchGuid}</BranchId><Showday><PropertyId>${xmlEscape(targetPropertyId)}</PropertyId><StartDate>${startDate}</StartDate><EndDate>${endDate}</EndDate><Active>true</Active></Showday>${buildPpTokenXml(showdayToken)}</ListingShowdayUpdate></soap:Body></soap:Envelope>`;
+      const showdayResponse = await fetchWithRetries(activePpUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/xml; charset=utf-8',
+          'SOAPAction': 'http://tempuri.org/ListingShowdayUpdate',
+        },
+        body: showdaySoap,
+      }, { attempts: 2, timeoutMs: 30000 });
+      const showdayText = await showdayResponse.text();
+      const showdayResult = showdayText.match(/<ListingShowdayUpdateResult[^>]*>([\s\S]*?)<\/ListingShowdayUpdateResult>/i)?.[1]?.trim() ?? '';
+      const showdayFault = showdayText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i)?.[1]?.trim() ?? '';
+      const lowered = showdayResult.toLowerCase();
+      const explicitFailure = /error|fault|not found|does not exist|invalid/.test(lowered);
+      const ok = !showdayFault && !explicitFailure && (lowered.includes('success') || showdayResult === '' || showdayResponse.ok);
+      return { ok, result: showdayResult, fault: showdayFault, text: showdayText };
     };
 
     const faultMatch = responseText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i);
@@ -3788,8 +5817,105 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       }
     }
 
-    // Some PP accounts link agents under a default branch GUID only.
-    // If the first attempt fails with PP102, retry once using the configured default branch.
+    // Retry BusinessType only when the original payload already contains BusinessType.
+    // This avoids forcing residential/land listings into commercial retries.
+    const hasBusinessTypeAttribute = /<AttributeType>BusinessType<\/AttributeType>/i.test(soapXml);
+    if (
+      !success &&
+      !isWithdraw &&
+      hasBusinessTypeAttribute &&
+      /(PP106|PP60|Invalid attribute values supplied|Business Type is a mandatory attribute)/i.test(message)
+    ) {
+      const preferredBusinessType = selectedBusinessType ?? 'Office';
+      const fallbackBusinessTypes = getPpBusinessTypeFallbacks(preferredBusinessType);
+      for (const fallbackBusinessType of fallbackBusinessTypes) {
+        if (fallbackBusinessType === selectedBusinessType) continue;
+
+        const retrySoapXml = soapXml.replace(
+          /(<AttributeType>BusinessType<\/AttributeType>\s*<Value>)([\s\S]*?)(<\/Value>)/i,
+          `$1${xmlEscape(fallbackBusinessType)}$3`
+        );
+
+        const retryResponse = await fetchWithRetries(activePpUrl, {
+          method: 'POST',
+          headers: soapHeaders,
+          body: retrySoapXml,
+        }, { attempts: 2, timeoutMs: 30000 });
+
+        const retryText = await retryResponse.text();
+        responseText = retryText;
+        const retryFaultMatch = retryText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i);
+        const retryFaultText = retryFaultMatch?.[1]?.trim() ?? '';
+        const retryResultMatch = retryText.match(/<UpdateListingResult[^>]*>([\s\S]*?)<\/UpdateListingResult>/i);
+        const retryResult = retryResultMatch?.[1]?.trim() ?? '';
+
+        if (retryFaultText || retryResult.toLowerCase().includes('error') || retryResult.toLowerCase().includes('fault')) {
+          message = retryFaultText || retryResult || message;
+          success = false;
+          selectedBusinessType = fallbackBusinessType;
+          continue;
+        }
+
+        if (retryResult.toLowerCase().includes('success') || retryResult === '' || retryResponse.ok) {
+          success = true;
+          const fromResult = extractPpReference(retryResult);
+          const fromResponse = extractPpReference(retryText);
+          const fromExisting = existingRef;
+          ppRef = fromResult ?? fromResponse ?? fromExisting;
+          refSource = fromResult ? 'result' : fromResponse ? 'responseText' : fromExisting ? 'existing' : refSource;
+          message = retryResult || `Published successfully (BusinessType: ${fallbackBusinessType})`;
+          selectedBusinessType = fallbackBusinessType;
+          break;
+        }
+      }
+    }
+
+    // PP sometimes rejects otherwise valid addresses with PP60 asking for a unit number.
+    // Retry once with a derived unit number when the payload currently has an empty UnitNumber.
+    if (
+      !success &&
+      !isWithdraw &&
+      /PP60|address details are insufficient|add a unit number/i.test(message) &&
+      /<UnitNumber>\s*<\/UnitNumber>/i.test(soapXml)
+    ) {
+      const fallbackUnitNumber =
+        toText(listing.unit_number) ??
+        toText(listing.street_number) ??
+        toText(listing.listing_number) ??
+        '1';
+
+      const retrySoapXml = soapXml.replace(
+        /<UnitNumber>[\s\S]*?<\/UnitNumber>/i,
+        `<UnitNumber>${xmlEscape(fallbackUnitNumber)}</UnitNumber>`
+      );
+
+      const retryResponse = await fetchWithRetries(activePpUrl, {
+        method: 'POST',
+        headers: soapHeaders,
+        body: retrySoapXml,
+      }, { attempts: 2, timeoutMs: 30000 });
+
+      const retryText = await retryResponse.text();
+      responseText = retryText;
+      const retryFaultMatch = retryText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i);
+      const retryFaultText = retryFaultMatch?.[1]?.trim() ?? '';
+      const retryResultMatch = retryText.match(/<UpdateListingResult[^>]*>([\s\S]*?)<\/UpdateListingResult>/i);
+      const retryResult = retryResultMatch?.[1]?.trim() ?? '';
+
+      if (retryFaultText || retryResult.toLowerCase().includes('error') || retryResult.toLowerCase().includes('fault')) {
+        message = retryFaultText || retryResult || message;
+        success = false;
+      } else if (retryResult.toLowerCase().includes('success') || retryResult === '' || retryResponse.ok) {
+        success = true;
+        const fromResult = extractPpReference(retryResult);
+        const fromResponse = extractPpReference(retryText);
+        const fromExisting = existingRef;
+        ppRef = fromResult ?? fromResponse ?? fromExisting;
+        refSource = fromResult ? 'result' : fromResponse ? 'responseText' : fromExisting ? 'existing' : refSource;
+        message = retryResult || `Published successfully (UnitNumber fallback: ${fallbackUnitNumber})`;
+      }
+    }
+
     if (
       !success &&
       !isWithdraw &&
@@ -3941,6 +6067,8 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
            WHERE id = $1`,
           [id]
         );
+        ppShowdaySync = 'skipped';
+        ppShowdaySyncDetail = 'Withdraw flow does not sync showdays';
       } else {
         let finalRef = ppRef ?? extractPpReference(responseText) ?? existingRefUsable;
 
@@ -3949,17 +6077,27 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
         if (!finalRef || !/^T\d{5,}$/i.test(finalRef)) {
           referenceLookupTried = true;
           try {
-            const lookedUpRef = await fetchPpReferenceByUniqueId({
-              ppBaseUrl: activePpUrl,
-              ppUsername,
-              ppPassword: activePpPassword,
-              branchGuid,
-              uniqueId: propertyId,
-            });
-            if (lookedUpRef) finalRef = lookedUpRef;
-            if (lookedUpRef) {
-              refSource = 'activeListingsLookup';
-              referenceLookupFound = true;
+            // PP can acknowledge UpdateListing before exposing PrivatePropertyRef in GetActiveListings.
+            // Retry briefly so the reference is persisted for later user sessions.
+            const lookupDelaysMs = [0, 1200, 2500, 5000];
+            for (const delayMs of lookupDelaysMs) {
+              if (delayMs > 0) {
+                await waitMs(delayMs);
+              }
+              referenceLookupAttempts += 1;
+              const lookedUpRef = await fetchPpReferenceByUniqueId({
+                ppBaseUrl: activePpUrl,
+                ppUsername,
+                ppPassword: activePpPassword,
+                branchGuid,
+                uniqueId: propertyId,
+              });
+              if (lookedUpRef) {
+                finalRef = lookedUpRef;
+                refSource = 'activeListingsLookup';
+                referenceLookupFound = true;
+                break;
+              }
             }
           } catch {
             // non-fatal; keep existing usable reference if any
@@ -3967,6 +6105,60 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
         }
 
         persistedReference = finalRef && /^T\d{5,}$/i.test(finalRef) ? finalRef.toUpperCase() : null;
+
+        if (showWindows.length === 0) {
+          ppShowdaySync = 'no-windows';
+          ppShowdaySyncDetail = 'No local show windows found';
+        } else {
+          const showdayPropertyCandidates = [
+            persistedReference,
+            ppRef,
+            extractPpReference(responseText),
+            existingRefUsable,
+            propertyId,
+          ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
+          const showdayResults: string[] = [];
+          const branchCandidates = [branchGuid, ppDefaultBranchGuid]
+            .filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
+
+          for (const window of showWindows) {
+            let synced = false;
+            let lastError = '';
+
+            for (const candidateBranchGuid of branchCandidates) {
+              for (const candidatePropertyId of showdayPropertyCandidates) {
+                try {
+                  const update = await callPpShowdayUpdate(candidateBranchGuid, candidatePropertyId, window);
+                  if (update.ok) {
+                    ppShowdaySyncedCount++;
+                    synced = true;
+                    break;
+                  }
+                  lastError = update.fault || update.result || 'Unknown showday failure';
+                } catch (showdayErr) {
+                  lastError = showdayErr instanceof Error ? showdayErr.message : String(showdayErr);
+                }
+              }
+
+              if (synced) {
+                break;
+              }
+            }
+
+            if (!synced && lastError) showdayResults.push(lastError);
+          }
+
+          if (ppShowdaySyncedCount === showWindows.length) {
+            ppShowdaySync = 'success';
+            ppShowdaySyncDetail = `Synced ${ppShowdaySyncedCount}/${showWindows.length} showday windows`;
+          } else if (ppShowdaySyncedCount > 0) {
+            ppShowdaySync = 'partial';
+            ppShowdaySyncDetail = [`Synced ${ppShowdaySyncedCount}/${showWindows.length} showday windows`, ...showdayResults.slice(0, 2)].join(' | ').slice(0, 300);
+          } else {
+            ppShowdaySync = showdayResults.length > 0 ? 'fault' : 'error';
+            ppShowdaySyncDetail = (showdayResults[0] ?? 'Failed to sync showday windows').slice(0, 300);
+          }
+        }
 
         await pool.query(
           `UPDATE migration.core_listings
@@ -3997,6 +6189,14 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
         referenceSource: refSource,
         referenceLookupTried,
         referenceLookupFound,
+        referenceLookupAttempts,
+        showWindowsCount: showWindows.length,
+        descriptionIncludesViewingSchedule: ppDescriptionIncludesSchedule,
+        showdaySync: ppShowdaySync,
+        showdaySyncDetail: ppShowdaySyncDetail,
+        showdaySyncedCount: ppShowdaySyncedCount,
+        agentImageSync: ppAgentImageSync,
+        agentImageSyncDetail: ppAgentImageSyncDetail,
       },
     });
   } catch (err) {
@@ -4144,17 +6344,40 @@ router.post('/:id/publish-to-kww', async (req, res) => {
 
     // Load area counts
     const areasResult = await pool.query(
-      `SELECT LOWER(TRIM(area_type)) AS area_type, MAX(count)::int AS count
+      `SELECT LOWER(TRIM(area_type)) AS area_type, MAX(count)::numeric AS count
        FROM migration.listing_property_areas
        WHERE listing_id = $1
-         AND LOWER(TRIM(COALESCE(area_type, ''))) IN ('bedroom', 'bathroom', 'garage')
+         AND LOWER(TRIM(COALESCE(area_type, ''))) IN ('bedroom', 'bathroom', 'garage', 'parking')
        GROUP BY LOWER(TRIM(area_type))`,
       [id]
     );
     const areaCounts: Record<string, number> = {};
-    for (const row of areasResult.rows as Array<{ area_type: string; count: number }>) {
-      areaCounts[row.area_type] = row.count ?? 0;
+    for (const row of areasResult.rows as Array<{ area_type: string; count: unknown }>) {
+      const parsedCount = toNumber(row.count) ?? 0;
+      areaCounts[row.area_type] = parsedCount;
     }
+
+    const kwwBedroomCount = Math.max(0, Math.ceil(areaCounts['bedroom'] ?? 0));
+    const kwwBathroomCount = Math.max(0, Math.ceil(areaCounts['bathroom'] ?? 0));
+    const kwwParkingCount = Math.max(0, Math.ceil((areaCounts['parking'] ?? 0) + (areaCounts['garage'] ?? 0)));
+
+    const parkingAreasResult = await pool.query<{ area_type: string; sub_features: unknown }>(
+      `SELECT LOWER(TRIM(area_type)) AS area_type, sub_features
+       FROM migration.listing_property_areas
+       WHERE listing_id = $1
+         AND LOWER(TRIM(COALESCE(area_type, ''))) IN ('parking', 'garage')`,
+      [id]
+    );
+
+    const parkingFeatureInputs: string[] = [];
+    for (const row of parkingAreasResult.rows) {
+      parkingFeatureInputs.push(...parseTextArray(row.sub_features));
+      parkingFeatureInputs.push(row.area_type);
+    }
+    if (kwwParkingCount > 0) {
+      parkingFeatureInputs.push('parking');
+    }
+    const kwwParkingFeatures = mapKwwParkingFeatures(parkingFeatureInputs);
 
     // Address
     const streetNum = toText(listing.street_number) ?? '';
@@ -4168,7 +6391,7 @@ router.post('/:id/publish-to-kww', async (req, res) => {
     const lon = useOverride ? (toNumber(listing.override_display_longitude) ?? toNumber(listing.longitude) ?? 28.034088) : (toNumber(listing.longitude) ?? 28.034088);
 
     // Photos
-    const imageUrls = (await resolveListingImageUrls(pool, id, listing.listing_images_json)).slice(0, 25);
+    const imageUrls = await resolveListingImageUrls(pool, id, listing.listing_images_json);
     const photos = imageUrls.map((url, i) => ({ ph_url: url, ph_short_desc: 'Listing Image', ph_order: i + 1, ph_type: 'image/jpeg' }));
 
     // Description
@@ -4214,7 +6437,7 @@ router.post('/:id/publish-to-kww', async (req, res) => {
       version: '2.0.0',
       contract_expiry_dt: expiry,
       contract_expiry_dt_lock: false,
-      full_bath: areaCounts['bathroom'] ?? 0,
+      full_bath: kwwBathroomCount,
       is_deleted: false,
       kw_expiry_dt: expiry,
       kw_expiry_dt_lock: false,
@@ -4233,8 +6456,14 @@ router.post('/:id/publish-to-kww', async (req, res) => {
       photos,
       prop_subtype: rawSubType || propTypeName,
       prop_type_lock: false,
-      total_bath: areaCounts['bathroom'] ?? 0,
-      total_bed: areaCounts['bedroom'] ?? 0,
+      structure: {
+        has_garage: (areaCounts['garage'] ?? 0) > 0,
+        has_parking: kwwParkingCount > 0,
+        parking_total: kwwParkingCount > 0 ? kwwParkingCount : null,
+        parking_features: kwwParkingFeatures,
+      },
+      total_bath: kwwBathroomCount,
+      total_bed: kwwBedroomCount,
       list_agent_office: {
         list_agent_key: agentKwuid,
         list_agent_full_name: primaryAgent.agent_name ?? '',
@@ -4370,6 +6599,23 @@ router.post('/:id/publish-to-kww', async (req, res) => {
     let responseText = await kwwResponse.text();
     let responseJson = parseKwwResponse(responseText);
 
+    const isKwwAcceptedResponse = (resp: Response, json: KwwResponseBody | null): boolean => {
+      if (!resp.ok) return false;
+      if (!json) return true;
+
+      const explicitSuccess = json.success === true || json.success === 'true';
+      const explicitFailure =
+        json.success === false ||
+        json.success === 'false' ||
+        Boolean(toText(json.errorCode));
+
+      if (explicitFailure) return false;
+      if (explicitSuccess) return true;
+
+      // Some successful KWW responses omit `success` and only return identifiers.
+      return true;
+    };
+
     let parsedErrorMessage =
       responseJson?.message ??
       responseJson?.error ??
@@ -4381,8 +6627,7 @@ router.post('/:id/publish-to-kww', async (req, res) => {
       const value = toNumber(responseJson?.data?.list_id);
       return value != null ? String(value) : null;
     })();
-    let kwwSuccess = responseJson?.success === true || responseJson?.success === 'true';
-    let success = (kwwResponse.ok && kwwSuccess) || (kwwResponse.ok && listUuid != null) || Boolean(listUuid);
+    let success = isKwwAcceptedResponse(kwwResponse, responseJson);
 
     if (!success && /listing number is already in use/i.test(parsedErrorMessage ?? '')) {
       const resolvedListing = await findExistingKwwListingByKey();
@@ -4406,14 +6651,19 @@ router.post('/:id/publish-to-kww', async (req, res) => {
           responseJson?.error ??
           (responseText ? responseText.slice(0, 800) : null);
 
-        listUuid = toText(responseJson?.data?.list_uuid) ?? resolvedListUuid;
-        listKey = toText(responseJson?.data?.list_key) ?? listKey ?? resolvedListing?.listKey ?? null;
+        listUuid = toText(responseJson?.data?.list_uuid) ?? null;
+        listKey = toText(responseJson?.data?.list_key) ?? null;
         listId = (() => {
           const value = toNumber(responseJson?.data?.list_id);
-          return value != null ? String(value) : (listId ?? resolvedListing?.listId ?? null);
+          return value != null ? String(value) : null;
         })();
-        kwwSuccess = responseJson?.success === true || responseJson?.success === 'true';
-        success = (kwwResponse.ok && kwwSuccess) || (kwwResponse.ok && listUuid != null) || Boolean(listUuid);
+        success = isKwwAcceptedResponse(kwwResponse, responseJson);
+
+        if (success) {
+          listUuid = listUuid ?? resolvedListUuid;
+          listKey = listKey ?? resolvedListing?.listKey ?? null;
+          listId = listId ?? resolvedListing?.listId ?? null;
+        }
       }
     }
 
@@ -4470,8 +6720,7 @@ router.post('/:id/publish-to-kww', async (req, res) => {
           const value = toNumber(responseJson?.data?.list_id);
           return value != null ? String(value) : null;
         })();
-        kwwSuccess = responseJson?.success === true || responseJson?.success === 'true';
-        success = (kwwResponse.ok && kwwSuccess) || (kwwResponse.ok && listUuid != null) || Boolean(listUuid);
+        success = isKwwAcceptedResponse(kwwResponse, responseJson);
 
         if (success) break;
         if (!/invalid\s+list\s+type/i.test(parsedErrorMessage ?? '')) break;
@@ -4682,7 +6931,7 @@ router.post('/:id/publish-to-entegral', async (req, res) => {
 
     // Load area counts (bedrooms, bathrooms, etc.)
     const areasResult = await pool.query(
-      `SELECT LOWER(TRIM(area_type)) AS area_type, MAX(count)::int AS count
+      `SELECT LOWER(TRIM(area_type)) AS area_type, MAX(count)::numeric AS count
        FROM migration.listing_property_areas
        WHERE listing_id = $1
          AND LOWER(TRIM(COALESCE(area_type, ''))) IN ('bedroom', 'bathroom', 'garage', 'carport', 'study', 'living area')
@@ -4690,8 +6939,9 @@ router.post('/:id/publish-to-entegral', async (req, res) => {
       [id]
     );
     const areaCounts: Record<string, number> = {};
-    for (const row of areasResult.rows as Array<{ area_type: string; count: number }>) {
-      areaCounts[row.area_type] = row.count ?? 0;
+    for (const row of areasResult.rows as Array<{ area_type: string; count: unknown }>) {
+      const parsedCount = toNumber(row.count) ?? 0;
+      areaCounts[row.area_type] = parsedCount;
     }
 
     // Load images
@@ -4937,9 +7187,25 @@ router.post('/:id/submit-for-approval', resolvePermissions, async (req, res) => 
       [id, perms.associateDbId ?? null, submitterName, submitterEmail, comment ?? null]
     );
 
-    // Update listing status
+    // Move listing into review state while preserving the original status context.
     await pool.query(
-      `UPDATE migration.core_listings SET listing_status_tag = 'Pending Approval', is_draft = true, is_published = false, updated_at = NOW() WHERE id = $1`,
+      `UPDATE migration.core_listings
+          SET listing_status_tag = 'Pending Approval',
+              status_name = 'Pending Approval',
+              is_draft = true,
+              is_published = false,
+              listing_payload = jsonb_set(
+                COALESCE(listing_payload, '{}'::jsonb),
+                '{approval_context}',
+                jsonb_build_object(
+                  'pre_submit_status_name', COALESCE(status_name, ''),
+                  'pre_submit_listing_status_tag', COALESCE(listing_status_tag, ''),
+                  'pre_submit_sale_or_rent', COALESCE(sale_or_rent, '')
+                ),
+                true
+              ),
+              updated_at = NOW()
+        WHERE id = $1`,
       [id]
     );
 
@@ -5010,6 +7276,33 @@ router.post('/:id/approve-approval', resolvePermissions, async (req, res) => {
     if (!approvalRes.rows.length) return res.status(404).json({ error: 'No approval request found for this listing' });
     const approval = approvalRes.rows[0];
 
+    const listingStateRes = await pool.query<{
+      listing_number: string | null;
+      sale_or_rent: string | null;
+      listing_status_tag: string | null;
+      listing_payload: Record<string, unknown> | null;
+    }>(
+      `SELECT listing_number, sale_or_rent, listing_status_tag, listing_payload
+         FROM migration.core_listings
+        WHERE id = $1
+        LIMIT 1`,
+      [id]
+    );
+    if (!listingStateRes.rows.length) return res.status(404).json({ error: 'Listing not found' });
+    const listingState = listingStateRes.rows[0];
+    const approvalContext =
+      listingState.listing_payload
+      && typeof listingState.listing_payload === 'object'
+      && (listingState.listing_payload as Record<string, unknown>).approval_context
+      && typeof (listingState.listing_payload as Record<string, unknown>).approval_context === 'object'
+        ? ((listingState.listing_payload as Record<string, unknown>).approval_context as Record<string, unknown>)
+        : null;
+    const approvedListingStatusTag = deriveApprovedListingStatusTag(
+      listingState.sale_or_rent,
+      listingState.listing_status_tag,
+      approvalContext?.pre_submit_listing_status_tag,
+    );
+
     // Resolve reviewer
     let reviewerName = 'Admin';
     if (perms.associateDbId) {
@@ -5031,23 +7324,30 @@ router.post('/:id/approve-approval', resolvePermissions, async (req, res) => {
 
     // Publish listing
     await pool.query(
-      `UPDATE migration.core_listings SET is_draft = false, is_published = true, listing_status_tag = 'Available', updated_at = NOW() WHERE id = $1`,
-      [id]
+      `UPDATE migration.core_listings
+          SET is_draft = false,
+              is_published = true,
+              status_name = 'Active',
+              listing_status_tag = $2,
+              listing_payload = CASE
+                WHEN listing_payload IS NULL THEN NULL
+                ELSE listing_payload - 'approval_context'
+              END,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [id, approvedListingStatusTag]
     );
 
     // Notify submitter
     if (approval.submitted_by_associate_id) {
-      const listingRes = await pool.query<{ listing_number: string | null }>(
-        `SELECT listing_number FROM migration.core_listings WHERE id = $1 LIMIT 1`, [id]
-      );
       try {
         await createNotification(
           pool, approval.submitted_by_associate_id,
           'LISTING_APPROVAL_APPROVED', 'APPROVED',
-          `Listing approved: ${listingRes.rows[0]?.listing_number ?? id}`,
-          `Your listing ${listingRes.rows[0]?.listing_number ?? id} has been approved and published by ${reviewerName}.`,
+          `Listing approved: ${listingState.listing_number ?? id}`,
+          `Your listing ${listingState.listing_number ?? id} has been approved and published by ${reviewerName}.`,
           'listing', id,
-          { listing_id: id, listing_number: listingRes.rows[0]?.listing_number, reviewer_name: reviewerName, status: 'APPROVED' }
+          { listing_id: id, listing_number: listingState.listing_number, reviewer_name: reviewerName, status: 'APPROVED' }
         );
       } catch { /* notification table may not exist */ }
     }
@@ -5109,7 +7409,17 @@ router.post('/:id/reject-approval', resolvePermissions, async (req, res) => {
     );
 
     await pool.query(
-      `UPDATE migration.core_listings SET listing_status_tag = 'Draft', is_draft = true, is_published = false, updated_at = NOW() WHERE id = $1`,
+      `UPDATE migration.core_listings
+          SET listing_status_tag = 'Draft',
+              status_name = 'Draft',
+              is_draft = true,
+              is_published = false,
+              listing_payload = CASE
+                WHEN listing_payload IS NULL THEN NULL
+                ELSE listing_payload - 'approval_context'
+              END,
+              updated_at = NOW()
+        WHERE id = $1`,
       [id]
     );
 

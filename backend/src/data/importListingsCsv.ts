@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { parse } from 'csv-parse';
 import { closePool, withClient } from './db.js';
 import { optionalArg } from './args.js';
-import { getValue, toNumeric } from './csv.js';
+import { detectCsvEncoding, getValue, toNumeric } from './csv.js';
 
 function parseImageUrls(raw: string | null): string[] {
   if (!raw) return [];
@@ -41,10 +41,9 @@ async function main(): Promise<void> {
   const maxRows = Number(optionalArg('--max-rows', '0'));
   let importedCount = 0;
   let pendingInTransaction = 0;
+  const csvEncoding = await detectCsvEncoding(filePath);
 
-  // Source CSV is Latin-1/Windows-1252 — must specify encoding here so that
-  // accented characters (é, â, ä, ² etc.) are decoded correctly.
-  const parser = createReadStream(filePath, { encoding: 'latin1' }).pipe(
+  const parser = createReadStream(filePath, { encoding: csvEncoding }).pipe(
     parse({
       columns: true,
       skip_empty_lines: true,

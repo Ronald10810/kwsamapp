@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useAuth } from '../contexts/AuthContext';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { broadcastAccessControlUpdate, useAuth } from '../contexts/AuthContext';
 import { useQuery } from '@tanstack/react-query';
 
 type AgentRow = {
@@ -55,8 +55,25 @@ type AssociateDetailsResponse = {
   commission_notes?: NoteRecord[];
   date_notes?: NoteRecord[];
   document_notes?: NoteRecord[];
+  mapp_access?: {
+    feature_enabled?: boolean;
+    is_temporarily_suspended?: boolean;
+    suspended_reason?: string | null;
+    suspended_by_email?: string | null;
+    suspended_at?: string | null;
+    updated_at?: string | null;
+  };
   [key: string]: unknown;
 };
+
+function formatTelHref(value: string): string {
+  return value.replace(/[^\d+]/g, '');
+}
+
+function getAssociateDisplayName(form: Pick<AgentFormState, 'first_name' | 'last_name' | 'kwsa_email'>): string {
+  const fullName = [form.first_name, form.last_name].map((part) => part.trim()).filter(Boolean).join(' ');
+  return fullName || form.kwsa_email.trim() || 'Associate';
+}
 
 type SocialMediaItem = {
   platform: string;
@@ -119,6 +136,11 @@ type AgentFormState = {
   date_notes: string[];
   documents: DocumentItem[];
   document_notes: string[];
+  mapp_access_feature_enabled: boolean;
+  mapp_access_temporarily_suspended: boolean;
+  mapp_access_suspended_reason: string;
+  mapp_access_suspended_by_email: string;
+  mapp_access_suspended_at: string;
 };
 
 type ViewMode = 'card' | 'list';
@@ -130,14 +152,39 @@ type MarketCenterOption = {
 };
 
 type TeamOption = {
+  id?: string;
   source_team_id: string;
   name: string;
+  source_market_center_id?: string | null;
+  team_cap_amount?: string | null;
+  commission_split_to_team?: string | null;
+  manual_cap?: boolean | null;
+  cap_year?: number | null;
+};
+
+type TeamCapDetail = {
+  team_cap_amount: string | null;
+  commission_split_to_team: string | null;
+  manual_cap: boolean;
+  cap_year: number | null;
+};
+
+type ActiveAssociateOption = {
+  id: string;
+  full_name: string;
 };
 
 const PAGE_SIZE = 20;
 const CARD_PAGE_SIZE = 24;
 
-const ROLE_OPTIONS = ['Agent', 'Office Admin', 'Regional Admin'];
+const ROLE_OPTIONS = [
+  'Agent',
+  'Lead Agent',
+  'Team Admin',
+  'Team Agent',
+  'Office Admin',
+  'Regional Admin',
+];
 const JOB_TITLE_OPTIONS = [
   'Agent',
   'Assistant MCA',
@@ -155,6 +202,8 @@ const JOB_TITLE_OPTIONS = [
 ];
 const COMMUNITY_OPTIONS = ['Agent', 'ALC', 'DEI', 'Luxury', 'Rainbow', 'RALC', 'YP'];
 const DOCUMENT_TYPE_OPTIONS = ['ID Document', 'BSA Document', 'FFC Document', 'Employment Contract'];
+const TEAM_MEMBERSHIP_TITLES = ['Team Admin', 'Team Agent', 'Lead Agent', 'Agent'];
+const TEAM_DEPENDENT_TITLES = ['Team Admin', 'Team Agent', 'Lead Agent'];
 
 function normalizeAgentStatus(value: string | null): 'Active' | 'Inactive' | 'Unknown' {
   const normalized = (value ?? '').trim().toLowerCase();
@@ -198,7 +247,7 @@ function emptyForm(): AgentFormState {
     source_market_center_id: '',
     source_team_id: '',
     growth_share_sponsor: '',
-    temporary_growth_share_sponsor: '',
+    temporary_growth_share_sponsor: 'Not Applicable',
     kwuid: '',
     proposed_growth_share_sponsor: '',
     vested: false,
@@ -236,6 +285,11 @@ function emptyForm(): AgentFormState {
       document_url: '',
     })),
     document_notes: [],
+    mapp_access_feature_enabled: false,
+    mapp_access_temporarily_suspended: false,
+    mapp_access_suspended_reason: '',
+    mapp_access_suspended_by_email: '',
+    mapp_access_suspended_at: '',
   };
 }
 
@@ -274,6 +328,24 @@ function toInputDate(value: unknown): string {
   return date.toISOString().slice(0, 10);
 }
 
+function toEmailInput(value: string): string {
+  return value.replace(/\s+/g, '');
+}
+
+function toLocalDateInput(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getCreateAssociateDateDefaults(now: Date = new Date()): { startDate: string; firstOfNextMonth: string } {
+  const startDate = toLocalDateInput(now);
+  const firstOfNextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const firstOfNextMonth = toLocalDateInput(firstOfNextMonthDate);
+  return { startDate, firstOfNextMonth };
+}
+
 function toggleArrayValue(current: string[], value: string): string[] {
   if (current.includes(value)) {
     return current.filter((item) => item !== value);
@@ -281,8 +353,26 @@ function toggleArrayValue(current: string[], value: string): string[] {
   return [...current, value];
 }
 
+function normalizeTemporaryGrowthShareValue(value: unknown): 'Not Applicable' | 'True' | 'False' {
+  if (value === true) return 'True';
+  if (value === false) return 'False';
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return 'True';
+    if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return 'False';
+  }
+  return 'Not Applicable';
+}
+
+function toTemporaryGrowthSharePayload(value: string): boolean | null {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return null;
+}
+
 export default function AgentsPage() {
-  const { canCreateAssociate, canEditAssociate, isRegionalAdmin, isAgent } = useAuth();
+  const { canCreateAssociate, canEditAssociate, isRegionalAdmin, isOfficeAdmin, isAgent, activeContext, user } = useAuth();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'Active' | 'Inactive'>('Active');
@@ -297,10 +387,21 @@ export default function AgentsPage() {
   const [form, setForm] = useState<AgentFormState>(emptyForm());
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [pendingImagePreviewUrl, setPendingImagePreviewUrl] = useState<string | null>(null);
+  const [isUpdatingAccessSuspension, setIsUpdatingAccessSuspension] = useState(false);
+  const previousSourceTeamIdRef = useRef<string>('');
 
   const pageSize = view === 'card' ? CARD_PAGE_SIZE : PAGE_SIZE;
+  const isCreateMode = !editingId;
+  const isAgentReadOnlyMode = Boolean(editingId) && isAgent;
+  const isPostSaveNonRegionalAdmin = Boolean(editingId) && !isRegionalAdmin;
+  const isPostSaveOfficeAdminDateLocked = Boolean(editingId) && isOfficeAdmin && !isRegionalAdmin;
+  const canManageAccessSuspension = Boolean(editingId) && (isRegionalAdmin || isOfficeAdmin);
+  const effectiveSourceMarketCenterId =
+    isCreateMode && isOfficeAdmin
+      ? (activeContext?.marketCenterId ?? '')
+      : form.source_market_center_id;
 
-  const { data, isLoading, isFetching, isError, refetch } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['agents', page, search, view, statusFilter],
     queryFn: () => {
       const offset = (page - 1) * pageSize;
@@ -324,9 +425,26 @@ export default function AgentsPage() {
       }),
   });
 
-  // Team options placeholder — teams are edited via source IDs for now
-  const _unusedTeamQuery = { data: { items: [] as TeamOption[] } };
-  void _unusedTeamQuery;
+  const { data: allTeamOptionsData } = useQuery({
+    queryKey: ['team-options-for-associates-all'],
+    queryFn: () =>
+      fetch('/api/teams/options').then(async (r) => {
+        if (!r.ok) throw new Error('Unable to load team options');
+        return r.json() as Promise<{ items: TeamOption[] }>;
+      }),
+  });
+
+  const { data: teamOptionsData } = useQuery({
+    queryKey: ['team-options-for-associate-form', effectiveSourceMarketCenterId],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (effectiveSourceMarketCenterId) params.set('source_market_center_id', effectiveSourceMarketCenterId);
+      return fetch(`/api/teams/options?${params.toString()}`).then(async (r) => {
+        if (!r.ok) throw new Error('Unable to load team options');
+        return r.json() as Promise<{ items: TeamOption[] }>;
+      });
+    },
+  });
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil((data?.total ?? 0) / pageSize)), [data?.total, pageSize]);
   const filteredItems = useMemo(() => {
@@ -337,6 +455,100 @@ export default function AgentsPage() {
   const canGoPrev = page > 1;
   const canGoNext = page < totalPages;
 
+  const effectiveSourceMarketCenterName = useMemo(() => {
+    if (!effectiveSourceMarketCenterId) return '';
+    const selected = (marketCenterData?.items ?? []).find((mc) => mc.source_market_center_id === effectiveSourceMarketCenterId);
+    return selected?.name ?? activeContext?.marketCenter ?? effectiveSourceMarketCenterId;
+  }, [activeContext?.marketCenter, effectiveSourceMarketCenterId, marketCenterData?.items]);
+
+  const { data: activeAssociatesData } = useQuery({
+    queryKey: ['active-associates-for-sponsors'],
+    queryFn: async () => {
+      const pageLimit = 100;
+      let offset = 0;
+      let total = Number.POSITIVE_INFINITY;
+      const collected: ActiveAssociateOption[] = [];
+
+      while (offset < total) {
+        const params = new URLSearchParams({
+          status: 'active',
+          limit: String(pageLimit),
+          offset: String(offset),
+        });
+        const response = await fetch(`/api/agents?${params.toString()}`);
+        if (!response.ok) {
+          throw new Error('Unable to load active associates for sponsor options');
+        }
+
+        const payload = (await response.json()) as {
+          total: number;
+          items: Array<{
+            id: string;
+            full_name: string | null;
+            first_name: string | null;
+            last_name: string | null;
+          }>;
+        };
+
+        total = Number(payload.total ?? 0);
+        for (const item of payload.items ?? []) {
+          const fullName = item.full_name?.trim() || [item.first_name, item.last_name].filter(Boolean).join(' ').trim();
+          if (!fullName) continue;
+          collected.push({ id: item.id, full_name: fullName });
+        }
+
+        if (!payload.items || payload.items.length === 0) {
+          break;
+        }
+        offset += payload.items.length;
+      }
+
+      const uniqueByName = new Map<string, ActiveAssociateOption>();
+      for (const option of collected) {
+        if (!uniqueByName.has(option.full_name)) {
+          uniqueByName.set(option.full_name, option);
+        }
+      }
+      return Array.from(uniqueByName.values()).sort((a, b) => a.full_name.localeCompare(b.full_name));
+    },
+    staleTime: 60_000,
+  });
+
+  const sponsorOptions = useMemo(() => {
+    const options = activeAssociatesData ?? [];
+    const ensureCurrent = (value: string): ActiveAssociateOption[] => {
+      if (!value || options.some((option) => option.full_name === value)) {
+        return options;
+      }
+      return [{ id: `current-${value}`, full_name: value }, ...options];
+    };
+
+    return {
+      growth: ensureCurrent(form.growth_share_sponsor),
+      proposed: ensureCurrent(form.proposed_growth_share_sponsor),
+    };
+  }, [activeAssociatesData, form.growth_share_sponsor, form.proposed_growth_share_sponsor]);
+
+  const agentSplitDisplayValue = useMemo(() => {
+    if (!form.agent_split.trim()) {
+      return '';
+    }
+    const parsedAgentSplit = Number(form.agent_split);
+    if (!Number.isFinite(parsedAgentSplit)) {
+      return '';
+    }
+    return String(Math.max(0, Math.min(100, Math.round(parsedAgentSplit))));
+  }, [form.agent_split]);
+
+  const marketCenterSplitValue = useMemo(() => {
+    const parsedAgentSplit = Number(agentSplitDisplayValue);
+    if (!Number.isFinite(parsedAgentSplit)) {
+      return '';
+    }
+    const calculated = 100 - parsedAgentSplit;
+    return String(Math.max(0, Math.round(calculated)));
+  }, [agentSplitDisplayValue]);
+
   useEffect(() => {
     return () => {
       if (pendingImagePreviewUrl) {
@@ -345,17 +557,87 @@ export default function AgentsPage() {
     };
   }, [pendingImagePreviewUrl]);
 
+  const selectedTeamOption = useMemo(() => {
+    const sourceTeamId = form.source_team_id;
+    if (!sourceTeamId) return null;
+    const filteredMatch = (teamOptionsData?.items ?? []).find((t) => t.source_team_id === sourceTeamId);
+    if (filteredMatch) return filteredMatch;
+    return (allTeamOptionsData?.items ?? []).find((t) => t.source_team_id === sourceTeamId) ?? null;
+  }, [form.source_team_id, teamOptionsData?.items, allTeamOptionsData?.items]);
+
+  const { data: selectedTeamDetail } = useQuery({
+    queryKey: ['team-detail-cap', selectedTeamOption?.id],
+    queryFn: () =>
+      fetch(`/api/teams/${selectedTeamOption!.id}`).then(async (r) => {
+        if (!r.ok) throw new Error('Unable to load team detail');
+        return r.json() as Promise<{ name: string; cap: TeamCapDetail | null }>;
+      }),
+    enabled: Boolean(selectedTeamOption?.id),
+    staleTime: 30_000,
+  });
+
+  const teamCap: TeamCapDetail | null =
+    selectedTeamDetail?.cap ??
+    (selectedTeamOption
+      ? {
+          team_cap_amount: selectedTeamOption.team_cap_amount ?? null,
+          commission_split_to_team: selectedTeamOption.commission_split_to_team ?? null,
+          manual_cap: selectedTeamOption.manual_cap ?? false,
+          cap_year: selectedTeamOption.cap_year ?? null,
+        }
+      : null);
+
+  const hasValidTeamMembershipTitle = useMemo(
+    () => form.job_titles.some((title) => TEAM_MEMBERSHIP_TITLES.includes(title)),
+    [form.job_titles]
+  );
+
+  const showTeamTitleWarning = Boolean(form.source_team_id) && !hasValidTeamMembershipTitle;
+
+  useEffect(() => {
+    if (!form.source_team_id) return;
+    const options = teamOptionsData?.items ?? [];
+    if (options.length === 0) return;
+    const stillValid = options.some((t) => t.source_team_id === form.source_team_id);
+    if (!stillValid) {
+      setForm((p) => ({ ...p, source_team_id: '' }));
+    }
+  }, [form.source_team_id, teamOptionsData?.items]);
+
+  useEffect(() => {
+    const previousSourceTeamId = previousSourceTeamIdRef.current;
+    const currentSourceTeamId = form.source_team_id;
+
+    // When team membership is removed, clear team-only job titles to keep data clean.
+    if (previousSourceTeamId && !currentSourceTeamId) {
+      setForm((p) => ({
+        ...p,
+        job_titles: p.job_titles.filter((title) => !TEAM_DEPENDENT_TITLES.includes(title)),
+      }));
+    }
+
+    previousSourceTeamIdRef.current = currentSourceTeamId;
+  }, [form.source_team_id]);
+
   function openCreateForm(): void {
+    const dateDefaults = getCreateAssociateDateDefaults();
     if (pendingImagePreviewUrl) {
       URL.revokeObjectURL(pendingImagePreviewUrl);
     }
     setPendingImagePreviewUrl(null);
     setPendingImageFile(null);
     setIsImageUploading(false);
+    setIsUpdatingAccessSuspension(false);
     setEditingId(null);
     setFormError(null);
     setActiveSection('personal');
-    setForm(emptyForm());
+    setForm({
+      ...emptyForm(),
+      source_market_center_id: isOfficeAdmin ? (activeContext?.marketCenterId ?? '') : '',
+      start_date: dateDefaults.startDate,
+      anniversary_date: dateDefaults.firstOfNextMonth,
+      cap_date: dateDefaults.firstOfNextMonth,
+    });
     setIsFormOpen(true);
   }
 
@@ -366,6 +648,7 @@ export default function AgentsPage() {
     setPendingImagePreviewUrl(null);
     setPendingImageFile(null);
     setIsImageUploading(false);
+    setIsUpdatingAccessSuspension(false);
     setEditingId(item.id);
     setFormError(null);
     setIsLoadingDetails(true);
@@ -404,7 +687,7 @@ export default function AgentsPage() {
         source_market_center_id: (details.source_market_center_id as string | undefined) ?? item.source_market_center_id ?? '',
         source_team_id: (details.source_team_id as string | undefined) ?? item.source_team_id ?? '',
         growth_share_sponsor: (details.growth_share_sponsor as string | undefined) ?? '',
-        temporary_growth_share_sponsor: (details.temporary_growth_share_sponsor as string | undefined) ?? '',
+        temporary_growth_share_sponsor: normalizeTemporaryGrowthShareValue(details.temporary_growth_share_sponsor),
         kwuid: (details.kwuid as string | undefined) ?? item.kwuid ?? '',
         proposed_growth_share_sponsor: (details.proposed_growth_share_sponsor as string | undefined) ?? '',
         vested: Boolean(details.vested),
@@ -426,7 +709,7 @@ export default function AgentsPage() {
         private_property_opt_in: Boolean(details.private_property_opt_in),
         private_property_status: (details.private_property_status as string | undefined) ?? '',
         cap: (details.cap as string | undefined) ?? '',
-        manual_cap: Number((details.manual_cap as string | number | undefined) ?? 0) > 0,
+        manual_cap: Boolean(details.manual_cap),
         agent_split: (details.agent_split as string | undefined) ?? '',
         projected_cos: (details.projected_cos as string | undefined) ?? '',
         projected_cap: (details.projected_cap as string | undefined) ?? '',
@@ -445,6 +728,11 @@ export default function AgentsPage() {
         commission_notes: details.commission_notes?.map((note) => note.note_text) ?? [],
         date_notes: details.date_notes?.map((note) => note.note_text) ?? [],
         document_notes: details.document_notes?.map((note) => note.note_text) ?? [],
+        mapp_access_feature_enabled: Boolean(details.mapp_access?.feature_enabled),
+        mapp_access_temporarily_suspended: Boolean(details.mapp_access?.is_temporarily_suspended),
+        mapp_access_suspended_reason: details.mapp_access?.suspended_reason ?? '',
+        mapp_access_suspended_by_email: details.mapp_access?.suspended_by_email ?? '',
+        mapp_access_suspended_at: details.mapp_access?.suspended_at ? toInputDate(details.mapp_access.suspended_at) : '',
       }));
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Unable to load associate details');
@@ -474,31 +762,67 @@ export default function AgentsPage() {
   async function handleImageUpload(file: File | undefined): Promise<void> {
     if (!file) return;
     setFormError(null);
-    if (pendingImagePreviewUrl) {
-      URL.revokeObjectURL(pendingImagePreviewUrl);
-    }
-    const previewUrl = URL.createObjectURL(file);
-    setPendingImageFile(file);
-    setPendingImagePreviewUrl(previewUrl);
 
-    // Upload happens on Save for both create and edit to keep one consistent flow.
-    // We keep the persisted image_url unchanged until upload succeeds.
-    return;
+    // Client-side validation for portal requirements
+    // Portals require: JPEG format, 1080x1080px recommended, max 2MB
+    if (file.type !== 'image/jpeg') {
+      setFormError('Image must be in JPEG format. Please convert your image and try again.');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      // Allow slightly larger files; backend will compress them
+      setFormError(
+        `Image is too large (${(file.size / 1024 / 1024).toFixed(1)}MB). ` +
+        'Please use a smaller image (under 5MB). It will be automatically optimized to portal specifications.'
+      );
+      return;
+    }
+
+    // Validate image dimensions (warn if not square or too small)
+    const img = new Image();
+    img.onload = () => {
+      const { width, height } = img;
+      if (width < 500 || height < 500) {
+        setFormError(
+          `Image is too small (${width}x${height}px). Please use an image at least 500x500px. ` +
+          '(Recommended: 1080x1080px for best portal display)'
+        );
+        URL.revokeObjectURL(img.src);
+        return;
+      }
+      if (width !== height) {
+        setFormError(
+          `Image is not square (${width}x${height}px). It will be automatically cropped/padded ` +
+          'to 1080x1080px square for portal compatibility.'
+        );
+      }
+      // Validation passed, set the file
+      if (pendingImagePreviewUrl) {
+        URL.revokeObjectURL(pendingImagePreviewUrl);
+      }
+      const previewUrl = URL.createObjectURL(file);
+      setPendingImageFile(file);
+      setPendingImagePreviewUrl(previewUrl);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => {
+      setFormError('Invalid image file. Please try another image.');
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(file);
   }
 
   async function handleDocumentUpload(index: number, file: File | undefined): Promise<void> {
     if (!file) return;
-    if (!editingId) {
-      setFormError('Please save the associate first before uploading documents');
-      return;
-    }
 
     try {
       const formData = new FormData();
       formData.append('document', file);
       formData.append('document_type', form.documents[index].document_type);
 
-      const response = await fetch(`/api/agents/${editingId}/upload-document`, {
+      const uploadUrl = editingId ? `/api/agents/${editingId}/upload-document` : '/api/agents/upload-document-temp';
+      const response = await fetch(uploadUrl, {
         method: 'POST',
         body: formData,
       });
@@ -508,11 +832,11 @@ export default function AgentsPage() {
         throw new Error(json.error ?? 'Failed to upload document');
       }
 
-      const data = (await response.json()) as { document_url: string };
+      const data = (await response.json()) as { document_url: string; document_name?: string };
       setForm((p) => ({
         ...p,
         documents: p.documents.map((doc, i) =>
-          i === index ? { ...doc, document_url: data.document_url, document_name: file.name } : doc
+          i === index ? { ...doc, document_url: data.document_url, document_name: data.document_name ?? file.name } : doc
         ),
       }));
     } catch (error) {
@@ -526,15 +850,30 @@ export default function AgentsPage() {
       return;
     }
 
+    if (!isAgentReadOnlyMode && form.source_team_id && !hasValidTeamMembershipTitle) {
+      setFormError('To assign a team, Job Titles must include Team Admin, Team Agent, Lead Agent, or Agent.');
+      setActiveSection('kw');
+      return;
+    }
+
     setIsSaving(true);
     setFormError(null);
     try {
       const method = editingId ? 'PUT' : 'POST';
       const url = editingId ? `/api/agents/${editingId}` : '/api/agents';
       const safeImageUrl = form.image_url.startsWith('blob:') ? '' : form.image_url;
+      const createDateDefaults = getCreateAssociateDateDefaults();
       const payload = {
         ...form,
+        start_date: isCreateMode ? createDateDefaults.startDate : form.start_date,
+        anniversary_date: isCreateMode ? createDateDefaults.firstOfNextMonth : form.anniversary_date,
+        cap_date: isCreateMode ? createDateDefaults.firstOfNextMonth : form.cap_date,
+        source_market_center_id:
+          isCreateMode && isOfficeAdmin
+            ? (activeContext?.marketCenterId ?? form.source_market_center_id)
+            : form.source_market_center_id,
         image_url: safeImageUrl,
+        temporary_growth_share_sponsor: toTemporaryGrowthSharePayload(form.temporary_growth_share_sponsor),
         full_name: [form.first_name, form.last_name].filter(Boolean).join(' ').trim(),
       };
 
@@ -585,16 +924,91 @@ export default function AgentsPage() {
     }
   }
 
+  async function saveAccessSuspension(): Promise<void> {
+    if (!editingId || !canManageAccessSuspension) return;
+
+    if (form.mapp_access_temporarily_suspended && !form.mapp_access_suspended_reason.trim()) {
+      setFormError('Please provide a suspension reason before enabling temporary suspension.');
+      return;
+    }
+
+    setFormError(null);
+    setIsUpdatingAccessSuspension(true);
+    try {
+      const response = await fetch(`/api/agents/${editingId}/access-suspension`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          is_temporarily_suspended: form.mapp_access_temporarily_suspended,
+          suspended_reason: form.mapp_access_temporarily_suspended ? form.mapp_access_suspended_reason.trim() : null,
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? 'Failed to update access suspension');
+      }
+
+      const payload = (await response.json()) as {
+        mapp_access?: {
+          feature_enabled?: boolean;
+          is_temporarily_suspended?: boolean;
+          suspended_reason?: string | null;
+          suspended_by_email?: string | null;
+          suspended_at?: string | null;
+        };
+      };
+
+      setForm((previous) => ({
+        ...previous,
+        mapp_access_feature_enabled: Boolean(payload.mapp_access?.feature_enabled),
+        mapp_access_temporarily_suspended: Boolean(payload.mapp_access?.is_temporarily_suspended),
+        mapp_access_suspended_reason: payload.mapp_access?.suspended_reason ?? '',
+        mapp_access_suspended_by_email: payload.mapp_access?.suspended_by_email ?? '',
+        mapp_access_suspended_at: payload.mapp_access?.suspended_at ? toInputDate(payload.mapp_access.suspended_at) : '',
+      }));
+
+      const isSuspended = Boolean(payload.mapp_access?.is_temporarily_suspended);
+      const associateName = getAssociateDisplayName(form);
+      window.alert(
+        isSuspended
+          ? `${associateName} has been suspended.`
+          : `${associateName} suspension has been removed.`
+      );
+
+      const formEmails = [form.kwsa_email, form.private_email]
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean);
+      const currentUserEmail = user?.email?.trim().toLowerCase() ?? '';
+      const isCurrentUser = Boolean(currentUserEmail) && formEmails.includes(currentUserEmail);
+
+      if (isCurrentUser) {
+        broadcastAccessControlUpdate({
+          featureEnabled: Boolean(payload.mapp_access?.feature_enabled),
+          isTemporarilySuspended: isSuspended,
+          suspendedReason: payload.mapp_access?.suspended_reason ?? null,
+          suspendedByEmail: payload.mapp_access?.suspended_by_email ?? null,
+          suspendedAt: payload.mapp_access?.suspended_at ?? null,
+          updatedAt: payload.mapp_access?.suspended_at ?? null,
+        });
+      }
+
+      setIsFormOpen(false);
+      await refetch();
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Failed to update access suspension');
+    } finally {
+      setIsUpdatingAccessSuspension(false);
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="page-title">Associates</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
-            {isLoading ? 'Loading...' : `${(data?.total ?? 0).toLocaleString()} associates in migration database`}
-          </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-slate-300 overflow-hidden text-sm">
             <button
               type="button"
@@ -617,9 +1031,6 @@ export default function AgentsPage() {
               List
             </button>
           </div>
-          <button className="primary-btn" type="button" onClick={() => refetch()}>
-            {isFetching ? 'Refreshing...' : 'Refresh'}
-          </button>
           {canCreateAssociate && (
             <button className="primary-btn" type="button" onClick={openCreateForm}>
               Add Associate
@@ -694,8 +1105,24 @@ export default function AgentsPage() {
                       </div>
                     </div>
                     <div className="text-xs text-slate-600 space-y-1">
-                      <p>{item.email ?? '-'}</p>
-                      <p>{item.mobile_number ?? '-'}</p>
+                      <p>
+                        {item.email ? (
+                          <a href={`mailto:${item.email}`} className="text-red-700 hover:text-red-800 hover:underline">
+                            {item.email}
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </p>
+                      <p>
+                        {item.mobile_number ? (
+                          <a href={`tel:${formatTelHref(item.mobile_number)}`} className="text-red-700 hover:text-red-800 hover:underline">
+                            {item.mobile_number}
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </p>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 border-t border-slate-100 pt-3">
@@ -711,7 +1138,7 @@ export default function AgentsPage() {
 
                     <div className="flex items-center justify-between border-t border-slate-100 pt-2">
                       <p className="text-[11px] text-slate-400 font-mono">{item.kwuid ? `KWUID: ${item.kwuid}` : ''}</p>
-                      {canEditAssociate(item.source_market_center_id, item.email) && (
+                      {canEditAssociate(item.source_market_center_id, item.email, item.market_center_name) && (
                         <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>
                           Edit
                         </button>
@@ -745,15 +1172,31 @@ export default function AgentsPage() {
                   return (
                     <tr key={item.id} className="hover:bg-slate-50">
                       <td className="px-4 py-2.5 font-medium">{agentDisplayName(item)}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{item.email ?? '-'}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{item.mobile_number ?? '-'}</td>
+                      <td className="px-4 py-2.5 text-slate-600">
+                        {item.email ? (
+                          <a href={`mailto:${item.email}`} className="text-red-700 hover:text-red-800 hover:underline">
+                            {item.email}
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-600">
+                        {item.mobile_number ? (
+                          <a href={`tel:${formatTelHref(item.mobile_number)}`} className="text-red-700 hover:text-red-800 hover:underline">
+                            {item.mobile_number}
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
                       <td className="px-4 py-2.5">
                         <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}>{statusLabel}</span>
                       </td>
                       <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{item.kwuid ?? '-'}</td>
                       <td className="px-4 py-2.5 text-slate-600">{item.market_center_name ?? item.source_market_center_id ?? '-'}</td>
                       <td className="px-4 py-2.5">
-                        {canEditAssociate(item.source_market_center_id, item.email) && (
+                        {canEditAssociate(item.source_market_center_id, item.email, item.market_center_name) && (
                           <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50" type="button" onClick={() => void openEditForm(item)}>
                             Edit
                           </button>
@@ -794,15 +1237,15 @@ export default function AgentsPage() {
 
       {isFormOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm">
-          <div className="absolute inset-6 rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
-            <div className="border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+          <div className="absolute inset-2 sm:inset-4 lg:inset-6 rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+            <div className="border-b border-slate-200 px-4 py-4 sm:px-6 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-500">Associate Workspace</p>
-                <h2 className="text-2xl font-semibold text-slate-900">
+                <h2 className="text-xl sm:text-2xl font-semibold text-slate-900">
                   {editingId ? `${form.first_name || ''} ${form.last_name || ''}`.trim() || 'Edit Associate' : 'New Associate'}
                 </h2>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
                 <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" type="button" onClick={() => setIsFormOpen(false)}>
                   Cancel
                 </button>
@@ -812,29 +1255,31 @@ export default function AgentsPage() {
               </div>
             </div>
 
-            <div className="flex min-h-0 flex-1">
-              <aside className="w-64 border-r border-slate-200 bg-slate-50 p-3 space-y-2">
-                {[
-                  ['personal', 'Personal Details'],
-                  ['kw', 'KW Details'],
-                  ['commission', 'Commission'],
-                  ['dates', 'Dates'],
-                  ['documents', 'Documents'],
-                ].map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setActiveSection(key as AssociateSection)}
-                    className={`w-full rounded-lg px-3 py-2 text-left text-sm font-medium ${
-                      activeSection === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
+            <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+              <aside className="w-full border-b border-slate-200 bg-slate-50 p-2 sm:p-3 lg:w-64 lg:border-b-0 lg:border-r">
+                <div className="flex gap-2 overflow-x-auto scrollbar-none lg:block lg:space-y-2">
+                  {[
+                    ['personal', 'Personal Details'],
+                    ['kw', 'KW Details'],
+                    ['commission', 'Commission'],
+                    ['dates', 'Dates'],
+                    ['documents', 'Documents'],
+                  ].map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setActiveSection(key as AssociateSection)}
+                      className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm font-medium lg:w-full ${
+                        activeSection === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </aside>
 
-              <div className="flex-1 overflow-auto p-6 space-y-6">
+              <div className="flex-1 overflow-auto p-4 sm:p-6 space-y-6">
                 {isLoadingDetails && <p className="text-sm text-slate-500">Loading associate details...</p>}
                 {formError && <p className="text-sm text-amber-700">{formError}</p>}
 
@@ -842,22 +1287,27 @@ export default function AgentsPage() {
                   <section className="space-y-4">
                     <h3 className="text-lg font-semibold text-slate-900">Personal Details</h3>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Associate Status</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.status_name} onChange={(e) => setForm((p) => ({ ...p, status_name: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">National ID</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.national_id} onChange={(e) => setForm((p) => ({ ...p, national_id: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">First Name</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.first_name} onChange={(e) => setForm((p) => ({ ...p, first_name: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Last Name</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.last_name} onChange={(e) => setForm((p) => ({ ...p, last_name: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">FFC Number</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.ffc_number} onChange={(e) => setForm((p) => ({ ...p, ffc_number: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">KWSA Email</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.kwsa_email} onChange={(e) => setForm((p) => ({ ...p, kwsa_email: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Private Email</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.private_email} onChange={(e) => setForm((p) => ({ ...p, private_email: e.target.value }))} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Associate Status</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100 disabled:text-slate-600" value={isCreateMode ? 'Active' : form.status_name} onChange={(e) => setForm((p) => ({ ...p, status_name: e.target.value }))} readOnly={isCreateMode || isPostSaveNonRegionalAdmin || isAgentReadOnlyMode} disabled={isCreateMode || isPostSaveNonRegionalAdmin || isAgentReadOnlyMode} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">National ID</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" value={form.national_id} onChange={(e) => setForm((p) => ({ ...p, national_id: e.target.value }))} readOnly={isAgentReadOnlyMode} disabled={isAgentReadOnlyMode} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">First Name</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" value={form.first_name} onChange={(e) => setForm((p) => ({ ...p, first_name: e.target.value }))} readOnly={isAgentReadOnlyMode} disabled={isAgentReadOnlyMode} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Last Name</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" value={form.last_name} onChange={(e) => setForm((p) => ({ ...p, last_name: e.target.value }))} readOnly={isAgentReadOnlyMode} disabled={isAgentReadOnlyMode} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">FFC Number</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" value={form.ffc_number} onChange={(e) => setForm((p) => ({ ...p, ffc_number: e.target.value }))} readOnly={isAgentReadOnlyMode} disabled={isAgentReadOnlyMode} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">KWSA Email</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" value={form.kwsa_email} onChange={(e) => setForm((p) => ({ ...p, kwsa_email: toEmailInput(e.target.value) }))} readOnly={isAgentReadOnlyMode} disabled={isAgentReadOnlyMode} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Private Email</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" value={form.private_email} onChange={(e) => setForm((p) => ({ ...p, private_email: toEmailInput(e.target.value) }))} readOnly={isAgentReadOnlyMode} disabled={isAgentReadOnlyMode} /></label>
                       <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Mobile Number (xxxxxxxxxx)</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="e.g. 0658339187" value={form.mobile_number} onChange={(e) => setForm((p) => ({ ...p, mobile_number: e.target.value.replace(/\s/g, '') }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Office Number (xxxxxxxxxx)</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="e.g. 0123451414" value={form.office_number} onChange={(e) => setForm((p) => ({ ...p, office_number: e.target.value.replace(/\s/g, '') }))} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Office Number (xxxxxxxxxx)</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" placeholder="e.g. 0123451414" value={form.office_number} onChange={(e) => setForm((p) => ({ ...p, office_number: e.target.value.replace(/\s/g, '') }))} readOnly={isAgentReadOnlyMode} disabled={isAgentReadOnlyMode} /></label>
                       <div className="flex flex-col gap-1 md:col-span-2">
-                        <span className="text-xs text-slate-600">Associate Image</span>
+                        <div className="space-y-1">
+                          <span className="text-xs text-slate-600">Associate Image</span>
+                          <p className="text-xs text-slate-500">
+                            📋 <strong>Portal Requirements:</strong> JPEG format, 1080×1080px (or larger, will auto-optimize), max 2MB
+                          </p>
+                        </div>
                         <div className="flex gap-2 items-end">
                           <div className="flex-1">
                             <input
                               type="file"
-                              accept="image/*"
+                              accept="image/jpeg"
                               className="rounded-lg border border-slate-300 px-3 py-2 text-sm w-full"
                               onChange={(e) => void handleImageUpload(e.currentTarget.files?.[0])
                               }
@@ -867,6 +1317,7 @@ export default function AgentsPage() {
                             <button
                               type="button"
                               className="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+                              disabled={isAgentReadOnlyMode}
                               onClick={() => {
                                 if (pendingImagePreviewUrl) {
                                   URL.revokeObjectURL(pendingImagePreviewUrl);
@@ -907,6 +1358,7 @@ export default function AgentsPage() {
                         <button
                           type="button"
                           className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                          disabled={isAgentReadOnlyMode}
                           onClick={() => setForm((p) => ({ ...p, social_media: [...p.social_media, { platform: '', url: '' }] }))}
                         >
                           Add Entry
@@ -915,26 +1367,86 @@ export default function AgentsPage() {
                       <div className="mt-3 space-y-2">
                         {form.social_media.map((row, index) => (
                           <div key={index} className="grid grid-cols-1 md:grid-cols-[180px_1fr_auto] gap-2">
-                            <input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Platform" value={row.platform} onChange={(e) => setForm((p) => ({ ...p, social_media: p.social_media.map((item, i) => i === index ? { ...item, platform: e.target.value } : item) }))} />
-                            <input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Profile URL" value={row.url} onChange={(e) => setForm((p) => ({ ...p, social_media: p.social_media.map((item, i) => i === index ? { ...item, url: e.target.value } : item) }))} />
-                            <button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => setForm((p) => ({ ...p, social_media: p.social_media.filter((_, i) => i !== index) }))}>Remove</button>
+                            <input className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" placeholder="Platform" value={row.platform} onChange={(e) => setForm((p) => ({ ...p, social_media: p.social_media.map((item, i) => i === index ? { ...item, platform: e.target.value } : item) }))} readOnly={isAgentReadOnlyMode} disabled={isAgentReadOnlyMode} />
+                            <input className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" placeholder="Profile URL" value={row.url} onChange={(e) => setForm((p) => ({ ...p, social_media: p.social_media.map((item, i) => i === index ? { ...item, url: e.target.value } : item) }))} readOnly={isAgentReadOnlyMode} disabled={isAgentReadOnlyMode} />
+                            <button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs" disabled={isAgentReadOnlyMode} onClick={() => setForm((p) => ({ ...p, social_media: p.social_media.filter((_, i) => i !== index) }))}>Remove</button>
                           </div>
                         ))}
                       </div>
                     </div>
+
+                    {canManageAccessSuspension && (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">MAPP Access Control</p>
+                            <p className="text-xs text-slate-600">Temporarily suspend or restore this associate's MAPP access.</p>
+                          </div>
+                          <label className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800">
+                            <input
+                              type="checkbox"
+                              checked={form.mapp_access_temporarily_suspended}
+                              onChange={(e) => setForm((p) => ({ ...p, mapp_access_temporarily_suspended: e.target.checked }))}
+                              disabled={!form.mapp_access_feature_enabled}
+                            />
+                            Temporarily Suspend
+                          </label>
+                        </div>
+
+                        {!form.mapp_access_feature_enabled && (
+                          <p className="text-xs text-slate-500">Local feature flag is currently off. Enable it in backend env to test suspension controls.</p>
+                        )}
+
+                        {form.mapp_access_temporarily_suspended && (
+                          <label className="flex flex-col gap-1">
+                            <span className="text-xs text-slate-700">Suspension Reason</span>
+                            <textarea
+                              rows={2}
+                              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                              value={form.mapp_access_suspended_reason}
+                              onChange={(e) => setForm((p) => ({ ...p, mapp_access_suspended_reason: e.target.value }))}
+                              placeholder="Reason shown to admin records"
+                              disabled={!form.mapp_access_feature_enabled}
+                            />
+                          </label>
+                        )}
+
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="text-xs text-slate-600">
+                            <p>Status: <span className={form.mapp_access_temporarily_suspended ? 'font-semibold text-amber-700' : 'font-semibold text-emerald-700'}>{form.mapp_access_temporarily_suspended ? 'Suspended' : 'Active'}</span></p>
+                            {form.mapp_access_suspended_by_email && <p>By: {form.mapp_access_suspended_by_email}</p>}
+                            {form.mapp_access_suspended_at && <p>Updated: {form.mapp_access_suspended_at}</p>}
+                          </div>
+                          <button
+                            type="button"
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            onClick={() => void saveAccessSuspension()}
+                            disabled={isUpdatingAccessSuspension || !form.mapp_access_feature_enabled}
+                          >
+                            {isUpdatingAccessSuspension ? 'Saving...' : 'Save Access Control'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {isAgentReadOnlyMode && <p className="text-xs text-slate-500">For Agent role, only Mobile Number and Associate Image can be updated after save.</p>}
                   </section>
                 )}
 
                 {activeSection === 'kw' && (
                   <section className="space-y-4">
+                    <fieldset disabled={isAgentReadOnlyMode} className="space-y-4">
                     <h3 className="text-lg font-semibold text-slate-900">KW Details</h3>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Market Center</span><select className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.source_market_center_id} onChange={(e) => setForm((p) => ({ ...p, source_market_center_id: e.target.value }))}><option value="">Select</option>{(marketCenterData?.items ?? []).map((mc) => <option key={mc.source_market_center_id} value={mc.source_market_center_id}>{mc.name}</option>)}</select></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Team</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.source_team_id} onChange={(e) => setForm((p) => ({ ...p, source_team_id: e.target.value }))} placeholder="Team source id" /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Growth Share Sponsor</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.growth_share_sponsor} onChange={(e) => setForm((p) => ({ ...p, growth_share_sponsor: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Temporary Growth Share Sponsor</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.temporary_growth_share_sponsor} onChange={(e) => setForm((p) => ({ ...p, temporary_growth_share_sponsor: e.target.value }))} /></label>
+                      {isCreateMode && isOfficeAdmin ? (
+                        <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Market Center</span><input className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700" value={effectiveSourceMarketCenterName} readOnly disabled /><span className="text-[11px] text-slate-500">Locked to your active office admin market centre.</span></label>
+                      ) : (
+                        <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Market Center</span><select className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.source_market_center_id} onChange={(e) => setForm((p) => ({ ...p, source_market_center_id: e.target.value }))}><option value="">Select</option>{(marketCenterData?.items ?? []).map((mc) => <option key={mc.source_market_center_id} value={mc.source_market_center_id}>{mc.name}</option>)}</select></label>
+                      )}
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Team</span><select className={`rounded-lg border px-3 py-2 text-sm ${showTeamTitleWarning ? 'border-red-400 bg-red-50' : 'border-slate-300'}`} value={form.source_team_id} onChange={(e) => setForm((p) => ({ ...p, source_team_id: e.target.value }))}><option value="">No team</option>{(teamOptionsData?.items ?? []).map((t) => <option key={t.source_team_id} value={t.source_team_id}>{t.name}</option>)}</select><span className="text-[11px] text-slate-500">Shows active teams for the selected market centre.</span>{showTeamTitleWarning && <span className="text-[11px] font-semibold text-red-600">Select at least one Job Title: Team Admin, Team Agent, Lead Agent, or Agent.</span>}</label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Growth Share Sponsor</span><select className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.growth_share_sponsor} onChange={(e) => setForm((p) => ({ ...p, growth_share_sponsor: e.target.value }))}><option value="">Select active associate</option>{sponsorOptions.growth.map((option) => <option key={option.id} value={option.full_name}>{option.full_name}</option>)}</select></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Temporary Growth Share Sponsor</span><select className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.temporary_growth_share_sponsor || 'Not Applicable'} onChange={(e) => setForm((p) => ({ ...p, temporary_growth_share_sponsor: e.target.value }))}><option value="Not Applicable">Not Applicable</option><option value="True">True</option><option value="False">False</option></select></label>
                       <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">KWUID</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.kwuid} onChange={(e) => setForm((p) => ({ ...p, kwuid: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Proposed Growth Share Sponsor</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.proposed_growth_share_sponsor} onChange={(e) => setForm((p) => ({ ...p, proposed_growth_share_sponsor: e.target.value }))} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Proposed Growth Share Sponsor</span><select className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.proposed_growth_share_sponsor} onChange={(e) => setForm((p) => ({ ...p, proposed_growth_share_sponsor: e.target.value }))}><option value="">Select active associate</option>{sponsorOptions.proposed.map((option) => <option key={option.id} value={option.full_name}>{option.full_name}</option>)}</select></label>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -984,7 +1496,7 @@ export default function AgentsPage() {
                           </div>
                           <div>
                             <p className="text-sm font-semibold text-slate-900 mb-2">Admin Teams (Source IDs)</p>
-                            <input className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Comma separated team source ids" value={form.admin_teams.join(', ')} onChange={(e) => setForm((p) => ({ ...p, admin_teams: e.target.value.split(',').map((value) => value.trim()).filter(Boolean) }))} />
+                            <div className="flex flex-wrap gap-2">{(allTeamOptionsData?.items ?? []).map((t) => <button key={t.source_team_id} type="button" className={`rounded-full px-3 py-1 text-xs border ${form.admin_teams.includes(t.source_team_id) ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-700 border-slate-300'}`} onClick={() => setForm((p) => ({ ...p, admin_teams: toggleArrayValue(p.admin_teams, t.source_team_id) }))}>{t.name}</button>)}</div>
                             <p className="mt-1 text-xs text-slate-500">Team lookups are not wired yet, so this uses source IDs for now.</p>
                           </div>
                         </div>
@@ -1004,44 +1516,78 @@ export default function AgentsPage() {
                         <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Private Property Status</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.private_property_status} onChange={(e) => setForm((p) => ({ ...p, private_property_status: e.target.value }))} /></label>
                       </div>
                     </div>
+                    </fieldset>
                   </section>
                 )}
 
                 {activeSection === 'commission' && (
                   <section className="space-y-4">
+                    <fieldset disabled={isAgentReadOnlyMode} className="space-y-4">
                     <h3 className="text-lg font-semibold text-slate-900">Commission</h3>
+                    {form.source_team_id && (
+                      <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+                        Individual commission fields are read-only while this associate is assigned to a team.
+                      </div>
+                    )}
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Total Cap Amount</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.cap} onChange={(e) => setForm((p) => ({ ...p, cap: e.target.value }))} /></label>
-                      <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm self-end"><input type="checkbox" checked={form.manual_cap} onChange={(e) => setForm((p) => ({ ...p, manual_cap: e.target.checked }))} />Manual Cap Override</label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Agent Split %</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.agent_split} onChange={(e) => setForm((p) => ({ ...p, agent_split: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Projected CO$</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.projected_cos} onChange={(e) => setForm((p) => ({ ...p, projected_cos: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Projected Cap</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.projected_cap} onChange={(e) => setForm((p) => ({ ...p, projected_cap: e.target.value }))} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Total Cap Amount</span><div className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm"><span className="text-slate-600">R</span><input className="min-w-0 flex-1 border-0 p-0 text-sm focus:outline-none disabled:bg-transparent" value={form.cap} onChange={(e) => setForm((p) => ({ ...p, cap: e.target.value }))} readOnly={Boolean(form.source_team_id)} disabled={Boolean(form.source_team_id)} /></div></label>
+                      <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm self-end"><input type="checkbox" checked={form.manual_cap} onChange={(e) => setForm((p) => ({ ...p, manual_cap: e.target.checked }))} disabled={Boolean(form.source_team_id)} />Manual Cap Override</label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Agent Split %</span><div className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm"><input className="min-w-0 flex-1 border-0 p-0 text-sm focus:outline-none disabled:bg-transparent" value={agentSplitDisplayValue} onChange={(e) => {
+                        const digitsOnly = e.target.value.replace(/[^\d]/g, '');
+                        if (!digitsOnly) {
+                          setForm((p) => ({ ...p, agent_split: '' }));
+                          return;
+                        }
+                        const clamped = Math.min(100, Number(digitsOnly));
+                        setForm((p) => ({ ...p, agent_split: String(clamped) }));
+                      }} readOnly={Boolean(form.source_team_id)} disabled={Boolean(form.source_team_id)} inputMode="numeric" /><span className="text-slate-600">%</span></div></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Market Centre Split %</span><div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700"><input className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-slate-700 focus:outline-none" value={marketCenterSplitValue} readOnly /><span className="text-slate-600">%</span></div></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Projected CO$</span><input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.projected_cos} onChange={(e) => setForm((p) => ({ ...p, projected_cos: e.target.value }))} readOnly={Boolean(form.source_team_id)} disabled={Boolean(form.source_team_id)} /></label>
                     </div>
+                    {form.source_team_id && (
+                      <div className="rounded-xl border border-slate-200 p-4">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-semibold text-slate-900">Team Cap</p>
+                          <p className="text-xs text-slate-500">{selectedTeamOption?.name ?? form.source_team_id}</p>
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-4">
+                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Team Cap Amount</span><input className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm" value={teamCap?.team_cap_amount ?? ''} readOnly /></label>
+                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Team Split (%)</span><input className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm" value={teamCap?.commission_split_to_team ?? ''} readOnly /></label>
+                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Manual Cap Override</span><input className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm" value={teamCap?.manual_cap ? 'Yes' : 'No'} readOnly /></label>
+                          <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Cap Year</span><input className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm" value={teamCap?.cap_year ? String(teamCap.cap_year) : ''} readOnly /></label>
+                        </div>
+                      </div>
+                    )}
                     <div className="rounded-xl border border-slate-200 p-4">
                       <div className="flex items-center justify-between"><p className="text-sm font-semibold">Commission Notes</p><button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => setForm((p) => ({ ...p, commission_notes: [...p.commission_notes, ''] }))}>Add Note</button></div>
                       <div className="mt-3 space-y-2">{form.commission_notes.map((note, index) => <div key={index} className="flex gap-2"><textarea className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" rows={2} value={note} onChange={(e) => setForm((p) => ({ ...p, commission_notes: p.commission_notes.map((item, i) => i === index ? e.target.value : item) }))} /><button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => setForm((p) => ({ ...p, commission_notes: p.commission_notes.filter((_, i) => i !== index) }))}>Remove</button></div>)}</div>
                     </div>
+                    </fieldset>
                   </section>
                 )}
 
                 {activeSection === 'dates' && (
                   <section className="space-y-4">
+                    <fieldset disabled={isAgentReadOnlyMode} className="space-y-4">
                     <h3 className="text-lg font-semibold text-slate-900">Dates</h3>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Start Date</span><input type="date" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.start_date} onChange={(e) => setForm((p) => ({ ...p, start_date: e.target.value }))} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Start Date</span><input type="date" className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" value={form.start_date} onChange={(e) => setForm((p) => ({ ...p, start_date: e.target.value }))} readOnly={isPostSaveOfficeAdminDateLocked} disabled={isPostSaveOfficeAdminDateLocked} /></label>
                       <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">End Date</span><input type="date" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.end_date} onChange={(e) => setForm((p) => ({ ...p, end_date: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Anniversary Date</span><input type="date" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.anniversary_date} onChange={(e) => setForm((p) => ({ ...p, anniversary_date: e.target.value }))} /></label>
-                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Cap Date</span><input type="date" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={form.cap_date} onChange={(e) => setForm((p) => ({ ...p, cap_date: e.target.value }))} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Anniversary Date</span><input type="date" className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" value={form.anniversary_date} onChange={(e) => setForm((p) => ({ ...p, anniversary_date: e.target.value }))} readOnly={isPostSaveOfficeAdminDateLocked} disabled={isPostSaveOfficeAdminDateLocked} /></label>
+                      <label className="flex flex-col gap-1"><span className="text-xs text-slate-600">Cap Date</span><input type="date" className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" value={form.cap_date} onChange={(e) => setForm((p) => ({ ...p, cap_date: e.target.value }))} /></label>
                     </div>
+                    {isCreateMode && <p className="text-xs text-slate-500">For new associates: Start Date is today, and Anniversary Date and Cap Date are set to the first day of next month.</p>}
                     <div className="rounded-xl border border-slate-200 p-4">
                       <div className="flex items-center justify-between"><p className="text-sm font-semibold">Date Notes</p><button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => setForm((p) => ({ ...p, date_notes: [...p.date_notes, ''] }))}>Add Note</button></div>
                       <div className="mt-3 space-y-2">{form.date_notes.map((note, index) => <div key={index} className="flex gap-2"><textarea className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" rows={2} value={note} onChange={(e) => setForm((p) => ({ ...p, date_notes: p.date_notes.map((item, i) => i === index ? e.target.value : item) }))} /><button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => setForm((p) => ({ ...p, date_notes: p.date_notes.filter((_, i) => i !== index) }))}>Remove</button></div>)}</div>
                     </div>
+                    </fieldset>
                   </section>
                 )}
 
                 {activeSection === 'documents' && (
                   <section className="space-y-4">
+                    <fieldset disabled={isAgentReadOnlyMode} className="space-y-4">
                     <h3 className="text-lg font-semibold text-slate-900">Documents</h3>
                     <div className="rounded-xl border border-slate-200 overflow-hidden">
                       <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -1092,6 +1638,7 @@ export default function AgentsPage() {
                       <div className="flex items-center justify-between"><p className="text-sm font-semibold">Document Notes</p><button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => setForm((p) => ({ ...p, document_notes: [...p.document_notes, ''] }))}>Add Note</button></div>
                       <div className="mt-3 space-y-2">{form.document_notes.map((note, index) => <div key={index} className="flex gap-2"><textarea className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" rows={2} value={note} onChange={(e) => setForm((p) => ({ ...p, document_notes: p.document_notes.map((item, i) => i === index ? e.target.value : item) }))} /><button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => setForm((p) => ({ ...p, document_notes: p.document_notes.filter((_, i) => i !== index) }))}>Remove</button></div>)}</div>
                     </div>
+                    </fieldset>
                   </section>
                 )}
               </div>

@@ -53,6 +53,23 @@ function statusBadgeClass(status: string | null): string {
   return 'status-chip warn';
 }
 
+function HeaderIcon({ kind }: { kind: 'search' | 'status' }) {
+  if (kind === 'search') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.7" />
+        <path d="m20 20-3.5-3.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
+      <path d="M5 7h14M8 12h8M10 17h4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 async function fetchAssociates(page: number, search: string, status: string): Promise<AssociatesResponse> {
   const offset = (page - 1) * PAGE_SIZE;
   const params = new URLSearchParams({
@@ -82,7 +99,7 @@ export default function AssociatesPage() {
   const [status, setStatus] = useState<(typeof STATUS_FILTERS)[number]>('All');
   const [view, setView] = useState<AssociatesView>('cards');
 
-  const { data, isLoading, isFetching, isError, refetch } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['associates', page, search, status],
     queryFn: () => fetchAssociates(page, search, status),
     placeholderData: (previousData) => previousData,
@@ -95,13 +112,16 @@ export default function AssociatesPage() {
 
   const canGoPrev = page > 1;
   const canGoNext = page < totalPages;
+  const activeOnPage = (data?.items ?? []).filter((item) => {
+    const normalized = (item.status_name ?? '').trim().toLowerCase();
+    return normalized === 'active' || normalized === '1';
+  }).length;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="page-title">Associates</h1>
-          <p className="mt-0.5 text-sm text-slate-500">{(data?.total ?? 0).toLocaleString()} associates in migration database</p>
         </div>
         <div className="flex items-center gap-2">
           <div className="rounded-lg border border-slate-300 bg-white p-0.5 text-sm">
@@ -120,39 +140,51 @@ export default function AssociatesPage() {
               List
             </button>
           </div>
-          <button className="primary-btn" type="button" onClick={() => refetch()}>
-            {isFetching ? 'Refreshing...' : 'Refresh'}
-          </button>
           <button className="primary-btn" type="button">Add Associate</button>
         </div>
       </div>
 
       <section className="surface-card p-4 md:p-5">
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            value={search}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setPage(1);
-            }}
-            placeholder="Search name, email, KWUID or market center..."
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-0 md:max-w-xl"
-          />
+        <div className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 md:px-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="relative w-full md:max-w-xl">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2">
+                <HeaderIcon kind="search" />
+              </span>
+              <input
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setPage(1);
+                }}
+                placeholder="Search name, email, KWUID or market center..."
+                className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm text-slate-900 outline-none ring-0"
+              />
+            </label>
 
-          <select
-            value={status}
-            onChange={(event) => {
-              setStatus(event.target.value as (typeof STATUS_FILTERS)[number]);
-              setPage(1);
-            }}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-          >
-            {STATUS_FILTERS.map((statusOption) => (
-              <option key={statusOption} value={statusOption}>{statusOption}</option>
-            ))}
-          </select>
+            <label className="relative">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2">
+                <HeaderIcon kind="status" />
+              </span>
+              <select
+                value={status}
+                onChange={(event) => {
+                  setStatus(event.target.value as (typeof STATUS_FILTERS)[number]);
+                  setPage(1);
+                }}
+                className="rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm text-slate-900"
+              >
+                {STATUS_FILTERS.map((statusOption) => (
+                  <option key={statusOption} value={statusOption}>{statusOption}</option>
+                ))}
+              </select>
+            </label>
 
-          <span className="text-xs text-slate-600">Page {page} of {totalPages}</span>
+            <span className="text-xs text-slate-600">Page {page} of {totalPages}</span>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+              Active on page: {activeOnPage}
+            </span>
+          </div>
         </div>
 
         {isLoading && <p className="mt-4 text-sm text-slate-500">Loading associates...</p>}
@@ -171,8 +203,8 @@ export default function AssociatesPage() {
               const associateImageUrl = (item.image_url ?? '').trim();
 
               return (
-              <article key={item.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm hover:shadow-md transition-shadow">
-                <div className="mb-3 flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-2">
+              <article key={item.id} className="group rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+                <div className="mb-3 flex items-center justify-between rounded-lg border border-slate-200 bg-gradient-to-r from-slate-50 to-white px-2.5 py-2.5">
                   <div className="flex min-w-0 items-center gap-2">
                     {item.market_center_logo_url ? (
                       <img
@@ -194,23 +226,31 @@ export default function AssociatesPage() {
                     <img
                       src={associateImageUrl}
                       alt={associateName(item)}
-                      className="h-11 w-11 shrink-0 rounded-full border border-slate-200 object-cover"
+                      className="h-11 w-11 shrink-0 rounded-full border border-slate-200 bg-white object-cover p-0.5"
                       loading="lazy"
                       decoding="async"
                     />
                   ) : (
-                    <div className="h-11 w-11 shrink-0 rounded-full bg-red-100 text-center text-sm font-semibold leading-[2.75rem] text-red-700">
+                    <div className="h-11 w-11 shrink-0 rounded-full border border-red-200 bg-red-50 text-center text-sm font-semibold leading-[2.75rem] text-red-700">
                       {initials(associateName(item))}
                     </div>
                   )}
                   <div className="min-w-0">
-                    <h3 className="truncate text-xl font-semibold text-slate-900">{associateName(item)}</h3>
+                    <h3 className="truncate text-lg font-semibold leading-tight text-slate-900">{associateName(item)}</h3>
                     <p className="mt-0.5 text-xs text-slate-500">Source ID: {item.source_associate_id}</p>
                   </div>
                 </div>
 
                 <div className="mt-4 space-y-1.5 text-sm text-slate-700">
-                  <p className="truncate">{item.email ?? '-'}</p>
+                  <p className="truncate">
+                    {item.email ? (
+                      <a href={`mailto:${item.email}`} className="text-red-700 hover:text-red-800 hover:underline">
+                        {item.email}
+                      </a>
+                    ) : (
+                      '-'
+                    )}
+                  </p>
                   <p>{item.kwuid ? `KWUID: ${item.kwuid}` : 'KWUID: -'}</p>
                 </div>
 
@@ -243,7 +283,15 @@ export default function AssociatesPage() {
                 {data?.items.map((item) => (
                   <tr key={item.id}>
                     <td className="px-3 py-2 font-medium whitespace-nowrap">{associateName(item)}</td>
-                    <td className="px-3 py-2">{item.email ?? '-'}</td>
+                    <td className="px-3 py-2">
+                      {item.email ? (
+                        <a href={`mailto:${item.email}`} className="text-red-700 hover:text-red-800 hover:underline">
+                          {item.email}
+                        </a>
+                      ) : (
+                        '-'
+                      )}
+                    </td>
                     <td className="px-3 py-2">{item.market_center_name ?? item.source_market_center_id ?? '-'}</td>
                     <td className="px-3 py-2"><span className={statusBadgeClass(item.status_name)}>{item.status_name ?? 'Unknown'}</span></td>
                     <td className="px-3 py-2">{item.kwuid ?? '-'}</td>

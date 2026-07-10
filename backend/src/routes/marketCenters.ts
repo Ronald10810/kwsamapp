@@ -47,6 +47,8 @@ const REQUIRED_MARKET_CENTER_COLUMNS: Record<string, string> = {
   override_display_location: 'BOOLEAN NOT NULL DEFAULT FALSE',
   display_longitude: 'NUMERIC(10,7)',
   display_latitude: 'NUMERIC(10,7)',
+  document_logo_image_url: 'TEXT',
+  white_logo_image_url: 'TEXT',
 };
 
 async function ensureMarketCenterSchema(): Promise<void> {
@@ -311,6 +313,8 @@ router.get('/', async (req, res) => {
       kw_office_id: string | null;
       city: string | null;
       logo_image_url: string | null;
+      document_logo_image_url: string | null;
+      white_logo_image_url: string | null;
       market_center_property24_id: string | null;
       property24_opt_in: boolean;
       agent_count: string;
@@ -330,6 +334,8 @@ router.get('/', async (req, res) => {
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'kw_office_id')},
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'city')},
         mc.logo_image_url,
+        ${optionalMarketCenterTextColumn(marketCenterColumns, 'document_logo_image_url')},
+        ${optionalMarketCenterTextColumn(marketCenterColumns, 'white_logo_image_url')},
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'market_center_property24_id')},
         ${optionalMarketCenterBooleanColumn(marketCenterColumns, 'property24_opt_in')},
         COALESCE(agent_totals.agent_count, 0)::text AS agent_count,
@@ -407,6 +413,8 @@ router.get('/:id/details', async (req, res) => {
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'entegral_url')},
         ${optionalMarketCenterTextArrayColumn(marketCenterColumns, 'entegral_portals')},
         mc.logo_image_url,
+        ${optionalMarketCenterTextColumn(marketCenterColumns, 'document_logo_image_url')},
+        ${optionalMarketCenterTextColumn(marketCenterColumns, 'white_logo_image_url')},
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'country')},
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'province')},
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'city')},
@@ -563,6 +571,8 @@ router.post('/', resolvePermissions, async (req, res) => {
     addInsertValue('entegral_url', toText(req.body?.entegral_url));
     addInsertValue('entegral_portals', toStringArray(req.body?.entegral_portals));
     addInsertValue('logo_image_url', toText(req.body?.logo_image_url));
+    addInsertValue('document_logo_image_url', toText(req.body?.document_logo_image_url));
+    addInsertValue('white_logo_image_url', toText(req.body?.white_logo_image_url));
     addInsertValue('country', toText(req.body?.country));
     addInsertValue('province', toText(req.body?.province));
     addInsertValue('city', toText(req.body?.city));
@@ -670,6 +680,8 @@ router.put('/:id', resolvePermissions, async (req, res) => {
     addSetValue('entegral_url', toText(req.body?.entegral_url));
     addSetValue('entegral_portals', toStringArray(req.body?.entegral_portals));
     addSetValue('logo_image_url', toText(req.body?.logo_image_url));
+    addSetValue('document_logo_image_url', toText(req.body?.document_logo_image_url));
+    addSetValue('white_logo_image_url', toText(req.body?.white_logo_image_url));
     addSetValue('country', toText(req.body?.country));
     addSetValue('province', toText(req.body?.province));
     addSetValue('city', toText(req.body?.city));
@@ -767,6 +779,124 @@ router.post('/:id/upload-logo', async (req, res, next) => {
     }
 
     return res.json({ logo_image_url: imageUrl });
+  } catch (error) {
+    if (!isGcs && req.file.path) {
+      await fs.unlink(req.file.path).catch(() => undefined);
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ error: message });
+  }
+});
+
+router.post('/:id/upload-document-logo', async (req, res, next) => {
+  const isGcs = !storageConfig.localUploadsEnabled;
+
+  try {
+    await runUploadMiddleware(req, res);
+  } catch (error) {
+    return next(error);
+  }
+
+  if (!pool) {
+    return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No image file provided.' });
+  }
+
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ error: 'Invalid market center id.' });
+  }
+
+  try {
+    let imageUrl: string;
+
+    if (isGcs) {
+      const { publicUrl } = await uploadToGcs(
+        req.file.buffer,
+        req.file.originalname,
+        'market-center-doc-logo',
+        req.file.mimetype
+      );
+      imageUrl = publicUrl;
+    } else {
+      imageUrl = `/uploads/market-centers/${req.file.filename}`;
+    }
+
+    const result = await pool.query(
+      `UPDATE migration.core_market_centers SET document_logo_image_url = $1, updated_at = NOW() WHERE id = $2 RETURNING id::text`,
+      [imageUrl, id]
+    );
+
+    if (result.rowCount === 0) {
+      if (!isGcs && req.file.path) {
+        await fs.unlink(req.file.path).catch(() => undefined);
+      }
+      return res.status(404).json({ error: 'Market center not found.' });
+    }
+
+    return res.json({ document_logo_image_url: imageUrl });
+  } catch (error) {
+    if (!isGcs && req.file.path) {
+      await fs.unlink(req.file.path).catch(() => undefined);
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ error: message });
+  }
+});
+
+router.post('/:id/upload-white-logo', async (req, res, next) => {
+  const isGcs = !storageConfig.localUploadsEnabled;
+
+  try {
+    await runUploadMiddleware(req, res);
+  } catch (error) {
+    return next(error);
+  }
+
+  if (!pool) {
+    return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No image file provided.' });
+  }
+
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ error: 'Invalid market center id.' });
+  }
+
+  try {
+    let imageUrl: string;
+
+    if (isGcs) {
+      const { publicUrl } = await uploadToGcs(
+        req.file.buffer,
+        req.file.originalname,
+        'market-center-white-logo',
+        req.file.mimetype
+      );
+      imageUrl = publicUrl;
+    } else {
+      imageUrl = `/uploads/market-centers/${req.file.filename}`;
+    }
+
+    const result = await pool.query(
+      `UPDATE migration.core_market_centers SET white_logo_image_url = $1, updated_at = NOW() WHERE id = $2 RETURNING id::text`,
+      [imageUrl, id]
+    );
+
+    if (result.rowCount === 0) {
+      if (!isGcs && req.file.path) {
+        await fs.unlink(req.file.path).catch(() => undefined);
+      }
+      return res.status(404).json({ error: 'Market center not found.' });
+    }
+
+    return res.json({ white_logo_image_url: imageUrl });
   } catch (error) {
     if (!isGcs && req.file.path) {
       await fs.unlink(req.file.path).catch(() => undefined);

@@ -74,11 +74,29 @@ button {
   background:
     radial-gradient(500px 260px at 100% 0%, #8f1b20 0%, transparent 70%),
     linear-gradient(180deg, #1f1112 0%, #10090a 100%);
+  scrollbar-width: none; /* Firefox */
 }
 
-.sidebar-shell a[href="/notifications"],
-.sidebar-shell a[href="/listing-approvals"] {
-  display: none !important;
+.sidebar-shell::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar-shell::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-shell::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 4px;
+  transition: background-color 0.3s ease;
+}
+
+.sidebar-shell:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+.sidebar-shell:hover::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.5);
 }
 
 .kpi-card {
@@ -101,4 +119,25 @@ button {
 
 .status-chip.info {
   @apply bg-slate-100 text-slate-700;
+}
+
+.input-field {
+  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none;
+}
+
+.input-field:focus {
+  @apply ring-2 ring-red-200 border-red-400;
+}
+
+.input-field::placeholder {
+  @apply text-slate-400;
+}
+
+/* Hide scrollbar for overflow-x-auto tab bars on mobile */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }

@@ -4,6 +4,22 @@ import { logger } from './logger.js';
 
 let sharedPool: Pool | null | undefined;
 
+function isRetryableConnectionError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('connection terminated unexpectedly')
+    || message.includes('connection terminated due to connection timeout')
+    || message.includes('terminating connection due to administrator command')
+    || message.includes('ecconnreset')
+    || message.includes('econnreset')
+    || message.includes('client has encountered a connection error')
+  );
+}
+
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return fallback;
@@ -40,6 +56,23 @@ function normalizeConnectionString(connectionString: string): { connectionString
   }
 }
 
+function defaultRejectUnauthorized(sslMode: string | null, isDevelopment: boolean): boolean {
+  // Match libpq semantics by default:
+  // - verify-full / verify-ca => verify certificates
+  // - require / prefer / allow / disable => do not require CA verification
+  // Explicit env var DB_SSL_REJECT_UNAUTHORIZED can still override this behavior.
+  if (!sslMode) {
+    return !isDevelopment;
+  }
+
+  const normalizedMode = sslMode.trim().toLowerCase();
+  if (normalizedMode === 'verify-full' || normalizedMode === 'verify-ca') {
+    return true;
+  }
+
+  return false;
+}
+
 export function getOptionalPgPool(): Pool | null {
   if (sharedPool !== undefined) {
     return sharedPool;
@@ -52,11 +85,26 @@ export function getOptionalPgPool(): Pool | null {
 
   const normalized = normalizeConnectionString(env.database.url);
   const sslModeEnabled = normalized.sslMode ? normalized.sslMode !== 'disable' : hasSslModeEnabled(normalized.connectionString);
-  const rejectUnauthorized = parseBoolean(process.env.DB_SSL_REJECT_UNAUTHORIZED, !env.isDevelopment);
+  const rejectUnauthorized = parseBoolean(
+    process.env.DB_SSL_REJECT_UNAUTHORIZED,
+    defaultRejectUnauthorized(normalized.sslMode, env.isDevelopment)
+  );
 
   sharedPool = new Pool({
     connectionString: normalized.connectionString,
     ssl: sslModeEnabled ? { rejectUnauthorized } : undefined,
+    // Keep production conservative for Cloud SQL limits, but allow more headroom in local dev.
+    max: env.isDevelopment ? 15 : 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: env.isDevelopment ? 15000 : 5000,
+  });
+
+  sharedPool.on('connect', (client) => {
+    void client
+      .query("SELECT set_config('TimeZone', $1, false)", [env.appTimeZone])
+      .catch((err) => {
+        logger.warn({ err, timeZone: env.appTimeZone }, 'failed to set PostgreSQL session timezone');
+      });
   });
 
   // Prevent idle connection drops from crashing the process.
@@ -74,6 +122,29 @@ export function getRequiredPgPool(): Pool {
     getRequiredDatabaseUrl();
   }
   return pool as Pool;
+}
+
+export async function withPgPoolRetry<T>(work: (pool: Pool) => Promise<T>): Promise<T> {
+  let attempt = 0;
+
+  while (attempt < 2) {
+    const pool = getRequiredPgPool();
+
+    try {
+      return await work(pool);
+    } catch (error) {
+      attempt += 1;
+
+      if (attempt >= 2 || !isRetryableConnectionError(error)) {
+        throw error;
+      }
+
+      logger.warn({ err: error, attempt }, 'Retrying PostgreSQL operation after resetting shared pool');
+      await closeSharedPgPool();
+    }
+  }
+
+  throw new Error('PostgreSQL retry loop exited unexpectedly');
 }
 
 export async function closeSharedPgPool(): Promise<void> {

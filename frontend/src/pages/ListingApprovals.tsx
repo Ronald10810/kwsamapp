@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -30,6 +30,9 @@ export default function ListingApprovalsPage() {
   const navigate = useNavigate();
   const { isOfficeAdmin, activeContext } = useAuth();
   const [filter, setFilter] = useState<QueueFilter>('PENDING');
+  const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const { data, isLoading, isFetching, refetch } = useQuery<ApprovalQueueResponse>({
     queryKey: ['listing-approval-queue', activeContext?.id ?? 'no-context', filter],
@@ -56,6 +59,36 @@ export default function ListingApprovalsPage() {
   }
 
   const items = data?.items ?? [];
+
+  async function reviewListingApproval(listingId: string, action: 'approve' | 'reject'): Promise<void> {
+    setActionError(null);
+    setActionInFlightId(`${action}:${listingId}`);
+    try {
+      const comment = action === 'reject'
+        ? (window.prompt('Reason for rejection (optional):') ?? '').trim()
+        : 'Approved from listing approval queue';
+
+      const response = await fetch(`/api/listings/${listingId}/${action}-approval`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: comment || undefined }),
+      });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `Failed to ${action} listing approval`);
+      }
+
+      await Promise.all([
+        refetch(),
+        queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+      ]);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to process approval action');
+    } finally {
+      setActionInFlightId(null);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -85,6 +118,7 @@ export default function ListingApprovalsPage() {
       </div>
 
       <div className="space-y-4">
+        {actionError && <div className="surface-card border border-red-200 bg-red-50 p-3 text-sm text-red-700">{actionError}</div>}
         {isLoading && <div className="surface-card p-6 text-sm text-slate-500">Loading approval queue...</div>}
         {!isLoading && items.length === 0 && (
           <div className="surface-card p-6 text-sm text-slate-500">No {filter.toLowerCase()} listing approvals for this market centre.</div>
@@ -113,6 +147,26 @@ export default function ListingApprovalsPage() {
                 >
                   Review Listing
                 </button>
+                {item.status === 'PENDING' && (
+                  <>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-100"
+                      disabled={actionInFlightId !== null}
+                      onClick={() => void reviewListingApproval(item.listing_id, 'approve')}
+                    >
+                      {actionInFlightId === `approve:${item.listing_id}` ? 'Approving...' : 'Approve'}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+                      disabled={actionInFlightId !== null}
+                      onClick={() => void reviewListingApproval(item.listing_id, 'reject')}
+                    >
+                      {actionInFlightId === `reject:${item.listing_id}` ? 'Rejecting...' : 'Reject'}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>

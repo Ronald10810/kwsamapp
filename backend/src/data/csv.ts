@@ -3,12 +3,33 @@ import { parse } from 'csv-parse/sync';
 
 export type CsvRow = Record<string, string>;
 
+export type CsvEncoding = 'utf8' | 'latin1';
+
+function detectCsvEncodingFromBuffer(rawBuffer: Buffer): CsvEncoding {
+  // UTF-8 BOM is explicit.
+  if (rawBuffer.length >= 3 && rawBuffer[0] === 0xef && rawBuffer[1] === 0xbb && rawBuffer[2] === 0xbf) {
+    return 'utf8';
+  }
+
+  // If UTF-8 decoding introduces replacement characters, the file likely uses
+  // a single-byte code page (Windows-1252/Latin-1).
+  const utf8Preview = rawBuffer.subarray(0, Math.min(rawBuffer.length, 256 * 1024)).toString('utf8');
+  if (utf8Preview.includes('\uFFFD')) {
+    return 'latin1';
+  }
+
+  return 'utf8';
+}
+
+export async function detectCsvEncoding(filePath: string): Promise<CsvEncoding> {
+  const rawBuffer = await readFile(filePath);
+  return detectCsvEncodingFromBuffer(rawBuffer);
+}
+
 export async function readCsvRows(filePath: string): Promise<CsvRow[]> {
   const rawBuffer = await readFile(filePath);
-  // Source CSVs are exported from SQL Server as Latin-1/Windows-1252.
-  // Reading as latin1 preserves the bytes so accented characters (é, â, ä, ²
-  // etc.) are decoded correctly instead of being replaced by U+FFFD.
-  const content = rawBuffer.toString('latin1');
+  const encoding = detectCsvEncodingFromBuffer(rawBuffer);
+  const content = rawBuffer.toString(encoding);
 
   const rows = parse(content, {
     columns: true,

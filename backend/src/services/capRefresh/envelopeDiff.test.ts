@@ -1,0 +1,129 @@
+import { describe, expect, it } from 'vitest';
+
+import { checkProtectedFieldMismatches } from './envelopeDiff.js';
+
+describe('cap refresh protected field assertions', () => {
+  it('passes when protected fields are unchanged', () => {
+    const result = checkProtectedFieldMismatches(
+      new Map([[1, {
+        transaction_agent_id: 1,
+        market_center_dollar: '100.00',
+        team_dollar: '0.00',
+        associate_dollar: '900.00',
+        cap_contribution: '100.00',
+        cap_remaining: '0.00',
+        transaction_gci_before_fees: '1000.00',
+        gci_after_fees_excl_vat: '920.00',
+        production_royalties: '60.00',
+        growth_share: '20.00',
+        total_pr_and_gs: '80.00',
+      }]]),
+      [{
+        cap_progress_key: '101',
+        row: {
+          transaction_agent_id: 1,
+          transaction_id: 1001,
+          transaction_number: 'TH1001',
+          transaction_status: 'Registered',
+          associate_id: 101,
+          source_associate_id: 'SRC101',
+          is_outside_agent: false,
+          agent_name: 'Agent',
+          office_name: 'Office',
+          transaction_side: 'Seller',
+          split_percentage: 100,
+          variance_sale_list_pct: 0,
+          sales_value_component: 1000,
+          transaction_gci_before_fees: 1000,
+          average_commission_pct: 0,
+          production_royalties: 60,
+          growth_share: 20,
+          total_pr_and_gs: 80,
+          gci_after_fees_excl_vat: 920,
+          associate_split_pct: 70,
+          market_center_split_pct: 30,
+          associate_dollar: 900,
+          cap_amount: 100,
+          cap_contribution: 100,
+          cap_remaining: 0,
+          team_dollar: 0,
+          market_center_dollar: 100,
+          cap_cycle_start_date: '2026-01-01',
+          cap_cycle_end_date: '2026-12-31',
+          effective_reporting_date: '2026-03-01',
+          is_registered: true,
+          has_authoritative_payment_details: false,
+          requires_cap_progression: false,
+          is_rental_transaction: false,
+          is_team_transaction: false,
+          counts_toward_cap: true,
+        },
+      }]
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('fails when protected fields differ', () => {
+    const result = checkProtectedFieldMismatches(
+      new Map([[1, {
+        transaction_agent_id: 1,
+        market_center_dollar: '100.00',
+        team_dollar: '0.00',
+        associate_dollar: '900.00',
+        cap_contribution: '100.00',
+        cap_remaining: '0.00',
+        transaction_gci_before_fees: '1000.00',
+        gci_after_fees_excl_vat: '920.00',
+        production_royalties: '60.00',
+        growth_share: '20.00',
+        total_pr_and_gs: '80.00',
+      }]]),
+      [{
+        cap_progress_key: '101',
+        row: {
+          transaction_agent_id: 1,
+          transaction_id: 1001,
+          transaction_number: 'TH1001',
+          transaction_status: 'Registered',
+          associate_id: 101,
+          source_associate_id: 'SRC101',
+          is_outside_agent: false,
+          agent_name: 'Agent',
+          office_name: 'Office',
+          transaction_side: 'Seller',
+          split_percentage: 100,
+          variance_sale_list_pct: 0,
+          sales_value_component: 1000,
+          transaction_gci_before_fees: 999,
+          average_commission_pct: 0,
+          production_royalties: 60,
+          growth_share: 20,
+          total_pr_and_gs: 80,
+          gci_after_fees_excl_vat: 920,
+          associate_split_pct: 70,
+          market_center_split_pct: 30,
+          associate_dollar: 900,
+          cap_amount: 100,
+          cap_contribution: 100,
+          cap_remaining: 0,
+          team_dollar: 0,
+          market_center_dollar: 100,
+          cap_cycle_start_date: '2026-01-01',
+          cap_cycle_end_date: '2026-12-31',
+          effective_reporting_date: '2026-03-01',
+          is_registered: true,
+          has_authoritative_payment_details: false,
+          requires_cap_progression: false,
+          is_rental_transaction: false,
+          is_team_transaction: false,
+          counts_toward_cap: true,
+        },
+      }]
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((entry) => entry.field === 'transaction_gci_before_fees')).toBe(true);
+  });
+});
