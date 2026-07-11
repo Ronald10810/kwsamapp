@@ -3844,6 +3844,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         cl.has_flatlet, cl.property_auction,
         cl.has_borehole, cl.has_gas_geyser, cl.has_solar_panels,
         cl.has_backup_battery_or_inverter, cl.has_backup_water,
+        cl.has_solar_geyser, cl.has_water_tank,
         cl.adsl, cl.fibre, cl.isdn, cl.dialup, cl.fixed_wimax, cl.satellite,
         cl.no_transfer_duty, cl.occupation_date,
         cl.feed_to_property24, cl.property24_ref1, cl.property24_ref2,
@@ -4528,7 +4529,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       solarPanels: toOptionalBool(listing.has_solar_panels),
       solarGeyser: toOptionalBool(listing.has_solar_geyser),
       gasGeyser: toOptionalBool(listing.has_gas_geyser),
-      waterTank: toOptionalBool(listing.has_backup_water),
+      waterTank: toOptionalBool(listing.has_water_tank ?? listing.has_backup_water),
       borehole: toOptionalBool(listing.has_borehole),
       backupBatteryOrInverter: toOptionalBool(listing.has_backup_battery_or_inverter),
     };
