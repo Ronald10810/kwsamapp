@@ -45,11 +45,11 @@ describe('requireAuth', () => {
       suspendedReason: 'Outstanding BOC\'s - May and June - R 2 700.00',
     });
 
-    const firstReq = { headers: { authorization: 'Bearer token' } } as never;
+    const firstReq = { headers: { authorization: 'Bearer token' } } as any;
     const firstRes = {
       status: vi.fn().mockReturnThis(),
       json: vi.fn(),
-    } as never;
+    } as any;
     const firstNext = vi.fn();
 
     await requireAuth(firstReq, firstRes, firstNext);
@@ -63,11 +63,11 @@ describe('requireAuth', () => {
       suspendedReason: null,
     });
 
-    const cachedReq = { headers: { authorization: 'Bearer token' } } as never;
+    const cachedReq = { headers: { authorization: 'Bearer token' } } as any;
     const cachedRes = {
       status: vi.fn().mockReturnThis(),
       json: vi.fn(),
-    } as never;
+    } as any;
     const cachedNext = vi.fn();
 
     await requireAuth(cachedReq, cachedRes, cachedNext);
@@ -77,11 +77,11 @@ describe('requireAuth', () => {
 
     clearAssociateAccessCache();
 
-    const refreshedReq = { headers: { authorization: 'Bearer token' } } as never;
+    const refreshedReq = { headers: { authorization: 'Bearer token' } } as any;
     const refreshedRes = {
       status: vi.fn().mockReturnThis(),
       json: vi.fn(),
-    } as never;
+    } as any;
     const refreshedNext = vi.fn();
 
     await requireAuth(refreshedReq, refreshedRes, refreshedNext);
