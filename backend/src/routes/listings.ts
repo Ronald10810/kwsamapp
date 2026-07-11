@@ -50,6 +50,19 @@ function toBool(value: unknown): boolean {
   return false;
 }
 
+function toOptionalBool(value: unknown): boolean | undefined {
+  if (value == null) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return undefined;
+    if (['1', 'true', 'yes', 'y'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'n'].includes(normalized)) return false;
+  }
+  return undefined;
+}
+
 function normalizeListingCategory(value: string | null | undefined): 'sale' | 'rental' | 'unknown' {
   const normalized = (value ?? '').trim().toLowerCase();
   if (normalized === 'for sale') return 'sale';
@@ -3829,6 +3842,9 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         cl.rental_rate, cl.lease_period, cl.deposit_requirements,
         cl.is_furnished, cl.pet_friendly, cl.retirement_living,
         cl.has_flatlet, cl.property_auction,
+        cl.has_borehole, cl.has_gas_geyser, cl.has_solar_panels,
+        cl.has_backup_battery_or_inverter, cl.has_backup_water,
+        cl.adsl, cl.fibre, cl.isdn, cl.dialup, cl.fixed_wimax, cl.satellite,
         cl.no_transfer_duty, cl.occupation_date,
         cl.feed_to_property24, cl.property24_ref1, cl.property24_ref2,
         cl.display_address_on_website,
@@ -3937,7 +3953,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       `SELECT area_type, MAX(count)::numeric AS count
        FROM migration.listing_property_areas
        WHERE listing_id = $1
-         AND LOWER(TRIM(COALESCE(area_type, ''))) IN ('bedroom', 'bathroom', 'garage', 'parking')
+         AND LOWER(TRIM(COALESCE(area_type, ''))) IN ('bedroom', 'bathroom', 'garage', 'parking', 'pool')
        GROUP BY area_type`,
       [id]
     );
@@ -4498,6 +4514,25 @@ router.post('/:id/publish-to-property24', async (req, res) => {
 
     const initialRentalRate = rentalRateCandidates[0] ?? null;
 
+    const hasPoolFeature = areaCounts.pool != null ? areaCounts.pool > 0 : undefined;
+    const internetAccessFeature = {
+      adsl: toOptionalBool(listing.adsl),
+      dialUp: toOptionalBool(listing.dialup),
+      fibre: toOptionalBool(listing.fibre),
+      fixedWiMax: toOptionalBool(listing.fixed_wimax),
+      isdn: toOptionalBool(listing.isdn),
+      satellite: toOptionalBool(listing.satellite),
+      vdsl: undefined as boolean | undefined,
+    };
+    const sustainabilityInfoFeature = {
+      solarPanels: toOptionalBool(listing.has_solar_panels),
+      solarGeyser: toOptionalBool(listing.has_solar_geyser),
+      gasGeyser: toOptionalBool(listing.has_gas_geyser),
+      waterTank: toOptionalBool(listing.has_backup_water),
+      borehole: toOptionalBool(listing.has_borehole),
+      backupBatteryOrInverter: toOptionalBool(listing.has_backup_battery_or_inverter),
+    };
+
     const p24Payload: Record<string, unknown> = {
       agencyId: Number(resolvedAgencyId),
       contactAgentIds: contactAgentIds.map((value) => Number(value)),
@@ -4578,7 +4613,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         domesticRooms: 0,
         outsideToilets: 0,
         garden: false,
-        pool: false,
+        pool: hasPoolFeature,
         flatlet: toBool(listing.has_flatlet),
         secondHouse: false,
         outBuildingsSize: null,
@@ -4598,27 +4633,12 @@ router.post('/:id/publish-to-property24', async (req, res) => {
           nearbyMinibusTaxiService: false,
           nearbyTrainService: false,
         },
-        internetAccess: {
-          adsl: false,
-          dialUp: false,
-          fibre: false,
-          fixedWiMax: false,
-          isdn: false,
-          satellite: false,
-          vdsl: false,
-        },
+        internetAccess: internetAccessFeature,
         isWheelchairAccessible: false,
         hasGenerator: false,
-        hasBackupWater: false,
+        hasBackupWater: toOptionalBool(listing.has_backup_water),
         outsideArea: null,
-        sustainabilityInfo: {
-          solarPanels: false,
-          solarGeyser: false,
-          gasGeyser: false,
-          waterTank: false,
-          borehole: false,
-          backupBatteryOrInverter: false,
-        },
+        sustainabilityInfo: sustainabilityInfoFeature,
       },
       rentalInfo: listingType === 'Rental' ? {
         ...(initialRentalRate !== null ? { rentalRate: initialRentalRate } : {}),
