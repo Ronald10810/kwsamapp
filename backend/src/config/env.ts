@@ -118,6 +118,11 @@ const communicationsGoogleClientId = normalizeString(process.env.COMMUNICATIONS_
   ?? localGoogleClientIdFallback;
 const communicationsFrontendBaseUrl = normalizeString(process.env.COMMUNICATIONS_FRONTEND_BASE_URL);
 const trainingHubEnabled = parseBoolean(process.env.TRAINING_HUB_ENABLED, nodeEnv === 'development');
+const supportSmtpPort = parseInteger(process.env.SUPPORT_SMTP_PORT, 465);
+const supportFromEmail = normalizeString(process.env.SUPPORT_FROM_EMAIL) ?? normalizeString(process.env.SUPPORT_SMTP_USER);
+const supportSmokeAllowlist = parseList(process.env.SUPPORT_SMOKE_ALLOWLIST, [supportFromEmail ?? 'support@kwsa.co.za'])
+  .map((entry) => entry.trim().toLowerCase())
+  .filter(Boolean);
 
 const enforceLocalUatDb = parseBoolean(process.env.ENFORCE_LOCAL_UAT_DB, nodeEnv === 'development');
 if (nodeEnv === 'development' && enforceLocalUatDb) {
@@ -220,6 +225,20 @@ export const env = {
   },
   portalRecovery: {
     enabled: parseBoolean(process.env.PORTAL_RECOVERY_ENABLED, nodeEnv === 'development'),
+  },
+  support: {
+    enabled: parseBoolean(process.env.SUPPORT_EMAIL_ENABLED, false),
+    smtpHost: normalizeString(process.env.SUPPORT_SMTP_HOST) ?? 'smtp.gmail.com',
+    smtpPort: supportSmtpPort,
+    smtpSecure: parseBoolean(process.env.SUPPORT_SMTP_SECURE, supportSmtpPort === 465),
+    smtpUser: normalizeString(process.env.SUPPORT_SMTP_USER),
+    smtpPass: normalizeString(process.env.SUPPORT_SMTP_PASS),
+    fromEmail: supportFromEmail,
+    fromName: normalizeString(process.env.SUPPORT_FROM_NAME) ?? 'MAPP Support',
+    replyTo: normalizeString(process.env.SUPPORT_REPLY_TO) ?? supportFromEmail,
+    logoUrl: normalizeString(process.env.SUPPORT_EMAIL_LOGO_URL),
+    logoPath: normalizeString(process.env.SUPPORT_EMAIL_LOGO_PATH),
+    smokeAllowlist: supportSmokeAllowlist,
   },
   capRefresh: {
     enabled: parseBoolean(process.env.CAP_REFRESH_ENABLED, false),
