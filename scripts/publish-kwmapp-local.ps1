@@ -229,6 +229,16 @@ if (-not $SkipBackend) {
                     --set-secrets "DATABASE_URL=${DatabaseUrlSecretName}:latest,OPENAI_API_KEY=${OpenAiApiKeySecretName}:latest" `
                     --quiet
             }
+
+            # Cloud Run can occasionally create a ready-but-retired revision and leave traffic on an older one.
+            # Force backend traffic to latest so newly deployed API routes (e.g. support tickets) are active.
+            Invoke-CheckedCommand "Route backend traffic to latest revision" {
+                & $gcloudCmd run services update-traffic $BackendServiceName `
+                    --project $ProjectId `
+                    --region $Region `
+                    --to-latest `
+                    --quiet
+            }
         }
         finally {
             Remove-Item -Path $backendEnvFilePath -Force -ErrorAction SilentlyContinue
