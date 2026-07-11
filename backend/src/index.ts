@@ -110,6 +110,9 @@ app.use('/api/loom', requireAuthNoAssociate, loomRoutes);
 if (env.communications.enabled) {
   app.use('/api/communications', communicationsRoutes);
 }
+// Defensive explicit mount for support tickets before generic /api middleware.
+// This avoids route miss regressions in UAT when generic middleware ordering drifts.
+app.use('/api/support-tickets', requireAuth, supportTicketsRoutes);
 
 // Public image proxy for marketing flyers — must be registered before requireAuth so
 // <img src> tags (which cannot send Bearer tokens) can load proxied listing images.

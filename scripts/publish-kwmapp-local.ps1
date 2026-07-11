@@ -273,7 +273,11 @@ if (-not $SkipFrontend) {
     Write-Host "Backend URL: $backendUrl" -ForegroundColor DarkGray
 
     $frontendEnvBaseFile = Join-Path $frontendDir ".env.production"
-    $frontendEnvGeneratedFile = Join-Path $frontendDir "env.production.generated"
+    $frontendEnvHadBaseFile = Test-Path $frontendEnvBaseFile
+    $frontendEnvBaseContent = $null
+    if ($frontendEnvHadBaseFile) {
+        $frontendEnvBaseContent = Get-Content -Path $frontendEnvBaseFile -Raw
+    }
 
     $envLines = @()
     if (Test-Path $frontendEnvBaseFile) {
@@ -293,8 +297,8 @@ if (-not $SkipFrontend) {
     $envLines += "VITE_PORTAL_RECOVERY_ENABLED=true"
     $envLines += "VITE_TRAINING_HUB_ENABLED=true"
 
-    Set-Content -Path $frontendEnvGeneratedFile -Value $envLines -Encoding UTF8
-    Write-Host "Generated frontend env override: $frontendEnvGeneratedFile" -ForegroundColor DarkGray
+    Set-Content -Path $frontendEnvBaseFile -Value $envLines -Encoding UTF8
+    Write-Host "Generated frontend env override: $frontendEnvBaseFile" -ForegroundColor DarkGray
 
     if (-not $UseCloudBuildForFrontend) {
         throw "Frontend publishing currently expects -UseCloudBuildForFrontend."
@@ -314,7 +318,7 @@ if (-not $SkipFrontend) {
                         "--region", $frontendRegion,
                         "--allow-unauthenticated",
                         "--port", "8080",
-                        "--set-build-env-vars", "VITE_API_BASE_URL=$backendUrl,VITE_TRAINING_HUB_ENABLED=true",
+                        "--set-build-env-vars", "VITE_API_BASE_URL=$backendUrl,VITE_GOOGLE_CLIENT_ID=$GoogleClientId,VITE_TRAINING_HUB_ENABLED=true",
                         "--clear-base-image"
                     )
 
@@ -345,7 +349,7 @@ if (-not $SkipFrontend) {
                         "--region", $frontendRegion,
                         "--allow-unauthenticated",
                         "--port", "8080",
-                        "--set-build-env-vars", "VITE_API_BASE_URL=$backendUrl,VITE_TRAINING_HUB_ENABLED=true",
+                        "--set-build-env-vars", "VITE_API_BASE_URL=$backendUrl,VITE_GOOGLE_CLIENT_ID=$GoogleClientId,VITE_TRAINING_HUB_ENABLED=true",
                         "--clear-base-image"
                     )
 
@@ -362,7 +366,12 @@ if (-not $SkipFrontend) {
         }
     }
     finally {
-        Remove-Item -Path $frontendEnvGeneratedFile -Force -ErrorAction SilentlyContinue
+        if ($frontendEnvHadBaseFile) {
+            Set-Content -Path $frontendEnvBaseFile -Value $frontendEnvBaseContent -Encoding UTF8
+        }
+        else {
+            Remove-Item -Path $frontendEnvBaseFile -Force -ErrorAction SilentlyContinue
+        }
     }
 
     $frontendUrl = (Invoke-CheckedCommand "Resolve frontend URL" {
