@@ -4517,7 +4517,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
 
     const initialRentalRate = rentalRateCandidates[0] ?? null;
 
-    const hasPoolFeature = areaCounts.pool != null ? areaCounts.pool > 0 : undefined;
+    const hasPoolFeature = areaCounts.pool != null ? areaCounts.pool > 0 : false;
     const internetAccessFeature = {
       adsl: toOptionalBool(listing.adsl),
       dialUp: toOptionalBool(listing.dialup),
