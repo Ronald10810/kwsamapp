@@ -318,7 +318,6 @@ if (-not $SkipFrontend) {
                         "--region", $frontendRegion,
                         "--allow-unauthenticated",
                         "--port", "8080",
-                        "--set-build-env-vars", "VITE_API_BASE_URL=$backendUrl,VITE_GOOGLE_CLIENT_ID=$GoogleClientId,VITE_TRAINING_HUB_ENABLED=true",
                         "--clear-base-image"
                     )
 
@@ -349,7 +348,6 @@ if (-not $SkipFrontend) {
                         "--region", $frontendRegion,
                         "--allow-unauthenticated",
                         "--port", "8080",
-                        "--set-build-env-vars", "VITE_API_BASE_URL=$backendUrl,VITE_GOOGLE_CLIENT_ID=$GoogleClientId,VITE_TRAINING_HUB_ENABLED=true",
                         "--clear-base-image"
                     )
 
