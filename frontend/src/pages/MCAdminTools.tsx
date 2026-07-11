@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import MCDashboardTab from './mc-admin/MCDashboardTab';
 import PortalRecoveryTab from './mc-admin/PortalRecoveryTab';
+import SupportTicketsTab from './mc-admin/SupportTicketsTab';
 import RentalsPage from './Rentals';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3173,7 +3174,7 @@ function LoginActivityTab() {
   );
 }
 
-type SubTab = 'mc-dashboard' | 'rentals' | 'listing-transfer' | 'agent-deregistration' | 'agent-reactivation' | 'mc-document-hub' | 'login-activity' | 'portal-recovery';
+type SubTab = 'mc-dashboard' | 'rentals' | 'listing-transfer' | 'agent-deregistration' | 'agent-reactivation' | 'mc-document-hub' | 'support-tickets' | 'login-activity' | 'portal-recovery';
 
 const COMMUNICATIONS_CONSOLE_ENABLED = String(import.meta.env.VITE_COMMUNICATIONS_CONSOLE_ENABLED ?? 'false').toLowerCase() === 'true';
 const PORTAL_RECOVERY_ENABLED = String(import.meta.env.VITE_PORTAL_RECOVERY_ENABLED ?? 'false').toLowerCase() === 'true';
@@ -4939,10 +4940,12 @@ export default function MCAdminToolsPage() {
   const { user, isOfficeAdmin, isRegionalAdmin } = useAuth();
   const [searchParams] = useSearchParams();
   const [activeSubTab, setActiveSubTab] = useState<SubTab | 'communications'>('mc-dashboard');
+  const supportTab: { id: SubTab; label: string } = { id: 'support-tickets', label: 'Support Tickets' };
   const subTabs: { id: SubTab | 'communications'; label: string }[] = [
     ...BASE_SUB_TABS,
     ...(isRegionalAdmin ? [{ id: 'login-activity' as const, label: 'Login Activity' }] : []),
     ...(isRegionalAdmin && PORTAL_RECOVERY_ENABLED ? [{ id: 'portal-recovery' as const, label: 'Portal Recovery' }] : []),
+    supportTab,
   ];
 
   useEffect(() => {
@@ -5014,6 +5017,7 @@ export default function MCAdminToolsPage() {
         />
       )}
       {activeSubTab === 'rentals' && <RentalsPage />}
+      {activeSubTab === 'support-tickets' && <SupportTicketsTab />}
       {activeSubTab === 'listing-transfer' && <ListingTransferTab />}
       {activeSubTab === 'agent-deregistration' && <AgentDeregistrationTab />}
       {activeSubTab === 'agent-reactivation' && <AgentReactivationTab />}

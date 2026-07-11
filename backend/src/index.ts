@@ -35,6 +35,7 @@ import publicRoutes from './routes/public.js';
 import loginActivityRoutes from './routes/loginActivity.js';
 import communicationsRoutes from './routes/communications.js';
 import portalRecoveryRoutes from './routes/portalRecovery.js';
+import supportTicketsRoutes from './routes/supportTickets.js';
 
 import rentalsRoutes from './routes/rentals.js';
 
@@ -201,6 +202,7 @@ app.use('/api/frontdoor-submissions', frontdoorSubmissionsRoutes);
 app.use('/api/rentals', rentalsRoutes);
 app.use('/api/login-activity', loginActivityRoutes);
 app.use('/api/portal-recovery', portalRecoveryRoutes);
+app.use('/api/support-tickets', supportTicketsRoutes);
 
 // Error handling (must be last)
 app.use(errorHandler);
