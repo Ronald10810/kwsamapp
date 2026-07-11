@@ -279,23 +279,14 @@ if (-not $SkipFrontend) {
         $frontendEnvBaseContent = Get-Content -Path $frontendEnvBaseFile -Raw
     }
 
-    $envLines = @()
-    if (Test-Path $frontendEnvBaseFile) {
-        $envLines = Get-Content -Path $frontendEnvBaseFile
-    }
-
-    $envLines = $envLines | Where-Object {
-        $_ -notmatch '^\s*VITE_API_BASE_URL\s*=' -and
-        $_ -notmatch '^\s*VITE_GOOGLE_CLIENT_ID\s*=' -and
-        $_ -notmatch '^\s*VITE_COMMUNICATIONS_CONSOLE_ENABLED\s*=' -and
-        $_ -notmatch '^\s*VITE_PORTAL_RECOVERY_ENABLED\s*=' -and
-        $_ -notmatch '^\s*VITE_TRAINING_HUB_ENABLED\s*='
-    }
-    $envLines += "VITE_API_BASE_URL=$backendUrl"
-    $envLines += "VITE_GOOGLE_CLIENT_ID=$GoogleClientId"
-    $envLines += "VITE_COMMUNICATIONS_CONSOLE_ENABLED=$($CommunicationsConsoleEnabled.ToString().ToLowerInvariant())"
-    $envLines += "VITE_PORTAL_RECOVERY_ENABLED=true"
-    $envLines += "VITE_TRAINING_HUB_ENABLED=true"
+    # Write a deterministic env file to avoid carrying forward malformed concatenated VITE lines.
+    $envLines = @(
+        "VITE_API_BASE_URL=$backendUrl",
+        "VITE_GOOGLE_CLIENT_ID=$GoogleClientId",
+        "VITE_COMMUNICATIONS_CONSOLE_ENABLED=$($CommunicationsConsoleEnabled.ToString().ToLowerInvariant())",
+        "VITE_PORTAL_RECOVERY_ENABLED=true",
+        "VITE_TRAINING_HUB_ENABLED=true"
+    )
 
     Set-Content -Path $frontendEnvBaseFile -Value $envLines -Encoding UTF8
     Write-Host "Generated frontend env override: $frontendEnvBaseFile" -ForegroundColor DarkGray
