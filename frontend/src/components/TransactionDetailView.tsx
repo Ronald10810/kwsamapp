@@ -253,9 +253,9 @@ function toNumberOrNull(value: string | null | undefined): number | null {
 
 function StatCard({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-sm font-semibold text-slate-900">{value || '-'}</p>
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition hover:border-slate-300">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-sm font-semibold text-slate-900">{value || '-'}</p>
     </div>
   );
 }
@@ -386,70 +386,66 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
   const baseTotalGci = toNumberOrNull(transaction.total_gci);
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="border-b border-slate-200 pb-4">
-        <div className="flex items-center justify-between mb-2">
-          <div>
-            <h2 className="text-2xl font-bold text-slate-900">
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-rose-50 px-4 py-4 md:px-5 md:py-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Transaction View</p>
+            <h2 className="mt-1 truncate text-2xl font-semibold text-slate-900">
               {transaction.transaction_number || transaction.source_transaction_id}
             </h2>
-            <p className="mt-0.5 text-sm text-slate-500">{transaction.address}</p>
+            <p className="mt-1 max-w-3xl break-words text-sm text-slate-600">{transaction.address || transaction.source_transaction_id}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
+            className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
           >
             Close
           </button>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="inline-block rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
-            Status: {transaction.transaction_status || '-'}
-          </span>
-          <span className="inline-block rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700">
-            Type: {transaction.transaction_type || '-'}
-          </span>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="status-chip">Status: {transaction.transaction_status || '-'}</span>
+          <span className="status-chip info">Type: {transaction.transaction_type || '-'}</span>
           {transaction.listing_number && (
-            <span className="inline-block rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
-              Listing: {transaction.listing_number}
-            </span>
+            <span className="status-chip good">Listing: {transaction.listing_number}</span>
           )}
         </div>
       </div>
 
-      {/* Tab Navigation */}
-      <div className="flex gap-2 border-b border-slate-200">
-        {([
-          ['overview', 'Overview'],
-          ['financial', 'Financial'],
-          ['documents', 'Documents'],
-          ['attorneys', isRentalTransaction ? 'Participants' : 'Attorneys'],
-          ['status-history', 'Status History'],
-        ] as [DetailTab, string][]).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setDetailTab(key)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              detailTab === key
-                ? 'border-red-600 text-red-600'
-                : 'border-transparent text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="border-b border-slate-200 bg-slate-50/70 px-3 pt-2">
+        <div className="flex flex-wrap gap-2">
+          {([
+            ['overview', 'Overview'],
+            ['financial', 'Financial'],
+            ['documents', 'Documents'],
+            ['attorneys', isRentalTransaction ? 'Participants' : 'Attorneys'],
+            ['status-history', 'Status History'],
+          ] as [DetailTab, string][]).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setDetailTab(key)}
+              className={`rounded-t-xl border border-b-0 px-4 py-2 text-sm font-medium transition-colors ${
+                detailTab === key
+                  ? 'border-red-200 bg-white text-red-600'
+                  : 'border-transparent text-slate-600 hover:bg-white hover:text-slate-900'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Tab Content */}
-      <div>
+      <div className="max-h-[78vh] overflow-auto p-4 md:p-5">
         {detailTab === 'overview' && (
-          <div className="space-y-4">
-            {/* Basic Information */}
-            <section>
-              <h3 className="mb-2 text-lg font-semibold text-slate-900">Basic Information</h3>
+          <div className="space-y-5">
+            <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-base font-semibold text-slate-900">Basic Information</h3>
+                <span className="text-xs text-slate-500">Core record details</span>
+              </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 <StatCard label="Transaction Number" value={transaction.transaction_number} />
                 <StatCard label="Source ID" value={transaction.source_transaction_id} />
@@ -464,8 +460,11 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
             </section>
 
             {isRentalTransaction && rentalDetail && (
-              <section>
-                <h3 className="mb-2 text-lg font-semibold text-slate-900">Rental Information</h3>
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-base font-semibold text-slate-900">Rental Information</h3>
+                  <span className="text-xs text-slate-500">Rental-only fields</span>
+                </div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                   <StatCard label="Rental Number" value={rentalDetail.rental_number} />
                   <StatCard label="Rental Status" value={rentalDetail.rental_status} />
@@ -484,7 +483,7 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
                   <StatCard label="Tenant Phone" value={rentalDetail.tenant_phone} />
                 </div>
                 {rentalDetail.notes && (
-                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <p className="text-xs font-medium text-slate-600">Rental Notes</p>
                     <p className="mt-1 text-sm text-slate-900 whitespace-pre-wrap">{rentalDetail.notes}</p>
                   </div>
@@ -494,8 +493,11 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
 
             {/* Market Center & Team */}
             {(transaction.market_center_name || transaction.team_name) && (
-              <section>
-                <h3 className="mb-2 text-lg font-semibold text-slate-900">Market Center & Team</h3>
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-base font-semibold text-slate-900">Market Center & Team</h3>
+                  <span className="text-xs text-slate-500">Context and ownership</span>
+                </div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                   {transaction.market_center_name && (
                     <StatCard label="Market Center" value={transaction.market_center_name} />
@@ -511,8 +513,11 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
             )}
 
             {/* Key Dates */}
-            <section>
-              <h3 className="mb-2 text-lg font-semibold text-slate-900">Key Dates</h3>
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-base font-semibold text-slate-900">Key Dates</h3>
+                <span className="text-xs text-slate-500">Lifecycle timeline</span>
+              </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {transaction.list_date && (
                   <StatCard label="List Date" value={formatDate(transaction.list_date)} />
@@ -533,9 +538,12 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
             </section>
 
             {agentBreakdown.length > 0 && (
-              <section>
-                <h3 className="mb-2 text-lg font-semibold text-slate-900">Agent Breakdown</h3>
-                <div className="overflow-hidden rounded-lg border border-slate-200">
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-base font-semibold text-slate-900">Agent Breakdown</h3>
+                  <span className="text-xs text-slate-500">By side and split</span>
+                </div>
+                <div className="overflow-hidden rounded-xl border border-slate-200">
                   <table className="min-w-full divide-y divide-slate-200 text-sm">
                     <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
                       <tr>
@@ -559,12 +567,15 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
             )}
 
             {(transaction.outside_agency_contacts ?? []).length > 0 && (
-              <section>
-                <h3 className="mb-2 text-lg font-semibold text-slate-900">Outside Agents</h3>
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-base font-semibold text-slate-900">Outside Agents</h3>
+                  <span className="text-xs text-slate-500">External contacts</span>
+                </div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {(transaction.outside_agency_contacts ?? []).map((contact, idx) => (
-                    <div key={`${contact.agent_name ?? 'outside-agent'}-${idx}`} className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                      <p className="text-sm font-semibold text-amber-900">{contact.agent_name || 'Outside Agent'}</p>
+                    <div key={`${contact.agent_name ?? 'outside-agent'}-${idx}`} className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 shadow-sm">
+                      <p className="text-sm font-semibold text-amber-950">{contact.agent_name || 'Outside Agent'}</p>
                       <p className="mt-1 text-xs text-amber-900">Agency: {contact.agency_name || '-'}</p>
                       <p className="text-xs text-amber-900">Phone: {contact.phone || '-'}</p>
                       <p className="text-xs text-amber-900">Email: {contact.email || '-'}</p>
@@ -577,10 +588,12 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
         )}
 
         {detailTab === 'financial' && (
-          <div className="space-y-6">
-            {/* Price Information */}
-            <section>
-              <h3 className="mb-3 text-lg font-semibold text-slate-900">{isRentalTransaction ? 'Rental & Commission Information' : 'Price Information'}</h3>
+          <div className="space-y-5">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-base font-semibold text-slate-900">{isRentalTransaction ? 'Rental & Commission Information' : 'Price Information'}</h3>
+                <span className="text-xs text-slate-500">Financial overview</span>
+              </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <StatCard label={isRentalTransaction ? 'Rental Amount' : 'Sales Price'} value={isRentalTransaction ? formatMoney(rentalDetail?.rental_amount ?? null) : formatMoney(transaction.sales_price)} />
                 <StatCard label={isRentalTransaction ? 'Gross Commission' : 'List Price'} value={isRentalTransaction ? formatMoney(rentalDetail?.gross_commission ?? transaction.total_gci) : formatMoney(transaction.list_price)} />
@@ -590,8 +603,11 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
             </section>
 
             {/* Commission & GCI */}
-            <section>
-              <h3 className="mb-3 text-lg font-semibold text-slate-900">Commission & GCI</h3>
+            <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-base font-semibold text-slate-900">Commission & GCI</h3>
+                <span className="text-xs text-slate-500">Current calculations</span>
+              </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <StatCard label={isRentalTransaction ? 'Agent Net Amount' : 'Net Commission'} value={formatMoney(transaction.net_comm)} />
                 <StatCard label={isRentalTransaction ? 'Gross Commission' : 'Total GCI'} value={formatMoney(transaction.total_gci)} />
@@ -603,8 +619,11 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
             </section>
 
             {/* Splits & Distributions */}
-            <section>
-              <h3 className="mb-3 text-lg font-semibold text-slate-900">Splits & Distributions</h3>
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-base font-semibold text-slate-900">Splits & Distributions</h3>
+                <span className="text-xs text-slate-500">Cap and payouts</span>
+              </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <StatCard label="Cap Remaining" value={formatMoney(transaction.cap_remaining)} />
                 <StatCard label="Growth Share" value={formatMoney(transaction.growth_share)} />
@@ -617,9 +636,12 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
             </section>
 
             {multiAgentSplitRows.length > 1 && (
-              <section>
-                <h3 className="mb-3 text-lg font-semibold text-slate-900">Agent Split Allocation</h3>
-                <div className="overflow-hidden rounded-lg border border-slate-200">
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-base font-semibold text-slate-900">Agent Split Allocation</h3>
+                  <span className="text-xs text-slate-500">Per agent breakdown</span>
+                </div>
+                <div className="overflow-hidden rounded-xl border border-slate-200">
                   <table className="min-w-full divide-y divide-slate-200 text-sm">
                     <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
                       <tr>
@@ -654,14 +676,17 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
         )}
 
         {detailTab === 'attorneys' && (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {isRentalTransaction ? (
               <>
-                <section>
-                  <h3 className="mb-3 text-lg font-semibold text-slate-900">Rental Participants</h3>
-                  <div className="rounded-lg border border-slate-200 p-4">
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-base font-semibold text-slate-900">Rental Participants</h3>
+                    <span className="text-xs text-slate-500">Active participants</span>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
                     {rentalDetail && rentalDetail.participants.length > 0 ? (
-                      <div className="overflow-hidden rounded-lg border border-slate-200">
+                      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                         <table className="min-w-full divide-y divide-slate-200 text-sm">
                           <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                             <tr>
@@ -689,11 +714,14 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
                   </div>
                 </section>
 
-                <section>
-                  <h3 className="mb-3 text-lg font-semibold text-slate-900">Payment Schedule</h3>
-                  <div className="rounded-lg border border-slate-200 p-4">
+                <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-base font-semibold text-slate-900">Payment Schedule</h3>
+                    <span className="text-xs text-slate-500">Due and paid milestones</span>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
                     {rentalDetail && rentalDetail.payment_schedule.length > 0 ? (
-                      <div className="overflow-hidden rounded-lg border border-slate-200">
+                      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                         <table className="min-w-full divide-y divide-slate-200 text-sm">
                           <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                             <tr>
@@ -727,9 +755,12 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
               </>
             ) : (
               <>
-                <section>
-                  <h3 className="mb-3 text-lg font-semibold text-slate-900">Transfer Attorney</h3>
-                  <div className="rounded-lg border border-slate-200 p-4">
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-base font-semibold text-slate-900">Transfer Attorney</h3>
+                    <span className="text-xs text-slate-500">Primary conveyancing contact</span>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
                     {transaction.transfer_attorney ? (
                       <div className="space-y-3">
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -744,9 +775,12 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
                   </div>
                 </section>
 
-                <section>
-                  <h3 className="mb-3 text-lg font-semibold text-slate-900">Bond Attorney</h3>
-                  <div className="rounded-lg border border-slate-200 p-4">
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-base font-semibold text-slate-900">Bond Attorney</h3>
+                    <span className="text-xs text-slate-500">Finance contact</span>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
                     {transaction.bond_attorney ? (
                       <div className="space-y-3">
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -767,7 +801,10 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
 
         {detailTab === 'documents' && (
           <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-slate-900">{isRentalTransaction ? 'Rental Documents' : 'Transaction Documents'}</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold text-slate-900">{isRentalTransaction ? 'Rental Documents' : 'Transaction Documents'}</h3>
+              <span className="text-xs text-slate-500">Downloads and file actions</span>
+            </div>
             {documentActionError && <p className="text-sm text-red-600">{documentActionError}</p>}
             {isDocsLoading ? (
               <p className="text-slate-500">Loading documents...</p>
@@ -775,7 +812,7 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
               rentalDetail && rentalDetail.documents.length > 0 ? (
                 <div className="space-y-2">
                   {rentalDetail.documents.map((doc) => (
-                    <div key={doc.id} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div key={doc.id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
                       <div>
                         <p className="font-medium text-slate-900">{doc.document_name || doc.file_name || `Document #${doc.id}`}</p>
                         <p className="text-xs text-slate-500">
@@ -803,7 +840,7 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
             ) : documents && documents.items.length > 0 ? (
               <div className="space-y-2">
                 {documents.items.map((doc) => (
-                  <div key={doc.id} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div key={doc.id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
                     <div>
                       <p className="font-medium text-slate-900">{doc.file_name}</p>
                       <p className="text-xs text-slate-500">
@@ -841,7 +878,10 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
 
         {detailTab === 'status-history' && (
           <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-slate-900">Status History</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold text-slate-900">Status History</h3>
+              <span className="text-xs text-slate-500">Audit trail</span>
+            </div>
             {isRentalTransaction ? (
               isRentalAuditLoading ? (
                 <p className="text-slate-500">Loading rental history...</p>
@@ -850,10 +890,10 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
                   {rentalAudit.items.map((entry, idx) => (
                     <div key={`${entry.id}-${idx}`} className="flex gap-3">
                       <div className="flex flex-col items-center">
-                        <div className="h-3 w-3 rounded-full bg-red-600" />
+                        <div className="h-3 w-3 rounded-full bg-red-600 shadow-sm" />
                         {idx < rentalAudit.items.length - 1 && <div className="h-8 w-0.5 bg-slate-200 mt-1" />}
                       </div>
-                      <div className="flex-1">
+                      <div className="flex-1 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
                         <p className="font-medium text-slate-900">{entry.action}</p>
                         <p className="text-xs text-slate-500">
                           {formatDateTime(entry.changed_at)}
@@ -869,9 +909,9 @@ export default function TransactionDetailView({ transactionId, onClose }: { tran
             ) : isStatusLoading ? (
               <p className="text-slate-500">Loading status history...</p>
             ) : statusHistory && statusHistory.items.length > 0 ? (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {statusHistory.items.map((entry) => (
-                  <div key={entry.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div key={entry.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <p className="font-semibold text-slate-900">

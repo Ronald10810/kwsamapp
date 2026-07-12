@@ -3829,6 +3829,9 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         cl.rental_rate, cl.lease_period, cl.deposit_requirements,
         cl.is_furnished, cl.pet_friendly, cl.retirement_living,
         cl.has_flatlet, cl.property_auction,
+        cl.has_borehole, cl.has_gas_geyser, cl.has_solar_panels,
+        cl.has_backup_battery_or_inverter, cl.has_solar_geyser, cl.has_water_tank,
+        cl.adsl, cl.fibre, cl.isdn, cl.dialup, cl.fixed_wimax, cl.satellite,
         cl.no_transfer_duty, cl.occupation_date,
         cl.feed_to_property24, cl.property24_ref1, cl.property24_ref2,
         cl.display_address_on_website,
@@ -3937,7 +3940,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       `SELECT area_type, MAX(count)::numeric AS count
        FROM migration.listing_property_areas
        WHERE listing_id = $1
-         AND LOWER(TRIM(COALESCE(area_type, ''))) IN ('bedroom', 'bathroom', 'garage', 'parking')
+         AND LOWER(TRIM(COALESCE(area_type, ''))) IN ('bedroom', 'bathroom', 'garage', 'parking', 'garden', 'pool')
        GROUP BY area_type`,
       [id]
     );
@@ -4495,6 +4498,26 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     const rentalRateCandidates = buildRentalRateCandidatesForProperty24(listing.rental_rate);
     const p24PhotoSelection = await selectPhotosForProperty24(imageUrls);
     const p24Photos = p24PhotoSelection.photos;
+    const hasGardenFeature = (areaCounts.garden ?? 0) > 0;
+    const hasPoolFeature = (areaCounts.pool ?? 0) > 0;
+    const hasAdslInternet = toBool(listing.adsl);
+    const hasFibreInternet = toBool(listing.fibre);
+    const hasIsdnInternet = toBool(listing.isdn);
+    const hasDialupInternet = toBool(listing.dialup);
+    const hasFixedWimaxInternet = toBool(listing.fixed_wimax);
+    const hasSatelliteInternet = toBool(listing.satellite);
+    const hasBorehole = toBool(listing.has_borehole);
+    const hasGasGeyser = toBool(listing.has_gas_geyser);
+    const hasSolarPanels = toBool(listing.has_solar_panels);
+    const hasBackupBatteryOrInverter = toBool(listing.has_backup_battery_or_inverter);
+    const hasSolarGeyser = toBool(listing.has_solar_geyser);
+    const hasWaterTank = toBool(listing.has_water_tank);
+
+    const featureTags: Array<{ description: string; featureType: string; tags: string[] }> = [];
+    if (hasGardenFeature) featureTags.push({ description: 'Garden', featureType: 'Garden', tags: [] });
+    if (hasPoolFeature) featureTags.push({ description: 'Pool', featureType: 'Pool', tags: [] });
+    // Property24 accepts the structured garden/pool feature tags below, but rejects
+    // free-form `Other.tags` strings for this payload shape with HTTP 400 conversion errors.
 
     const initialRentalRate = rentalRateCandidates[0] ?? null;
 
@@ -4577,8 +4600,10 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         },
         domesticRooms: 0,
         outsideToilets: 0,
-        garden: false,
-        pool: false,
+        garden: hasGardenFeature,
+        // Keep both key casings for strict/legacy Property24 validators.
+        Pool: hasPoolFeature,
+        pool: hasPoolFeature,
         flatlet: toBool(listing.has_flatlet),
         secondHouse: false,
         outBuildingsSize: null,
@@ -4599,12 +4624,12 @@ router.post('/:id/publish-to-property24', async (req, res) => {
           nearbyTrainService: false,
         },
         internetAccess: {
-          adsl: false,
-          dialUp: false,
-          fibre: false,
-          fixedWiMax: false,
-          isdn: false,
-          satellite: false,
+          adsl: hasAdslInternet,
+          dialUp: hasDialupInternet,
+          fibre: hasFibreInternet,
+          fixedWiMax: hasFixedWimaxInternet,
+          isdn: hasIsdnInternet,
+          satellite: hasSatelliteInternet,
           vdsl: false,
         },
         isWheelchairAccessible: false,
@@ -4612,12 +4637,12 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         hasBackupWater: false,
         outsideArea: null,
         sustainabilityInfo: {
-          solarPanels: false,
-          solarGeyser: false,
-          gasGeyser: false,
-          waterTank: false,
-          borehole: false,
-          backupBatteryOrInverter: false,
+          solarPanels: hasSolarPanels,
+          solarGeyser: hasSolarGeyser,
+          gasGeyser: hasGasGeyser,
+          waterTank: hasWaterTank,
+          borehole: hasBorehole,
+          backupBatteryOrInverter: hasBackupBatteryOrInverter,
         },
       },
       rentalInfo: listingType === 'Rental' ? {
@@ -4629,7 +4654,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       auctionInfo: toBool(listing.property_auction) ? {} : null,
       commercialInfo: null,
       tags: [],
-      featureTags: [],
+      featureTags,
       developmentId: null,
       lightstoneId: 0,
       repossessed: false,

@@ -30,7 +30,7 @@ router.get('/', async (req, res) => {
         if (searchInput.length > 0) {
             params.push(`%${searchInput}%`);
             const searchParam = `$${params.length}`;
-            whereClauses.push(`(ca.full_name ILIKE ${searchParam} OR ca.first_name ILIKE ${searchParam} OR ca.last_name ILIKE ${searchParam} OR ca.email ILIKE ${searchParam} OR ca.kwuid ILIKE ${searchParam} OR ca.source_associate_id ILIKE ${searchParam} OR mc.name ILIKE ${searchParam})`);
+            whereClauses.push(`(ca.full_name ILIKE ${searchParam} OR ca.first_name ILIKE ${searchParam} OR ca.last_name ILIKE ${searchParam} OR ca.email ILIKE ${searchParam} OR ca.kwuid ILIKE ${searchParam} OR ca.national_id ILIKE ${searchParam} OR ca.source_associate_id ILIKE ${searchParam} OR mc.name ILIKE ${searchParam})`);
         }
         if (statusInput.length > 0) {
             params.push(statusInput.toLowerCase());

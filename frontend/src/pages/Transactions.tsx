@@ -1,10 +1,12 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import TransactionDetailView from '../components/TransactionDetailView';
 
 const HOUR_MS = 60 * 60 * 1000;
 const API_FETCH_TIMEOUT_MS = 15000;
+const SUMMARY_FETCH_TIMEOUT_MS = 30000;
 
 async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs = API_FETCH_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
@@ -617,13 +619,17 @@ function buildPreviewCalculatedRows(
     team_id: string | null;
     associate_split_pct: number;
     team_commission_split_to_team: number;
-  }>
+  }>,
+  persistedSplitOverrideBySourceAssociateId: Map<string, {
+    non_mc_split_pct: number;
+  }> = new Map()
 ): CalculatedSummaryItem[] {
   const totalGci = Math.max(toNumberOrZero(form.total_gci), 0);
   const salePrice = Math.max(toNumberOrZero(form.sales_price), 0);
   const listPrice = Math.max(toNumberOrZero(form.list_price), 0);
   const varianceSaleListPct = listPrice > 0 ? ((salePrice - listPrice) / listPrice) * 100 : 0;
   const baseAverageCommissionPct = salePrice > 0 ? (totalGci / salePrice) * 100 : 0;
+  const projectedCapRemainingByKey = new Map<string, number>();
 
   return form.agents
     .map((agent, index) => {
@@ -638,11 +644,20 @@ function buildPreviewCalculatedRows(
       const roleLabel = normalizeSummarySide(agent.agent_role, derivedTransactionType || '-');
       const isOutsideAgent = isOutsideAgentRole(agent.agent_role);
       const capLookup = capRemainingBySourceAssociateId.get(agent.source_associate_id);
-      const effectiveCapRemaining = Math.max(capLookup?.cap_remaining ?? 0, 0);
       const isTeamTransaction = Boolean(capLookup?.team_id);
+      const capProjectionKey = isTeamTransaction
+        ? `team:${capLookup?.team_id ?? ''}`
+        : `associate:${agent.source_associate_id}`;
+      const currentProjectedCapRemaining = projectedCapRemainingByKey.has(capProjectionKey)
+        ? projectedCapRemainingByKey.get(capProjectionKey) ?? 0
+        : Math.max(capLookup?.cap_remaining ?? 0, 0);
+      const effectiveCapRemaining = Math.max(currentProjectedCapRemaining, 0);
+      const persistedSplitOverride = persistedSplitOverrideBySourceAssociateId.get(agent.source_associate_id);
       const configuredTeamSplit = normalizeTeamSplitPct(capLookup?.team_commission_split_to_team ?? 0);
       const associateSplitPct = isOutsideAgent
         ? 100
+        : persistedSplitOverride != null
+          ? Math.max(Math.min(persistedSplitOverride.non_mc_split_pct, 100), 0)
         : isTeamTransaction && configuredTeamSplit > 0
           ? configuredTeamSplit
           : normalizeAssociateSplitPct(capLookup?.associate_split_pct ?? 0);
@@ -653,11 +668,13 @@ function buildPreviewCalculatedRows(
       let adjustedAssociateDollar = isTeamTransaction ? 0 : associateDollarPreCap;
       let adjustedTeamDollar = isTeamTransaction ? associateDollarPreCap : 0;
       let adjustedMarketCenterDollar = marketCenterDollar;
+      let projectedCapRemaining = effectiveCapRemaining;
 
       if (marketCenterDollar > 0) {
         if (effectiveCapRemaining <= 0) {
           const overflow = marketCenterDollar;
           adjustedMarketCenterDollar = 0;
+          projectedCapRemaining = 0;
           if (isTeamTransaction) {
             adjustedTeamDollar = roundMoney(adjustedTeamDollar + overflow);
           } else {
@@ -666,13 +683,18 @@ function buildPreviewCalculatedRows(
         } else if (marketCenterDollar > effectiveCapRemaining) {
           const overflow = roundMoney(marketCenterDollar - effectiveCapRemaining);
           adjustedMarketCenterDollar = roundMoney(effectiveCapRemaining);
+          projectedCapRemaining = 0;
           if (isTeamTransaction) {
             adjustedTeamDollar = roundMoney(adjustedTeamDollar + overflow);
           } else {
             adjustedAssociateDollar = roundMoney(adjustedAssociateDollar + overflow);
           }
+        } else {
+          projectedCapRemaining = roundMoney(effectiveCapRemaining - adjustedMarketCenterDollar);
         }
       }
+
+      projectedCapRemainingByKey.set(capProjectionKey, Math.max(projectedCapRemaining, 0));
 
       return {
         id: `preview-${transactionId}-${index}`,
@@ -694,9 +716,9 @@ function buildPreviewCalculatedRows(
         gci_after_fees_excl_vat: toDecimalText(gciAfterFeesExclVat),
         associate_dollar: toDecimalText(adjustedAssociateDollar),
         cap_amount: toDecimalText(capLookup?.cap_amount ?? 0),
-        cap_remaining: toDecimalText(capLookup?.cap_remaining ?? 0),
-        current_cap_remaining: toDecimalText(capLookup?.cap_remaining ?? 0),
-        display_cap_remaining: toDecimalText(capLookup?.cap_remaining ?? 0),
+        cap_remaining: toDecimalText(projectedCapRemaining),
+        current_cap_remaining: toDecimalText(projectedCapRemaining),
+        display_cap_remaining: toDecimalText(projectedCapRemaining),
         team_dollar: toDecimalText(adjustedTeamDollar),
         market_center_dollar: toDecimalText(adjustedMarketCenterDollar),
       };
@@ -733,6 +755,26 @@ function buildSnapshotCalculatedRows(transaction: TransactionRow | null | undefi
       team_dollar: agent.summary?.team_dollar ?? '0',
       market_center_dollar: agent.summary?.market_center_dollar ?? '0',
     }));
+}
+
+function buildFinancialSignature(rows: CalculatedSummaryItem[]): string {
+  const totals = rows.reduce((acc, row) => {
+    acc.gciAfterFees += toNumberOrZero(row.gci_after_fees_excl_vat);
+    acc.associate += toNumberOrZero(row.associate_dollar);
+    acc.mc += toNumberOrZero(row.market_center_dollar);
+    acc.team += toNumberOrZero(row.team_dollar);
+    acc.capRemaining += toNumberOrZero(row.display_cap_remaining ?? row.current_cap_remaining ?? row.cap_remaining);
+    return acc;
+  }, { gciAfterFees: 0, associate: 0, mc: 0, team: 0, capRemaining: 0 });
+
+  return [
+    rows.length,
+    roundMoney(totals.gciAfterFees).toFixed(2),
+    roundMoney(totals.associate).toFixed(2),
+    roundMoney(totals.mc).toFixed(2),
+    roundMoney(totals.team).toFixed(2),
+    roundMoney(totals.capRemaining).toFixed(2),
+  ].join('|');
 }
 
 function UiIcon({
@@ -1000,6 +1042,8 @@ function joinContactName(firstName: string, lastName: string): string {
 
 export default function TransactionsPage() {
   const { token, activeContext, isRegionalAdmin } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const previousMonthWindow = useMemo(() => getPreviousMonthWindow(), []);
   const [categoryView, setCategoryView] = useState<TransactionCategoryView>('sales');
   const [page, setPage] = useState(1);
@@ -1016,6 +1060,9 @@ export default function TransactionsPage() {
   const [editTab, setEditTab] = useState<TransactionEditTab>('details');
   const [quickSummaryRow, setQuickSummaryRow] = useState<TransactionRow | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRecalculatingSummary, setIsRecalculatingSummary] = useState(false);
+  const [forceSummaryPreview, setForceSummaryPreview] = useState(false);
+  const [summaryPreviewNotice, setSummaryPreviewNotice] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [registerSortKey, setRegisterSortKey] = useState<RegisterSortKey>('status_change_date');
   const [registerSortDirection, setRegisterSortDirection] = useState<SortDirection>('desc');
@@ -1035,6 +1082,8 @@ export default function TransactionsPage() {
   const [allowSubmitWithErrors, setAllowSubmitWithErrors] = useState(false);
   const [monthEndSortKey, setMonthEndSortKey] = useState<MonthEndSortKey>('status');
   const [monthEndSortDirection, setMonthEndSortDirection] = useState<SortDirection>('asc');
+  const [lastGoodTransactionsData, setLastGoodTransactionsData] = useState<TransactionsResponse | null>(null);
+  const [lastGoodSummaryData, setLastGoodSummaryData] = useState<TransactionsSummaryResponse | null>(null);
   const [form, setForm] = useState<TransactionFormState>({
     source_transaction_id: '',
     transaction_number: '',
@@ -1070,8 +1119,9 @@ export default function TransactionsPage() {
   const authHeaders: Record<string, string> = {};
   if (token) authHeaders.Authorization = `Bearer ${token}`;
   if (activeContext?.id) authHeaders['X-Active-Context'] = activeContext.id;
+  const queryClient = useQueryClient();
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const { data: queryTransactionsData, isLoading, isError, refetch } = useQuery({
     queryKey: [
       'transactions',
       activeContextId,
@@ -1095,42 +1145,102 @@ export default function TransactionsPage() {
       }
       params.set('category', categoryView);
 
-      const response = await fetchWithTimeout(`/api/transactions?${params.toString()}`, { signal });
+      const response = await fetchWithTimeout(`/api/transactions?${params.toString()}`, {
+        headers: authHeaders,
+        signal,
+        cache: 'no-store',
+      });
       if (!response.ok) {
         throw new Error('Unable to load transactions');
       }
       return response.json() as Promise<TransactionsResponse>;
     },
     placeholderData: (prev) => prev,
+    staleTime: 0,
+    refetchOnMount: 'always',
     refetchInterval: () => msUntilNextHour(),
     refetchOnWindowFocus: false,
-    retry: 1,
+    retry: 2,
   });
+
+  useEffect(() => {
+    if (queryTransactionsData) {
+      setLastGoodTransactionsData(queryTransactionsData);
+    }
+  }, [queryTransactionsData]);
+
+  const data = queryTransactionsData ?? lastGoodTransactionsData;
+
+  function updateVisibleTransactionCache(transactionId: string, updates: Partial<TransactionRow>): void {
+    const queryKey = [
+      'transactions',
+      activeContextId,
+      categoryView,
+      page,
+      search,
+      status,
+      registerDateFilter,
+      registerDateFrom,
+      registerDateTo,
+    ] as const;
+
+    queryClient.setQueryData<TransactionsResponse | undefined>(queryKey, (current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        items: current.items.map((item) => (item.id === transactionId ? { ...item, ...updates } : item)),
+      };
+    });
+
+    setLastGoodTransactionsData((previous) => {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        items: previous.items.map((item) => (item.id === transactionId ? { ...item, ...updates } : item)),
+      };
+    });
+  }
+
+  async function refreshTransactionViews(): Promise<void> {
+    await Promise.allSettled([refetch(), refetchSummary()]);
+  }
 
   useEffect(() => {
     setPage(1);
     void refetch();
   }, [activeContextId, refetch]);
 
-  const { data: summaryData, isLoading: isSummaryLoading, isError: isSummaryError, refetch: refetchSummary } = useQuery({
+  const { data: querySummaryData, isLoading: isSummaryLoading, isError: isSummaryError, refetch: refetchSummary } = useQuery({
     queryKey: ['transactions-summary', activeContextId, categoryView],
     queryFn: async ({ signal }) => {
       const response = await fetchWithTimeout(`/api/transactions/summary?category=${encodeURIComponent(categoryView)}`, {
+        headers: authHeaders,
         signal,
         cache: 'no-store',
-      });
+      }, SUMMARY_FETCH_TIMEOUT_MS);
       if (!response.ok) throw new Error('Unable to load transactions summary');
       return response.json() as Promise<TransactionsSummaryResponse>;
     },
+    placeholderData: (prev) => prev,
+    staleTime: 0,
+    refetchOnMount: 'always',
     refetchInterval: () => msUntilNextHour(),
     refetchOnWindowFocus: false,
-    retry: 1,
+    retry: 2,
   });
+
+  useEffect(() => {
+    if (querySummaryData) {
+      setLastGoodSummaryData(querySummaryData);
+    }
+  }, [querySummaryData]);
+
+  const summaryData = querySummaryData ?? lastGoodSummaryData;
 
   const { data: agentOptionsData } = useQuery({
     queryKey: ['agent-options', activeContextId],
     queryFn: () =>
-      fetch('/api/agents/options').then(async (r) => {
+      fetch('/api/agents/options', { headers: authHeaders }).then(async (r) => {
         if (!r.ok) throw new Error('Unable to load agent options');
         return r.json() as Promise<AgentOptionsResponse>;
       }),
@@ -1139,7 +1249,7 @@ export default function TransactionsPage() {
   const { refetch: refetchNextNumber } = useQuery({
     queryKey: ['transactions-next-number', activeContextId],
     queryFn: () =>
-      fetch('/api/transactions/next-number').then(async (r) => {
+      fetch('/api/transactions/next-number', { headers: authHeaders }).then(async (r) => {
         if (!r.ok) throw new Error('Unable to fetch next transaction number');
         return r.json() as Promise<{ next_transaction_number: string }>;
       }),
@@ -1213,6 +1323,7 @@ export default function TransactionsPage() {
   const {
     data: editSummaryData,
     isLoading: isEditSummaryLoading,
+    refetch: refetchEditSummary,
   } = useQuery({
     queryKey: ['transaction-edit-summary', activeContextId, editingId],
     queryFn: async ({ signal }) => {
@@ -1352,6 +1463,8 @@ export default function TransactionsPage() {
     const today = new Date().toISOString().slice(0, 10);
     const threeMonths = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     setEditingId(null);
+    setForceSummaryPreview(false);
+    setSummaryPreviewNotice(null);
     setFormError(null);
     setListingSearchQuery('');
     setListingSearchOpen(false);
@@ -1400,6 +1513,8 @@ export default function TransactionsPage() {
 
   function openEditForm(item: TransactionRow): void {
     setEditingId(item.id);
+    setForceSummaryPreview(false);
+    setSummaryPreviewNotice(null);
     setFormError(null);
     setListingSearchQuery(item.listing_number ?? '');
     setListingSearchOpen(false);
@@ -1458,6 +1573,52 @@ export default function TransactionsPage() {
     setEditTab('details');
   }
 
+  useEffect(() => {
+    const editValue = new URLSearchParams(location.search).get('edit');
+    const target = editValue ? editValue.trim() : '';
+    if (!target) return;
+
+    let cancelled = false;
+
+    const openFromDeepLink = async () => {
+      const existing = (data?.items ?? []).find((item) =>
+        item.id === target
+        || item.source_transaction_id === target
+        || (item.transaction_number ?? '') === target,
+      );
+
+      if (existing) {
+        openEditForm(existing);
+      } else {
+        try {
+          const response = await fetch(`/api/transactions/${encodeURIComponent(target)}`, { headers: authHeaders });
+          if (!response.ok) return;
+          const item = await response.json() as TransactionRow;
+          if (cancelled) return;
+          openEditForm(item);
+        } catch {
+          return;
+        }
+      }
+
+      if (cancelled) return;
+      const params = new URLSearchParams(location.search);
+      params.delete('edit');
+      void navigate(
+        {
+          pathname: location.pathname,
+          search: params.toString() ? `?${params.toString()}` : '',
+        },
+        { replace: true },
+      );
+    };
+
+    void openFromDeepLink();
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname, location.search, navigate, data?.items]);
+
   async function uploadTransactionDocumentToId(transactionId: string, file: File, documentType: string): Promise<void> {
     const payload = new FormData();
     payload.append('document', file);
@@ -1472,6 +1633,71 @@ export default function TransactionsPage() {
     if (!response.ok) {
       const json = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(json.error ?? `Failed to upload ${file.name}`);
+    }
+  }
+
+  async function recalculateSavedTransactionSummary(
+    transactionId: string,
+    successNotice: string,
+    options?: {
+      showBusy?: boolean;
+      timeoutMs?: number;
+      failSilently?: boolean;
+    }
+  ): Promise<boolean> {
+    const refreshAfterQueuedRecalc = async (attempts = 8, delayMs = 1500): Promise<void> => {
+      for (let i = 0; i < attempts; i += 1) {
+        await new Promise<void>((resolve) => {
+          window.setTimeout(() => resolve(), delayMs);
+        });
+        await Promise.all([refetch(), refetchSummary(), refetchEditSummary()]);
+      }
+    };
+
+    const showBusy = options?.showBusy !== false;
+    const timeoutMs = options?.timeoutMs ?? 90000;
+    if (showBusy) {
+      setIsRecalculatingSummary(true);
+    }
+    try {
+      const response = await fetchWithTimeout(
+        `/api/transactions/${transactionId}/recalculate?mode=queued`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+          cache: 'no-store',
+        },
+        timeoutMs
+      );
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; queued?: boolean };
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Failed to recalculate saved transaction summary');
+      }
+
+      setForceSummaryPreview(false);
+      setSummaryPreviewNotice(
+        payload.queued
+          ? 'Recalculation queued. Summary will refresh shortly using backend cap progression.'
+          : successNotice
+      );
+      await Promise.all([refetch(), refetchSummary(), refetchEditSummary()]);
+      if (payload.queued) {
+        void refreshAfterQueuedRecalc().catch(() => {
+          // Best-effort background refresh only.
+        });
+      }
+      return true;
+    } catch (error) {
+      if (options?.failSilently) {
+        setSummaryPreviewNotice('Transaction saved. Recalculation is taking longer than expected; data will refresh shortly.');
+        await Promise.all([refetch(), refetchSummary(), refetchEditSummary()]);
+        return false;
+      }
+      throw error;
+    } finally {
+      if (showBusy) {
+        setIsRecalculatingSummary(false);
+      }
     }
   }
 
@@ -1504,74 +1730,86 @@ export default function TransactionsPage() {
         bond_attorney: form.bond_attorney_contact,
         bond_originator: form.bond_originator_contact,
       };
-      const response = await fetch(url, {
+      const normalizedAgents = form.agents
+        .filter((a) => {
+          if (a.source_associate_id) return true;
+          if (isOutsideAgentRole(a.agent_role)) {
+            return Boolean(
+              a.outside_agency.first_name.trim()
+              || a.outside_agency.last_name.trim()
+              || a.outside_agency.agency_name.trim()
+            );
+          }
+          return false;
+        })
+        .map((a) => ({
+          ...a,
+          agent_role: normalizeAgentRoleForForm(a.agent_role),
+          associate_name: getOutsideAgentDisplayName(a),
+        }));
+      const basePayload = {
+        ...form,
+        net_comm: effectiveNetCommission,
+        transaction_type: derivedTransactionType || form.transaction_type || null,
+        status_change_date: form.status_change_date || null,
+        buyer: form.buyer || buyerName,
+        seller: form.seller || sellerName,
+        transfer_attorney: form.transfer_attorney || transferAttorneyName || form.transfer_attorney_contact.company_name,
+        ta_mobile_phone: form.transfer_attorney_contact.contact_number,
+        ta_email: form.transfer_attorney_contact.email_address,
+        bond_attorney: form.bond_attorney || bondAttorneyName || form.bond_attorney_contact.company_name,
+        ba_mobile_phone: form.bond_attorney_contact.contact_number,
+        ba_email: form.bond_attorney_contact.email_address,
+        bond_originator: form.bond_originator || bondOriginatorName || form.bond_originator_contact.company_name,
+        party_contact_details: partyContactDetails,
+        buyer_contacts: buyerContacts,
+        seller_contacts: sellerContacts,
+        buyer_first_name: primaryBuyer.first_name,
+        buyer_last_name: primaryBuyer.last_name,
+        buyer_contact_number: primaryBuyer.contact_number,
+        buyer_email_address: primaryBuyer.email_address,
+        seller_first_name: primarySeller.first_name,
+        seller_last_name: primarySeller.last_name,
+        seller_contact_number: primarySeller.contact_number,
+        seller_email_address: primarySeller.email_address,
+        transfer_attorney_first_name: form.transfer_attorney_contact.first_name,
+        transfer_attorney_last_name: form.transfer_attorney_contact.last_name,
+        transfer_attorney_contact_number: form.transfer_attorney_contact.contact_number,
+        transfer_attorney_email_address: form.transfer_attorney_contact.email_address,
+        transfer_attorney_company_name: form.transfer_attorney_contact.company_name,
+        bond_attorney_first_name: form.bond_attorney_contact.first_name,
+        bond_attorney_last_name: form.bond_attorney_contact.last_name,
+        bond_attorney_contact_number: form.bond_attorney_contact.contact_number,
+        bond_attorney_email_address: form.bond_attorney_contact.email_address,
+        bond_attorney_company_name: form.bond_attorney_contact.company_name,
+        bond_originator_first_name: form.bond_originator_contact.first_name,
+        bond_originator_last_name: form.bond_originator_contact.last_name,
+        bond_originator_contact_number: form.bond_originator_contact.contact_number,
+        bond_originator_email_address: form.bond_originator_contact.email_address,
+        bond_originator_company_name: form.bond_originator_contact.company_name,
+      };
+      const requestPayload = (!isCreating && normalizedAgents.length === 0)
+        ? basePayload
+        : { ...basePayload, agents: normalizedAgents };
+      const response = await fetchWithTimeout(url, {
         method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...form,
-          net_comm: effectiveNetCommission,
-          transaction_type: derivedTransactionType || form.transaction_type || null,
-          status_change_date: form.status_change_date || null,
-          buyer: form.buyer || buyerName,
-          seller: form.seller || sellerName,
-          transfer_attorney: form.transfer_attorney || transferAttorneyName || form.transfer_attorney_contact.company_name,
-          ta_mobile_phone: form.transfer_attorney_contact.contact_number,
-          ta_email: form.transfer_attorney_contact.email_address,
-          bond_attorney: form.bond_attorney || bondAttorneyName || form.bond_attorney_contact.company_name,
-          ba_mobile_phone: form.bond_attorney_contact.contact_number,
-          ba_email: form.bond_attorney_contact.email_address,
-          bond_originator: form.bond_originator || bondOriginatorName || form.bond_originator_contact.company_name,
-          party_contact_details: partyContactDetails,
-          buyer_contacts: buyerContacts,
-          seller_contacts: sellerContacts,
-          buyer_first_name: primaryBuyer.first_name,
-          buyer_last_name: primaryBuyer.last_name,
-          buyer_contact_number: primaryBuyer.contact_number,
-          buyer_email_address: primaryBuyer.email_address,
-          seller_first_name: primarySeller.first_name,
-          seller_last_name: primarySeller.last_name,
-          seller_contact_number: primarySeller.contact_number,
-          seller_email_address: primarySeller.email_address,
-          transfer_attorney_first_name: form.transfer_attorney_contact.first_name,
-          transfer_attorney_last_name: form.transfer_attorney_contact.last_name,
-          transfer_attorney_contact_number: form.transfer_attorney_contact.contact_number,
-          transfer_attorney_email_address: form.transfer_attorney_contact.email_address,
-          transfer_attorney_company_name: form.transfer_attorney_contact.company_name,
-          bond_attorney_first_name: form.bond_attorney_contact.first_name,
-          bond_attorney_last_name: form.bond_attorney_contact.last_name,
-          bond_attorney_contact_number: form.bond_attorney_contact.contact_number,
-          bond_attorney_email_address: form.bond_attorney_contact.email_address,
-          bond_attorney_company_name: form.bond_attorney_contact.company_name,
-          bond_originator_first_name: form.bond_originator_contact.first_name,
-          bond_originator_last_name: form.bond_originator_contact.last_name,
-          bond_originator_contact_number: form.bond_originator_contact.contact_number,
-          bond_originator_email_address: form.bond_originator_contact.email_address,
-          bond_originator_company_name: form.bond_originator_contact.company_name,
-          agents: form.agents
-            .filter((a) => {
-              if (a.source_associate_id) return true;
-              if (isOutsideAgentRole(a.agent_role)) {
-                return Boolean(
-                  a.outside_agency.first_name.trim()
-                  || a.outside_agency.last_name.trim()
-                  || a.outside_agency.agency_name.trim()
-                );
-              }
-              return false;
-            })
-            .map((a) => ({
-              ...a,
-              agent_role: normalizeAgentRoleForForm(a.agent_role),
-              associate_name: getOutsideAgentDisplayName(a),
-            })),
-        }),
-      });
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify(requestPayload),
+      }, 45000);
       const json = (await response.json().catch(() => ({}))) as { id?: string; error?: string; warning?: string };
       if (!response.ok) {
         throw new Error(json.error ?? 'Failed to save transaction');
       }
 
       const savedTransactionId = String(editingId ?? json.id ?? '');
+      if (savedTransactionId) {
+        updateVisibleTransactionCache(savedTransactionId, {
+          transaction_status: form.transaction_status || undefined,
+          status_change_date: form.status_change_date || undefined,
+          net_comm: effectiveNetCommission || undefined,
+        });
+      }
       if (isCreating && savedTransactionId && stagedDocuments.length > 0) {
         const uploadResults = await Promise.allSettled(
           stagedDocuments.map((doc) => uploadTransactionDocumentToId(savedTransactionId, doc.file, doc.transaction_document_type))
@@ -1586,7 +1824,7 @@ export default function TransactionsPage() {
           setEditTab('documents');
           setStagedDocuments([]);
           setFormError(`Transaction saved, but document upload failed for: ${failedFiles.join(', ')}`);
-          await Promise.all([refetch(), refetchSummary()]);
+          await refreshTransactionViews();
           return;
         }
 
@@ -1594,9 +1832,33 @@ export default function TransactionsPage() {
       }
 
       setIsFormOpen(false);
-      await Promise.all([refetch(), refetchSummary()]);
+      await refreshTransactionViews();
+
+      if (savedTransactionId) {
+        void recalculateSavedTransactionSummary(
+          savedTransactionId,
+          'Saved and recalculated using backend rules. This summary now reflects persisted values.',
+          { showBusy: false, timeoutMs: 12000, failSilently: true }
+        );
+      }
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Failed to save transaction');
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        const confirmed = editingId ? await confirmSavedTransactionState(editingId) : false;
+        if (confirmed && editingId) {
+          setIsFormOpen(false);
+          await refreshTransactionViews();
+          void recalculateSavedTransactionSummary(
+            editingId,
+            'Saved and recalculated using backend rules. This summary now reflects persisted values.',
+            { showBusy: false, timeoutMs: 12000, failSilently: true }
+          );
+          return;
+        }
+
+        setFormError('Save request timed out. Please retry; if this keeps happening, refresh and try again.');
+      } else {
+        setFormError(error instanceof Error ? error.message : 'Failed to save transaction');
+      }
     } finally {
       setIsSaving(false);
     }
@@ -1615,6 +1877,60 @@ export default function TransactionsPage() {
       setDocumentActionError(error instanceof Error ? error.message : 'Failed to upload document');
     } finally {
       setIsUploadingDocument(false);
+    }
+  }
+
+  async function confirmSavedTransactionState(transactionId: string): Promise<boolean> {
+    try {
+      const response = await fetchWithTimeout(`/api/transactions/${transactionId}`, {
+        headers: authHeaders,
+        cache: 'no-store',
+      }, 15000);
+
+      if (!response.ok) {
+        return false;
+      }
+
+      const detail = await response.json() as {
+        id?: string;
+        transaction_status?: string | null;
+        transaction_type?: string | null;
+        listing_number?: string | null;
+        source_listing_id?: string | null;
+        address?: string | null;
+        suburb?: string | null;
+        city?: string | null;
+        sales_price?: string | null;
+        list_price?: string | null;
+        net_comm?: string | null;
+        total_gci?: string | null;
+        transaction_date?: string | null;
+        status_change_date?: string | null;
+      };
+
+      if (!detail.id) {
+        return false;
+      }
+
+      updateVisibleTransactionCache(transactionId, {
+        transaction_status: detail.transaction_status ?? undefined,
+        transaction_type: detail.transaction_type ?? undefined,
+        listing_number: detail.listing_number ?? undefined,
+        source_listing_id: detail.source_listing_id ?? undefined,
+        address: detail.address ?? undefined,
+        suburb: detail.suburb ?? undefined,
+        city: detail.city ?? undefined,
+        sales_price: detail.sales_price ?? undefined,
+        list_price: detail.list_price ?? undefined,
+        net_comm: detail.net_comm ?? undefined,
+        total_gci: detail.total_gci ?? undefined,
+        transaction_date: detail.transaction_date ?? undefined,
+        status_change_date: detail.status_change_date ?? undefined,
+      });
+
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -1764,8 +2080,24 @@ export default function TransactionsPage() {
       currentEditingRow?.market_center_name ?? null,
       derivedTransactionType,
       previewCapRemainingLookup,
+      (() => {
+        const map = new Map<string, { non_mc_split_pct: number }>();
+        if (!currentEditingRow) return map;
+        for (const agent of currentEditingRow.agents ?? []) {
+          const sourceAssociateId = (agent.source_associate_id ?? '').trim();
+          if (sourceAssociateId.length === 0) continue;
+          const gciAfterFees = toNumberOrZero(agent.summary?.gci_after_fees_excl_vat ?? null);
+          if (gciAfterFees <= 0) continue;
+          const associateDollar = toNumberOrZero(agent.summary?.associate_dollar ?? null);
+          const teamDollar = toNumberOrZero(agent.summary?.team_dollar ?? null);
+          const nonMcSplitPct = ((associateDollar + teamDollar) / gciAfterFees) * 100;
+          if (!Number.isFinite(nonMcSplitPct)) continue;
+          map.set(sourceAssociateId, { non_mc_split_pct: nonMcSplitPct });
+        }
+        return map;
+      })(),
     ),
-    [currentEditingRow?.market_center_name, derivedTransactionType, editingId, form, previewCapRemainingLookup]
+    [currentEditingRow, derivedTransactionType, editingId, form, previewCapRemainingLookup]
   );
   const hasLivePreviewInputs = useMemo(() => {
     if (isEditingRentalTransaction) return false;
@@ -1783,9 +2115,73 @@ export default function TransactionsPage() {
     const hasType = derivedTransactionType.trim().length > 0 || form.agents.some((agent) => normalizeRole(agent.agent_role).length > 0);
     return hasTotalGci && hasSalePrice && hasListPrice && hasAgents && hasType;
   }, [derivedTransactionType, form.agents, form.list_price, form.sales_price, form.total_gci, isEditingRentalTransaction]);
+  const hasSummaryRelevantUnsavedChanges = useMemo(() => {
+    if (!editingId || !currentEditingRow) return false;
+
+    const toNormMoney = (value: string | null | undefined): string => {
+      const n = toNumberOrZero(value);
+      return Number.isFinite(n) ? n.toFixed(2) : '0.00';
+    };
+
+    const fieldChanged =
+      toNormMoney(form.sales_price) !== toNormMoney(currentEditingRow.sales_price)
+      || toNormMoney(form.list_price) !== toNormMoney(currentEditingRow.list_price)
+      || toNormMoney(form.total_gci) !== toNormMoney(currentEditingRow.total_gci)
+      || normalizeRole(form.transaction_status) !== normalizeRole(currentEditingRow.transaction_status)
+      || normalizeRole(derivedTransactionType || form.transaction_type) !== normalizeRole(currentEditingRow.transaction_type ?? getDisplayTransactionType(currentEditingRow));
+
+    if (fieldChanged) return true;
+
+    const formAgents = form.agents
+      .filter((a) => {
+        if (a.source_associate_id.trim().length > 0) return true;
+        return isOutsideAgentRole(a.agent_role)
+          && (
+            a.outside_agency.first_name.trim().length > 0
+            || a.outside_agency.last_name.trim().length > 0
+            || a.outside_agency.agency_name.trim().length > 0
+          );
+      })
+      .map((a) => {
+        const outsideName = getOutsideAgentDisplayName(a).trim().toLowerCase();
+        return {
+          key: a.source_associate_id.trim().toLowerCase() || `outside:${outsideName}`,
+          role: normalizeRole(normalizeAgentRoleForForm(a.agent_role)),
+          split: toNumberOrZero(a.split_percentage).toFixed(2),
+        };
+      })
+      .sort((left, right) => left.key.localeCompare(right.key) || left.role.localeCompare(right.role));
+
+    const currentAgents = (currentEditingRow.agents ?? [])
+      .map((a) => {
+        const outsideName = getTransactionAgentDisplayName(a).trim().toLowerCase();
+        return {
+          key: (a.source_associate_id ?? '').trim().toLowerCase() || `outside:${outsideName}`,
+          role: normalizeRole(normalizeAgentRoleForForm(a.agent_role ?? a.summary?.transaction_type ?? '')),
+          split: toNumberOrZero(a.split_percentage != null ? String(a.split_percentage) : null).toFixed(2),
+        };
+      })
+      .sort((left, right) => left.key.localeCompare(right.key) || left.role.localeCompare(right.role));
+
+    if (formAgents.length !== currentAgents.length) return true;
+    for (let i = 0; i < formAgents.length; i += 1) {
+      if (
+        formAgents[i].key !== currentAgents[i].key
+        || formAgents[i].role !== currentAgents[i].role
+        || formAgents[i].split !== currentAgents[i].split
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }, [currentEditingRow, derivedTransactionType, editingId, form.agents, form.list_price, form.sales_price, form.total_gci, form.transaction_status, form.transaction_type]);
+
   // Keep backend calculated-summary as source of truth for persisted transactions.
-  // Use frontend live preview only while creating a new unsaved transaction.
-  const shouldUseLivePreviewRows = !editingId && hasLivePreviewInputs && livePreviewRows.length > 0;
+  // Use frontend live preview for new transactions or when an existing transaction has unsaved summary-relevant edits.
+  const shouldUseLivePreviewRows = (!editingId || (forceSummaryPreview && hasSummaryRelevantUnsavedChanges))
+    && hasLivePreviewInputs
+    && livePreviewRows.length > 0;
   const snapshotEditCalculatedRows = useMemo(() => buildSnapshotCalculatedRows(currentEditingRow), [currentEditingRow]);
   const savedCalculatedSummaryRows = (editSummaryData?.items?.length ?? 0) > 0
     ? (editSummaryData?.items ?? [])
@@ -1793,11 +2189,67 @@ export default function TransactionsPage() {
   const calculatedSummaryRows = shouldUseLivePreviewRows
     ? livePreviewRows
     : savedCalculatedSummaryRows;
+  const previewWouldChangeNumbers = useMemo(
+    () => buildFinancialSignature(livePreviewRows) !== buildFinancialSignature(savedCalculatedSummaryRows),
+    [livePreviewRows, savedCalculatedSummaryRows]
+  );
   const snapshotQuickCalculatedRows = useMemo(() => buildSnapshotCalculatedRows(quickSummaryRow), [quickSummaryRow]);
   const quickSummaryCalculatedRows = (quickSummaryData?.items?.length ?? 0) > 0
     ? (quickSummaryData?.items ?? [])
     : snapshotQuickCalculatedRows;
   const isShowingPreviewForEdit = Boolean(editingId) && shouldUseLivePreviewRows;
+
+  const editSummaryHeaderMeta = useMemo(() => {
+    const first = calculatedSummaryRows[0];
+    const fallbackAgentName = form.agents[0]?.associate_name?.trim()
+      || getOutsideAgentDisplayName(form.agents[0] ?? { source_associate_id: '', associate_name: '', agent_role: '', split_percentage: '', outside_agency: buildEmptyOutsideAgency() })
+      || '-';
+    const uniqueSides = Array.from(new Set(
+      calculatedSummaryRows
+        .map((row) => (row.transaction_side ?? '').trim())
+        .filter((value) => value.length > 0)
+    ));
+    return {
+      agentName: first?.agent_name ?? fallbackAgentName,
+      officeName: first?.office_name ?? currentEditingRow?.market_center_name ?? '-',
+      sideLabel: uniqueSides.length > 0 ? uniqueSides.join(' / ') : (derivedTransactionType || '-'),
+      moreAgents: Math.max(calculatedSummaryRows.length - 1, 0),
+    };
+  }, [calculatedSummaryRows, currentEditingRow?.market_center_name, derivedTransactionType, form.agents]);
+
+  const quickSummaryHeaderMeta = useMemo(() => {
+    const first = quickSummaryCalculatedRows[0];
+    const uniqueSides = Array.from(new Set(
+      quickSummaryCalculatedRows
+        .map((row) => (row.transaction_side ?? '').trim())
+        .filter((value) => value.length > 0)
+    ));
+    return {
+      agentName: first?.agent_name ?? '-',
+      officeName: first?.office_name ?? quickSummaryRow?.market_center_name ?? '-',
+      sideLabel: uniqueSides.length > 0 ? uniqueSides.join(' / ') : '-',
+      moreAgents: Math.max(quickSummaryCalculatedRows.length - 1, 0),
+    };
+  }, [quickSummaryCalculatedRows, quickSummaryRow?.market_center_name]);
+
+  const editSummaryTotals = useMemo(() => {
+    return calculatedSummaryRows.reduce((acc, row) => {
+      acc.gciAfterFees += toNumberOrZero(row.gci_after_fees_excl_vat);
+      acc.associate += toNumberOrZero(row.associate_dollar);
+      acc.marketCenter += toNumberOrZero(row.market_center_dollar);
+      acc.team += toNumberOrZero(row.team_dollar);
+      return acc;
+    }, { gciAfterFees: 0, associate: 0, marketCenter: 0, team: 0 });
+  }, [calculatedSummaryRows]);
+  const quickSummaryTotals = useMemo(() => {
+    return quickSummaryCalculatedRows.reduce((acc, row) => {
+      acc.gciAfterFees += toNumberOrZero(row.gci_after_fees_excl_vat);
+      acc.associate += toNumberOrZero(row.associate_dollar);
+      acc.marketCenter += toNumberOrZero(row.market_center_dollar);
+      acc.team += toNumberOrZero(row.team_dollar);
+      return acc;
+    }, { gciAfterFees: 0, associate: 0, marketCenter: 0, team: 0 });
+  }, [quickSummaryCalculatedRows]);
 
   function toggleRegisterSort(key: RegisterSortKey): void {
     if (registerSortKey === key) {
@@ -2025,8 +2477,8 @@ export default function TransactionsPage() {
 
       {/* Transaction Workspace Modal */}
       {isFormOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm">
-          <div className="absolute inset-6 rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 p-2 backdrop-blur-sm md:p-4">
+          <div className="mx-auto flex h-[calc(100vh-1rem)] max-w-[1800px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl md:h-[calc(100vh-2rem)]">
 
             {/* Modal Header */}
             <div className="border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
@@ -2639,81 +3091,182 @@ export default function TransactionsPage() {
 
                 {editTab === 'summary' && (
                   <div className="space-y-4">
-                    <h3 className="text-lg font-semibold text-slate-900">{isEditingRentalTransaction ? 'Rental Transaction Summary' : 'Transaction Summary'}</h3>
-                    {isShowingPreviewForEdit ? (
-                      <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
-                        Live preview is showing unsaved values based on current form inputs. Save the transaction to persist these summary values.
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-lg font-semibold text-slate-900">{isEditingRentalTransaction ? 'Rental Transaction Summary' : 'Transaction Summary'}</h3>
+                      {editingId && !isEditingRentalTransaction && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!editingId) {
+                                return;
+                              }
+
+                              if (!hasSummaryRelevantUnsavedChanges) {
+                                void (async () => {
+                                  setForceSummaryPreview(false);
+                                  const statusLabel = (form.transaction_status || currentEditingRow?.transaction_status || '').trim() || 'Unknown';
+                                  const isRegistered = statusLabel.toLowerCase() === 'registered';
+                                  setSummaryPreviewNotice('Recalculating saved summary using backend rules...');
+                                  try {
+                                    await recalculateSavedTransactionSummary(
+                                      editingId,
+                                      isRegistered
+                                        ? 'Saved summary recalculated using backend rules.'
+                                        : `Recalculation complete. Current status is ${statusLabel}; Market Centre allocation and cap progression only apply once status is Registered.`
+                                    );
+                                  } catch (error) {
+                                    setSummaryPreviewNotice(error instanceof Error ? error.message : 'Failed to recalculate saved summary');
+                                  }
+                                })();
+                                return;
+                              }
+                              setForceSummaryPreview(true);
+                              setSummaryPreviewNotice(
+                                previewWouldChangeNumbers
+                                  ? 'Preview mode active: these values are not saved yet. Click Save to apply them.'
+                                  : 'Preview completed: no financial difference was detected from the currently saved summary for these edits.'
+                              );
+                            }}
+                            disabled={isRecalculatingSummary}
+                            className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100"
+                            title="Recalculate unsaved preview values, or if there are no unsaved changes, recompute the saved backend summary."
+                          >
+                            {isRecalculatingSummary ? 'Recalculating...' : 'Recalculate Preview'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                        <span className="font-semibold text-slate-900">Agent:</span> {editSummaryHeaderMeta.agentName}
+                        {editSummaryHeaderMeta.moreAgents > 0 ? ` +${editSummaryHeaderMeta.moreAgents} more` : ''}
                       </div>
-                    ) : currentEditingRow ? (
-                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                        {isEditingRentalTransaction
-                          ? 'Rental summary values are calculated from payment details and participant splits. Save or refresh to load the latest values.'
-                          : 'Summary values are calculated and saved by the backend. Save the transaction to refresh this view.'}
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                        <span className="font-semibold text-slate-900">Market Centre:</span> {editSummaryHeaderMeta.officeName}
                       </div>
-                    ) : (
-                      <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-                        This is a live business preview. Complete pricing, roles, and split percentages to see projected summary rows before save.
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                        <span className="font-semibold text-slate-900">Side:</span> {editSummaryHeaderMeta.sideLabel}
                       </div>
-                    )}
-                    <div className="overflow-hidden rounded-xl border border-slate-200">
-                      <table className="min-w-full divide-y divide-slate-200 text-sm">
-                        <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                      <div className="grid grid-cols-2 gap-2 border-b border-slate-200 bg-slate-50/80 p-3 text-xs sm:grid-cols-5">
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                          <p className="text-[11px] uppercase tracking-wide text-slate-500">Rows</p>
+                          <p className="text-sm font-semibold text-slate-900">{calculatedSummaryRows.length}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                          <p className="text-[11px] uppercase tracking-wide text-slate-500">GCI After Fees</p>
+                          <p className="text-sm font-semibold text-slate-900">{toMoney(String(editSummaryTotals.gciAfterFees))}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                          <p className="text-[11px] uppercase tracking-wide text-slate-500">Associate $</p>
+                          <p className="text-sm font-semibold text-slate-900">{toMoney(String(editSummaryTotals.associate))}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                          <p className="text-[11px] uppercase tracking-wide text-slate-500">Market Centre $</p>
+                          <p className="text-sm font-semibold text-slate-900">{toMoney(String(editSummaryTotals.marketCenter))}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                          <p className="text-[11px] uppercase tracking-wide text-slate-500">Team $</p>
+                          <p className="text-sm font-semibold text-slate-900">{toMoney(String(editSummaryTotals.team))}</p>
+                        </div>
+                      </div>
+                      <p className="px-3 pb-2 pt-1 text-xs text-slate-500">Totals above aggregate all summary rows for this transaction.</p>
+                      {calculatedSummaryRows.length > 1 && (
+                        <div className="px-3 pb-3">
+                          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Per-Agent Payout Snapshot</div>
+                          <div className="flex gap-2 overflow-x-auto pb-1">
+                            {calculatedSummaryRows.map((item, index) => (
+                              <div key={`agent-pill-${item.id}`} className="min-w-[240px] rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                                <p className="truncate text-xs font-semibold text-slate-900">
+                                  {item.agent_name || `Agent ${index + 1}`}
+                                  <span className="ml-1 font-normal text-slate-500">({item.is_outside_agent ? 'Outside Agent' : normalizeSummarySide(item.transaction_side, '-')})</span>
+                                </p>
+                                {item.is_outside_agent ? (
+                                  <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-600">
+                                    <span>Role: <strong className="text-slate-800">Outside Agent</strong></span>
+                                    <span>Split: <strong className="text-slate-800">{toPercent(Number(item.split_percentage ?? 0))}</strong></span>
+                                    <span className="col-span-2">GCI Before Fees: <strong className="text-slate-800">{toMoney(item.transaction_gci_before_fees ?? '0')}</strong></span>
+                                  </div>
+                                ) : (
+                                  <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-600">
+                                    <span>Assoc: <strong className="text-slate-800">{toMoney(item.associate_dollar ?? '0')}</strong></span>
+                                    <span>MC: <strong className="text-slate-800">{toMoney(item.market_center_dollar ?? '0')}</strong></span>
+                                    <span>Team: <strong className="text-slate-800">{toMoney(item.team_dollar ?? '0')}</strong></span>
+                                    <span>GCI: <strong className="text-slate-800">{toMoney(item.gci_after_fees_excl_vat ?? '0')}</strong></span>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div className="max-h-[56vh] overflow-auto">
+                      <table className="min-w-[1450px] w-full divide-y divide-slate-200 text-sm">
+                        <thead className="sticky top-0 z-10 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                           <tr>
-                            <th className="px-4 py-3 font-semibold">Agent Name</th>
-                            <th className="px-4 py-3 font-semibold">Office Name</th>
-                            <th className="px-4 py-3 font-semibold">Transaction Type</th>
+                            <th className="px-4 py-3 font-semibold">Associate</th>
                             <th className="px-4 py-3 font-semibold">Split %</th>
                             <th className="px-4 py-3 font-semibold">{isEditingRentalTransaction ? 'Variance % (N/A)' : 'Variance %'}</th>
                             <th className="px-4 py-3 font-semibold">GCI Before Fees</th>
                             <th className="px-4 py-3 font-semibold">{isEditingRentalTransaction ? 'Effective Split %' : 'Avg Comm %'}</th>
+                            <th className="px-4 py-3 font-semibold">GCI After Fees</th>
+                            <th className="px-4 py-3 font-semibold">Associate $</th>
+                            <th className="px-4 py-3 font-semibold">Market Centre $</th>
+                            <th className="px-4 py-3 font-semibold">Team $</th>
                             <th className="px-4 py-3 font-semibold">PR</th>
                             <th className="px-4 py-3 font-semibold">GS</th>
-                            <th className="px-4 py-3 font-semibold">Total PR &amp; GS</th>
-                            <th className="px-4 py-3 font-semibold">GCI After Fees Excl VAT</th>
-                            <th className="px-4 py-3 font-semibold">Associate $</th>
+                            <th className="px-4 py-3 font-semibold">PR + GS Total</th>
                             <th className="px-4 py-3 font-semibold">Cap Amount</th>
                             <th className="px-4 py-3 font-semibold">Cap Remaining</th>
-                            <th className="px-4 py-3 font-semibold">Team $</th>
-                            <th className="px-4 py-3 font-semibold">Market Centre $</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
                           {calculatedSummaryRows.map((item) => (
-                            <tr key={item.id}>
-                              <td className="px-4 py-3 text-slate-900">{item.agent_name ?? '-'}</td>
-                              <td className="px-4 py-3">{item.office_name ?? currentEditingRow?.market_center_name ?? '-'}</td>
-                              <td className="px-4 py-3">{item.transaction_side ?? '-'}</td>
+                            <tr key={item.id} className="odd:bg-white even:bg-slate-50/30 hover:bg-blue-50/40">
+                              <td className="px-4 py-3 font-medium text-slate-900">{item.agent_name || 'Unassigned'} <span className="text-xs font-normal text-slate-500">({item.is_outside_agent ? 'Outside Agent' : normalizeSummarySide(item.transaction_side, '-')})</span></td>
                               <td className="px-4 py-3">{toPercent(Number(item.split_percentage ?? 0))}</td>
                               <td className="px-4 py-3">{isEditingRentalTransaction ? '-' : toPercent(Number(item.variance_sale_list_pct ?? 0))}</td>
                               <td className="px-4 py-3">{toMoney(item.transaction_gci_before_fees ?? '0')}</td>
-                              <td className="px-4 py-3">{isEditingRentalTransaction ? toPercent(Number(item.split_percentage ?? 0)) : toPercent(Number(item.average_commission_pct ?? 0))}</td>
-                              <td className="px-4 py-3">{toMoney(item.production_royalties ?? '0')}</td>
-                              <td className="px-4 py-3">{toMoney(item.growth_share ?? '0')}</td>
-                              <td className="px-4 py-3">{toMoney(item.total_pr_and_gs ?? '0')}</td>
-                              <td className="px-4 py-3">{toMoney(item.gci_after_fees_excl_vat ?? '0')}</td>
-                              <td className="px-4 py-3">{toMoney(item.associate_dollar ?? '0')}</td>
-                              <td className="px-4 py-3">{toMoney(item.cap_amount ?? '0')}</td>
-                              <td className="px-4 py-3">{toMoney(item.display_cap_remaining ?? item.current_cap_remaining ?? item.cap_remaining ?? '0')}</td>
-                              <td className="px-4 py-3">{toMoney(item.team_dollar ?? '0')}</td>
-                              <td className="px-4 py-3">{toMoney(item.market_center_dollar ?? '0')}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : (isEditingRentalTransaction ? toPercent(Number(item.split_percentage ?? 0)) : toPercent(Number(item.average_commission_pct ?? 0)))}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.gci_after_fees_excl_vat ?? '0')}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.associate_dollar ?? '0')}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.market_center_dollar ?? '0')}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.team_dollar ?? '0')}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.production_royalties ?? '0')}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.growth_share ?? '0')}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.total_pr_and_gs ?? '0')}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.cap_amount ?? '0')}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.display_cap_remaining ?? item.current_cap_remaining ?? item.cap_remaining ?? '0')}</td>
                             </tr>
                           ))}
                           {isEditSummaryLoading && (
                             <tr>
-                              <td className="px-4 py-4 text-slate-500" colSpan={16}>
+                              <td className="px-4 py-4 text-slate-500" colSpan={14}>
                                 Loading latest calculated summary...
                               </td>
                             </tr>
                           )}
                           {!isEditSummaryLoading && calculatedSummaryRows.length === 0 && (
                             <tr>
-                              <td className="px-4 py-4 text-slate-500" colSpan={16}>
+                              <td className="px-4 py-4 text-slate-500" colSpan={14}>
                                 No summary rows are available yet. Enter the required values to see a live preview, or save to load backend-calculated rows.
                               </td>
                             </tr>
                           )}
                         </tbody>
                       </table>
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                      {summaryPreviewNotice ? summaryPreviewNotice : (isShowingPreviewForEdit
+                        ? 'Preview mode: these are unsaved values. If you are happy with this result, click Save to apply it.'
+                        : currentEditingRow
+                          ? (isEditingRentalTransaction
+                            ? 'These values are calculated from rental payment details and participant splits.'
+                            : 'These values are calculated and saved by the backend. Click Recalculate Preview to see how unsaved edits will affect this summary.')
+                          : 'Complete price, role, and split fields to preview projected values before saving.')}
                     </div>
                   </div>
                 )}
@@ -2840,7 +3393,7 @@ export default function TransactionsPage() {
             </div>
           </div>
 
-          {isSummaryError && (
+          {isSummaryError && !summaryData && (
             <div className="surface-card p-4 text-amber-700">
               <p className="font-medium">Could not load summary metrics.</p>
               <button
@@ -3272,7 +3825,7 @@ export default function TransactionsPage() {
                 </tr>
               )}
 
-              {isError && (
+              {isError && !data && (
                 <tr>
                   <td className="px-3 py-5 text-amber-700" colSpan={10}>
                     Could not load transactions from backend API.
@@ -3386,72 +3939,134 @@ export default function TransactionsPage() {
       )}
 
       {quickSummaryRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-6xl rounded-xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 p-3 md:p-4">
+          <div className="mx-auto w-full max-w-7xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between rounded-t-2xl border-b border-slate-200 bg-gradient-to-r from-slate-50 to-blue-50 px-4 py-3">
               <h3 className="text-lg font-semibold text-slate-900">Quick Transaction Summary</h3>
-              <button className="rounded-md border border-slate-300 px-2 py-1 text-xs" type="button" onClick={() => setQuickSummaryRow(null)}>
+              <button className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs hover:bg-slate-50" type="button" onClick={() => setQuickSummaryRow(null)}>
                 Close
               </button>
             </div>
-            <div className="max-h-[70vh] overflow-auto p-4">
-              <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+            <div className="max-h-[82vh] overflow-auto p-4">
+              <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                 Transaction: <strong>{quickSummaryRow.transaction_number ?? quickSummaryRow.source_transaction_id}</strong>
               </div>
-              <table className="min-w-[1500px] w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+              <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  <span className="font-semibold text-slate-900">Agent:</span> {quickSummaryHeaderMeta.agentName}
+                  {quickSummaryHeaderMeta.moreAgents > 0 ? ` +${quickSummaryHeaderMeta.moreAgents} more` : ''}
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  <span className="font-semibold text-slate-900">Market Centre:</span> {quickSummaryHeaderMeta.officeName}
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  <span className="font-semibold text-slate-900">Side:</span> {quickSummaryHeaderMeta.sideLabel}
+                </div>
+              </div>
+              <div className="mb-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Rows</p>
+                  <p className="text-sm font-semibold text-slate-900">{quickSummaryCalculatedRows.length}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">GCI After Fees</p>
+                  <p className="text-sm font-semibold text-slate-900">{toMoney(String(quickSummaryTotals.gciAfterFees))}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Associate $</p>
+                  <p className="text-sm font-semibold text-slate-900">{toMoney(String(quickSummaryTotals.associate))}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Market Centre $</p>
+                  <p className="text-sm font-semibold text-slate-900">{toMoney(String(quickSummaryTotals.marketCenter))}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Team $</p>
+                  <p className="text-sm font-semibold text-slate-900">{toMoney(String(quickSummaryTotals.team))}</p>
+                </div>
+              </div>
+              <p className="px-1 pb-2 pt-1 text-xs text-slate-500">Totals above aggregate all summary rows for this transaction.</p>
+              {quickSummaryCalculatedRows.length > 1 && (
+                <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Per-Agent Payout Snapshot</div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    {quickSummaryCalculatedRows.map((item, index) => (
+                      <div key={`quick-agent-pill-${item.id}`} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                        <p className="truncate text-xs font-semibold text-slate-900">
+                          {item.agent_name || `Agent ${index + 1}`}
+                          <span className="ml-1 font-normal text-slate-500">({item.is_outside_agent ? 'Outside Agent' : normalizeSummarySide(item.transaction_side, '-')})</span>
+                        </p>
+                        {item.is_outside_agent ? (
+                          <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-600">
+                            <span>Role: <strong className="text-slate-800">Outside Agent</strong></span>
+                            <span>Split: <strong className="text-slate-800">{toPercent(Number(item.split_percentage ?? 0))}</strong></span>
+                            <span className="col-span-2">GCI Before Fees: <strong className="text-slate-800">{toMoney(item.transaction_gci_before_fees ?? '0')}</strong></span>
+                          </div>
+                        ) : (
+                          <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-600">
+                            <span>Assoc: <strong className="text-slate-800">{toMoney(item.associate_dollar ?? '0')}</strong></span>
+                            <span>MC: <strong className="text-slate-800">{toMoney(item.market_center_dollar ?? '0')}</strong></span>
+                            <span>Team: <strong className="text-slate-800">{toMoney(item.team_dollar ?? '0')}</strong></span>
+                            <span>GCI: <strong className="text-slate-800">{toMoney(item.gci_after_fees_excl_vat ?? '0')}</strong></span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="overflow-auto rounded-xl border border-slate-200">
+              <table className="min-w-[1450px] w-full divide-y divide-slate-200 text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-3 py-2 whitespace-nowrap">Agent</th>
-                    <th className="px-3 py-2 whitespace-nowrap">Office</th>
-                    <th className="px-3 py-2 whitespace-nowrap">Side</th>
+                    <th className="px-3 py-2 whitespace-nowrap">Associate</th>
                     <th className="px-3 py-2 whitespace-nowrap">Split</th>
                     <th className="px-3 py-2 whitespace-nowrap">Variance %</th>
                     <th className="px-3 py-2 whitespace-nowrap">GCI Before Fees</th>
                     <th className="px-3 py-2 whitespace-nowrap">Avg Comm %</th>
-                    <th className="px-3 py-2 whitespace-nowrap">PR</th>
-                    <th className="px-3 py-2 whitespace-nowrap">GS</th>
-                    <th className="px-3 py-2 whitespace-nowrap">Total PR &amp; GS</th>
-                    <th className="px-3 py-2 whitespace-nowrap">GCI After Fees Excl VAT</th>
+                    <th className="px-3 py-2 whitespace-nowrap">GCI After Fees</th>
                     <th className="px-3 py-2 whitespace-nowrap">Associate $</th>
-                    <th className="px-3 py-2 whitespace-nowrap">Cap Amount</th>
-                    <th className="px-3 py-2 whitespace-nowrap">Cap Remaining</th>
                     <th className="px-3 py-2 whitespace-nowrap">Market Centre $</th>
                     <th className="px-3 py-2 whitespace-nowrap">Team $</th>
+                    <th className="px-3 py-2 whitespace-nowrap">PR</th>
+                    <th className="px-3 py-2 whitespace-nowrap">GS</th>
+                    <th className="px-3 py-2 whitespace-nowrap">PR + GS Total</th>
+                    <th className="px-3 py-2 whitespace-nowrap">Cap Amount</th>
+                    <th className="px-3 py-2 whitespace-nowrap">Cap Remaining</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
                   {quickSummaryCalculatedRows.map((item) => (
-                    <tr key={item.id}>
-                      <td className="px-3 py-2 whitespace-nowrap font-medium">{item.agent_name ?? '-'}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{item.office_name ?? quickSummaryRow.market_center_name ?? '-'}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{item.transaction_side ?? '-'}</td>
+                    <tr key={item.id} className="odd:bg-white even:bg-slate-50/30 hover:bg-blue-50/40">
+                      <td className="px-3 py-2 whitespace-nowrap font-medium text-slate-900">{item.agent_name || 'Unassigned'} <span className="text-xs font-normal text-slate-500">({item.is_outside_agent ? 'Outside Agent' : normalizeSummarySide(item.transaction_side, '-')})</span></td>
                       <td className="px-3 py-2 whitespace-nowrap">{toPercent(Number(item.split_percentage ?? 0))}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{toPercent(Number(item.variance_sale_list_pct ?? 0))}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.transaction_gci_before_fees ?? '0')}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{toPercent(Number(item.average_commission_pct ?? 0))}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.production_royalties ?? '0')}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.growth_share ?? '0')}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.total_pr_and_gs ?? '0')}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.gci_after_fees_excl_vat ?? '0')}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.associate_dollar ?? '0')}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.cap_amount ?? '0')}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.display_cap_remaining ?? item.current_cap_remaining ?? item.cap_remaining ?? '0')}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.market_center_dollar ?? '0')}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.team_dollar ?? '0')}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toPercent(Number(item.average_commission_pct ?? 0))}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.gci_after_fees_excl_vat ?? '0')}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.associate_dollar ?? '0')}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.market_center_dollar ?? '0')}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.team_dollar ?? '0')}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.production_royalties ?? '0')}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.growth_share ?? '0')}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.total_pr_and_gs ?? '0')}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.cap_amount ?? '0')}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? <span className="text-slate-400">N/A</span> : toMoney(item.display_cap_remaining ?? item.current_cap_remaining ?? item.cap_remaining ?? '0')}</td>
                     </tr>
                   ))}
                   {isQuickSummaryLoading && (
                     <tr>
-                      <td className="px-3 py-4 text-slate-500" colSpan={16}>Loading latest summary...</td>
+                      <td className="px-3 py-4 text-slate-500" colSpan={14}>Loading latest summary...</td>
                     </tr>
                   )}
                   {!isQuickSummaryLoading && quickSummaryCalculatedRows.length === 0 && (
                     <tr>
-                      <td className="px-3 py-4 text-slate-500" colSpan={16}>No calculated rows found for this transaction yet.</td>
+                      <td className="px-3 py-4 text-slate-500" colSpan={14}>No calculated rows found for this transaction yet.</td>
                     </tr>
                   )}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
         </div>

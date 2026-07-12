@@ -1,0 +1,3 @@
+export declare const transactionAgentCalculationDedupCte = "\ntac_dedup AS (\n  SELECT DISTINCT ON (transaction_agent_id)\n    *\n  FROM migration.transaction_agent_calculations\n  ORDER BY transaction_agent_id, updated_at DESC, created_at DESC\n)";
+export declare const salesOnlyTransactionExclusionSql = "\nLOWER(TRIM(COALESCE(ct.transaction_category, 'sales'))) <> 'rentals'\nAND LOWER(TRIM(COALESCE(ct.source_type, 'sales'))) <> 'rental_payment'\nAND ct.source_rental_id IS NULL\nAND ct.source_rental_payment_schedule_id IS NULL\nAND COALESCE(ct.transaction_number, '') !~ '^RNTX[0-9]+$'";
+//# sourceMappingURL=reportingSql.d.ts.map

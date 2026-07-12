@@ -26,6 +26,32 @@ async function main() {
       CREATE INDEX IF NOT EXISTS idx_associates_raw_batch
         ON staging.associates_raw(batch_id);
 
+      CREATE TABLE IF NOT EXISTS staging.associates_details_raw (
+        id BIGSERIAL PRIMARY KEY,
+        batch_id TEXT NOT NULL,
+        source_associate_id TEXT NOT NULL,
+        associate_status TEXT,
+        associate_status_id TEXT,
+        associate_image_url TEXT,
+        associate_image_preview_url TEXT,
+        kwsa_email TEXT,
+        private_email TEXT,
+        kwuid TEXT,
+        first_name TEXT,
+        last_name TEXT,
+        full_name TEXT,
+        market_center_name TEXT,
+        team_name TEXT,
+        source_updated_at TIMESTAMPTZ,
+        raw_payload JSONB,
+        loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_associates_details_raw_source
+        ON staging.associates_details_raw(source_associate_id);
+      CREATE INDEX IF NOT EXISTS idx_associates_details_raw_batch
+        ON staging.associates_details_raw(batch_id);
+
       CREATE TABLE IF NOT EXISTS staging.market_centers_raw (
         id BIGSERIAL PRIMARY KEY,
         batch_id TEXT NOT NULL,
@@ -380,6 +406,40 @@ async function main() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS migration.listing_approval_requests (
+        id BIGSERIAL PRIMARY KEY,
+        listing_id BIGINT NOT NULL UNIQUE REFERENCES migration.core_listings(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        submitted_by_associate_id BIGINT REFERENCES migration.core_associates(id) ON DELETE SET NULL,
+        submitted_by_name TEXT,
+        submitted_by_email TEXT,
+        submission_comment TEXT,
+        submitted_at TIMESTAMPTZ,
+        reviewed_by_associate_id BIGINT REFERENCES migration.core_associates(id) ON DELETE SET NULL,
+        reviewed_by_name TEXT,
+        reviewed_by_email TEXT,
+        review_comment TEXT,
+        reviewed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS migration.in_app_notifications (
+        id BIGSERIAL PRIMARY KEY,
+        associate_id BIGINT NOT NULL REFERENCES migration.core_associates(id) ON DELETE CASCADE,
+        notification_type TEXT NOT NULL,
+        category TEXT NOT NULL,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        entity_type TEXT,
+        entity_id BIGINT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        is_read BOOLEAN NOT NULL DEFAULT false,
+        read_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
       CREATE INDEX IF NOT EXISTS idx_associate_social_media_associate
         ON migration.associate_social_media(associate_id);
       CREATE INDEX IF NOT EXISTS idx_associate_roles_associate
@@ -398,6 +458,14 @@ async function main() {
         ON migration.associate_notes(associate_id);
       CREATE INDEX IF NOT EXISTS idx_market_center_notes_market_center
         ON migration.market_center_notes(market_center_id);
+      CREATE INDEX IF NOT EXISTS idx_listing_approval_requests_listing
+        ON migration.listing_approval_requests(listing_id);
+      CREATE INDEX IF NOT EXISTS idx_listing_approval_requests_status
+        ON migration.listing_approval_requests(status);
+      CREATE INDEX IF NOT EXISTS idx_in_app_notifications_associate
+        ON migration.in_app_notifications(associate_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_in_app_notifications_category
+        ON migration.in_app_notifications(category);
     `);
     });
     // Add new columns idempotently (safe to run multiple times)
@@ -419,7 +487,7 @@ async function main() {
         ADD COLUMN IF NOT EXISTS anniversary_date DATE,
         ADD COLUMN IF NOT EXISTS cap_date DATE,
         ADD COLUMN IF NOT EXISTS total_cap_amount NUMERIC(18,2),
-        ADD COLUMN IF NOT EXISTS manual_cap NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS manual_cap BOOLEAN,
         ADD COLUMN IF NOT EXISTS agent_split NUMERIC(10,4);
 
       ALTER TABLE migration.core_associates
@@ -446,7 +514,7 @@ async function main() {
         ADD COLUMN IF NOT EXISTS private_property_opt_in BOOLEAN NOT NULL DEFAULT false,
         ADD COLUMN IF NOT EXISTS private_property_status TEXT,
         ADD COLUMN IF NOT EXISTS cap NUMERIC(18,2),
-        ADD COLUMN IF NOT EXISTS manual_cap NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS manual_cap BOOLEAN,
         ADD COLUMN IF NOT EXISTS agent_split NUMERIC(10,4),
         ADD COLUMN IF NOT EXISTS projected_cos NUMERIC(18,2),
         ADD COLUMN IF NOT EXISTS projected_cap NUMERIC(18,2),
@@ -483,6 +551,8 @@ async function main() {
         ADD COLUMN IF NOT EXISTS entegral_url TEXT,
         ADD COLUMN IF NOT EXISTS entegral_portals TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
         ADD COLUMN IF NOT EXISTS logo_image_url TEXT,
+        ADD COLUMN IF NOT EXISTS document_logo_image_url TEXT,
+        ADD COLUMN IF NOT EXISTS white_logo_image_url TEXT,
         ADD COLUMN IF NOT EXISTS country TEXT,
         ADD COLUMN IF NOT EXISTS province TEXT,
         ADD COLUMN IF NOT EXISTS city TEXT,
@@ -540,6 +610,13 @@ async function main() {
         transaction_number TEXT,
         source_market_center_id TEXT,
         market_center_name TEXT,
+        source_team_id TEXT,
+        team_name TEXT,
+        current_source_market_center_id TEXT,
+        current_market_center_name TEXT,
+        current_source_team_id TEXT,
+        current_team_name TEXT,
+        listing_office_name TEXT,
         source_associate_id TEXT,
         associate_name TEXT,
         transaction_status TEXT,
@@ -555,14 +632,41 @@ async function main() {
         city TEXT,
         sales_price NUMERIC(18,2),
         list_price NUMERIC(18,2),
+        variance_per NUMERIC(18,6),
+        contract_gci_excl_vat NUMERIC(18,2),
+        avg_comms_per NUMERIC(18,6),
+        transaction_gci_excl_vat NUMERIC(18,2),
         gci_excl_vat NUMERIC(18,2),
         split_percentage NUMERIC(10,4),
         net_comm NUMERIC(18,2),
         total_gci NUMERIC(18,2),
+        growth_share NUMERIC(18,2),
+        production_royalties NUMERIC(18,2),
+        cap_remaining NUMERIC(18,2),
+        associate_dollar NUMERIC(18,2),
+        mc_dollar NUMERIC(18,2),
+        company_dollar NUMERIC(18,2),
+        team_dollar NUMERIC(18,2),
         sale_type TEXT,
         agent_type TEXT,
         buyer TEXT,
         seller TEXT,
+        transfer_attorney TEXT,
+        ta_mobile_phone TEXT,
+        ta_email TEXT,
+        bond_attorney_contact_id TEXT,
+        bond_attorney TEXT,
+        ba_mobile_phone TEXT,
+        ba_email TEXT,
+        bond_originator TEXT,
+        bond_due_date TIMESTAMPTZ,
+        bond_amount NUMERIC(18,2),
+        transaction_financial_institution_id TEXT,
+        transaction_financial_institution TEXT,
+        financial_institution_other TEXT,
+        transaction_financing_type_id TEXT,
+        transaction_financing_type TEXT,
+        all_parties_invoiced TEXT,
         raw_payload JSONB,
         loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
@@ -583,6 +687,15 @@ async function main() {
         associate_name TEXT,
         split_percentage NUMERIC(10,4),
         agent_type TEXT,
+        outside_agency BOOLEAN,
+        outside_agency_name TEXT,
+        outside_first_name TEXT,
+        outside_last_name TEXT,
+        outside_email TEXT,
+        outside_phone TEXT,
+        market_center_id_source TEXT,
+        team_id_source TEXT,
+        management_mc_id_source TEXT,
         sort_order INT DEFAULT 0,
         loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
@@ -630,6 +743,15 @@ async function main() {
         source_transaction_id TEXT NOT NULL UNIQUE,
         primary_market_center_id BIGINT REFERENCES migration.core_market_centers(id),
         transaction_number TEXT,
+        source_market_center_id TEXT,
+        market_center_name TEXT,
+        source_team_id TEXT,
+        team_name TEXT,
+        current_source_market_center_id TEXT,
+        current_market_center_name TEXT,
+        current_source_team_id TEXT,
+        current_team_name TEXT,
+        listing_office_name TEXT,
         transaction_status TEXT,
         transaction_type TEXT,
         source_listing_id TEXT,
@@ -639,12 +761,39 @@ async function main() {
         city TEXT,
         sales_price NUMERIC(18,2),
         list_price NUMERIC(18,2),
+        variance_per NUMERIC(18,6),
+        contract_gci_excl_vat NUMERIC(18,2),
+        avg_comms_per NUMERIC(18,6),
+        transaction_gci_excl_vat NUMERIC(18,2),
         gci_excl_vat NUMERIC(18,2),
         net_comm NUMERIC(18,2),
         total_gci NUMERIC(18,2),
+        growth_share NUMERIC(18,2),
+        production_royalties NUMERIC(18,2),
+        cap_remaining NUMERIC(18,2),
+        associate_dollar NUMERIC(18,2),
+        mc_dollar NUMERIC(18,2),
+        company_dollar NUMERIC(18,2),
+        team_dollar NUMERIC(18,2),
         sale_type TEXT,
         buyer TEXT,
         seller TEXT,
+        transfer_attorney TEXT,
+        ta_mobile_phone TEXT,
+        ta_email TEXT,
+        bond_attorney_contact_id TEXT,
+        bond_attorney TEXT,
+        ba_mobile_phone TEXT,
+        ba_email TEXT,
+        bond_originator TEXT,
+        bond_due_date TIMESTAMPTZ,
+        bond_amount NUMERIC(18,2),
+        transaction_financial_institution_id TEXT,
+        transaction_financial_institution TEXT,
+        financial_institution_other TEXT,
+        transaction_financing_type_id TEXT,
+        transaction_financing_type TEXT,
+        all_parties_invoiced TEXT,
         list_date TIMESTAMPTZ,
         transaction_date TIMESTAMPTZ,
         status_change_date TIMESTAMPTZ,
@@ -658,14 +807,20 @@ async function main() {
         transaction_id BIGINT NOT NULL REFERENCES migration.core_transactions(id) ON DELETE CASCADE,
         associate_id BIGINT REFERENCES migration.core_associates(id),
         source_associate_id TEXT,
+        agent_name TEXT,
         agent_role TEXT,
         split_percentage NUMERIC(10,4),
         net_comm NUMERIC(18,2),
         sort_order INT DEFAULT 0,
+        outside_agency BOOLEAN DEFAULT false,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (transaction_id, source_associate_id)
       );
+
+      ALTER TABLE migration.transaction_agents
+        ADD COLUMN IF NOT EXISTS agent_name TEXT,
+        ADD COLUMN IF NOT EXISTS outside_agency BOOLEAN DEFAULT false;
 
       CREATE INDEX IF NOT EXISTS idx_core_transactions_date
         ON migration.core_transactions(transaction_date);
@@ -679,7 +834,90 @@ async function main() {
         // Ensure new columns exist on core_transactions (idempotent migration for older DBs)
         await client.query(`
       ALTER TABLE migration.core_transactions
-        ADD COLUMN IF NOT EXISTS primary_market_center_id BIGINT REFERENCES migration.core_market_centers(id);
+        ADD COLUMN IF NOT EXISTS primary_market_center_id BIGINT REFERENCES migration.core_market_centers(id),
+        ADD COLUMN IF NOT EXISTS source_market_center_id TEXT,
+        ADD COLUMN IF NOT EXISTS market_center_name TEXT,
+        ADD COLUMN IF NOT EXISTS source_team_id TEXT,
+        ADD COLUMN IF NOT EXISTS team_name TEXT,
+        ADD COLUMN IF NOT EXISTS current_source_market_center_id TEXT,
+        ADD COLUMN IF NOT EXISTS current_market_center_name TEXT,
+        ADD COLUMN IF NOT EXISTS current_source_team_id TEXT,
+        ADD COLUMN IF NOT EXISTS current_team_name TEXT,
+        ADD COLUMN IF NOT EXISTS listing_office_name TEXT,
+        ADD COLUMN IF NOT EXISTS variance_per NUMERIC(18,6),
+        ADD COLUMN IF NOT EXISTS contract_gci_excl_vat NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS avg_comms_per NUMERIC(18,6),
+        ADD COLUMN IF NOT EXISTS transaction_gci_excl_vat NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS growth_share NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS production_royalties NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS cap_remaining NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS associate_dollar NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS mc_dollar NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS company_dollar NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS team_dollar NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS transfer_attorney TEXT,
+        ADD COLUMN IF NOT EXISTS ta_mobile_phone TEXT,
+        ADD COLUMN IF NOT EXISTS ta_email TEXT,
+        ADD COLUMN IF NOT EXISTS bond_attorney_contact_id TEXT,
+        ADD COLUMN IF NOT EXISTS bond_attorney TEXT,
+        ADD COLUMN IF NOT EXISTS ba_mobile_phone TEXT,
+        ADD COLUMN IF NOT EXISTS ba_email TEXT,
+        ADD COLUMN IF NOT EXISTS bond_originator TEXT,
+        ADD COLUMN IF NOT EXISTS bond_due_date TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS bond_amount NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS transaction_financial_institution_id TEXT,
+        ADD COLUMN IF NOT EXISTS transaction_financial_institution TEXT,
+        ADD COLUMN IF NOT EXISTS financial_institution_other TEXT,
+        ADD COLUMN IF NOT EXISTS transaction_financing_type_id TEXT,
+        ADD COLUMN IF NOT EXISTS transaction_financing_type TEXT,
+        ADD COLUMN IF NOT EXISTS all_parties_invoiced TEXT;
+    `);
+        await client.query(`
+      ALTER TABLE staging.transactions_raw
+        ADD COLUMN IF NOT EXISTS source_team_id TEXT,
+        ADD COLUMN IF NOT EXISTS team_name TEXT,
+        ADD COLUMN IF NOT EXISTS current_source_market_center_id TEXT,
+        ADD COLUMN IF NOT EXISTS current_market_center_name TEXT,
+        ADD COLUMN IF NOT EXISTS current_source_team_id TEXT,
+        ADD COLUMN IF NOT EXISTS current_team_name TEXT,
+        ADD COLUMN IF NOT EXISTS listing_office_name TEXT,
+        ADD COLUMN IF NOT EXISTS variance_per NUMERIC(18,6),
+        ADD COLUMN IF NOT EXISTS contract_gci_excl_vat NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS avg_comms_per NUMERIC(18,6),
+        ADD COLUMN IF NOT EXISTS transaction_gci_excl_vat NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS growth_share NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS production_royalties NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS cap_remaining NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS associate_dollar NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS mc_dollar NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS company_dollar NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS team_dollar NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS transfer_attorney TEXT,
+        ADD COLUMN IF NOT EXISTS ta_mobile_phone TEXT,
+        ADD COLUMN IF NOT EXISTS ta_email TEXT,
+        ADD COLUMN IF NOT EXISTS bond_attorney_contact_id TEXT,
+        ADD COLUMN IF NOT EXISTS bond_attorney TEXT,
+        ADD COLUMN IF NOT EXISTS ba_mobile_phone TEXT,
+        ADD COLUMN IF NOT EXISTS ba_email TEXT,
+        ADD COLUMN IF NOT EXISTS bond_originator TEXT,
+        ADD COLUMN IF NOT EXISTS bond_due_date TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS bond_amount NUMERIC(18,2),
+        ADD COLUMN IF NOT EXISTS transaction_financial_institution_id TEXT,
+        ADD COLUMN IF NOT EXISTS transaction_financial_institution TEXT,
+        ADD COLUMN IF NOT EXISTS financial_institution_other TEXT,
+        ADD COLUMN IF NOT EXISTS transaction_financing_type_id TEXT,
+        ADD COLUMN IF NOT EXISTS transaction_financing_type TEXT,
+        ADD COLUMN IF NOT EXISTS all_parties_invoiced TEXT;
+    `);
+        await client.query(`
+      ALTER TABLE migration.core_transactions
+        ALTER COLUMN variance_per TYPE NUMERIC(18,6),
+        ALTER COLUMN avg_comms_per TYPE NUMERIC(18,6);
+    `);
+        await client.query(`
+      ALTER TABLE staging.transactions_raw
+        ALTER COLUMN variance_per TYPE NUMERIC(18,6),
+        ALTER COLUMN avg_comms_per TYPE NUMERIC(18,6);
     `);
         // Outside agency contacts table
         await client.query(`
@@ -697,6 +935,37 @@ async function main() {
       );
       CREATE INDEX IF NOT EXISTS idx_outside_agency_tx
         ON migration.outside_agency_contacts(transaction_id);
+
+      CREATE TABLE IF NOT EXISTS migration.transaction_status_history (
+        id BIGSERIAL PRIMARY KEY,
+        transaction_id BIGINT NOT NULL REFERENCES migration.core_transactions(id) ON DELETE CASCADE,
+        previous_status TEXT,
+        new_status TEXT NOT NULL,
+        changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        changed_by TEXT,
+        notes TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_tx_status_history_tx
+        ON migration.transaction_status_history(transaction_id, changed_at DESC);
+
+      CREATE TABLE IF NOT EXISTS migration.transaction_documents (
+        id BIGSERIAL PRIMARY KEY,
+        transaction_id BIGINT NOT NULL REFERENCES migration.core_transactions(id) ON DELETE CASCADE,
+        source_document_id TEXT,
+        source_transaction_document_type_id TEXT,
+        transaction_document_type TEXT,
+        file_name TEXT,
+        document_url TEXT,
+        preview_url TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deleted_at TIMESTAMPTZ
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_tx_documents_tx
+        ON migration.transaction_documents(transaction_id)
+        WHERE deleted_at IS NULL;
 
       CREATE TABLE IF NOT EXISTS migration.transaction_agent_calculations (
         id BIGSERIAL PRIMARY KEY,
@@ -803,8 +1072,15 @@ async function main() {
         ADD COLUMN IF NOT EXISTS monthly_levy            NUMERIC(18,2),
         ADD COLUMN IF NOT EXISTS occupation_date         DATE,
         ADD COLUMN IF NOT EXISTS mandate_type            TEXT,
+        ADD COLUMN IF NOT EXISTS rental_rate             TEXT,
+        ADD COLUMN IF NOT EXISTS lease_period            TEXT,
+        ADD COLUMN IF NOT EXISTS deposit_requirements    TEXT,
         ADD COLUMN IF NOT EXISTS erf_size                NUMERIC(18,4),
         ADD COLUMN IF NOT EXISTS floor_area              NUMERIC(18,4),
+        ADD COLUMN IF NOT EXISTS bedrooms                INTEGER,
+        ADD COLUMN IF NOT EXISTS bathrooms               INTEGER,
+        ADD COLUMN IF NOT EXISTS garages                 INTEGER,
+        ADD COLUMN IF NOT EXISTS parking                 INTEGER,
         ADD COLUMN IF NOT EXISTS construction_date       DATE,
         ADD COLUMN IF NOT EXISTS height_restriction      NUMERIC(18,4),
         ADD COLUMN IF NOT EXISTS out_building_size       NUMERIC(18,4),
@@ -950,7 +1226,7 @@ async function main() {
         id          BIGSERIAL PRIMARY KEY,
         listing_id  BIGINT NOT NULL REFERENCES migration.core_listings(id) ON DELETE CASCADE,
         area_type   TEXT NOT NULL,
-        count       INT,
+        count       NUMERIC(12,2),
         size        NUMERIC(12,2),
         description TEXT,
         sub_features TEXT[],
@@ -961,6 +1237,48 @@ async function main() {
         await client.query(`
       ALTER TABLE migration.listing_property_areas
       ADD COLUMN IF NOT EXISTS sub_features TEXT[];
+    `);
+        await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = 'migration'
+            AND table_name = 'listing_property_areas'
+            AND column_name = 'count'
+            AND data_type = 'integer'
+        ) THEN
+          ALTER TABLE migration.listing_property_areas
+          ALTER COLUMN count TYPE NUMERIC(12,2)
+          USING count::numeric;
+        END IF;
+      END
+      $$;
+    `);
+    });
+    // Rentals schema self-heal: address hierarchy + participant split columns
+    await runInTransaction(async (client) => {
+        await client.query(`
+      ALTER TABLE IF EXISTS app.rentals
+        ADD COLUMN IF NOT EXISTS landlord_country TEXT,
+        ADD COLUMN IF NOT EXISTS landlord_province TEXT,
+        ADD COLUMN IF NOT EXISTS landlord_city TEXT,
+        ADD COLUMN IF NOT EXISTS landlord_suburb TEXT,
+        ADD COLUMN IF NOT EXISTS landlord_street_number TEXT,
+        ADD COLUMN IF NOT EXISTS landlord_street_name TEXT,
+        ADD COLUMN IF NOT EXISTS tenant_country TEXT,
+        ADD COLUMN IF NOT EXISTS tenant_province TEXT,
+        ADD COLUMN IF NOT EXISTS tenant_city TEXT,
+        ADD COLUMN IF NOT EXISTS tenant_suburb TEXT,
+        ADD COLUMN IF NOT EXISTS tenant_street_number TEXT,
+        ADD COLUMN IF NOT EXISTS tenant_street_name TEXT;
+    `);
+        await client.query(`
+      ALTER TABLE IF EXISTS app.rental_participants
+        ADD COLUMN IF NOT EXISTS market_center_split NUMERIC(8,4) DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS agent_split NUMERIC(8,4) DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS agent_deal_split NUMERIC(8,4) DEFAULT 0;
     `);
     });
     console.log('Staging and migration schemas are ready.');

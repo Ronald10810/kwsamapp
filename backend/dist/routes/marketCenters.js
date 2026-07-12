@@ -6,13 +6,76 @@ import crypto from 'crypto';
 import { getOptionalPgPool } from '../config/db.js';
 import { ensureLocalUploadDirs, resolveLocalUploadDir, storageConfig } from '../config/storage.js';
 import { uploadToGcs } from '../services/gcsStorage.js';
+import { resolvePermissions } from '../middleware/permissions.js';
 const router = Router();
 const pool = getOptionalPgPool();
 let marketCenterColumnCache = null;
 let marketCenterNotesTableExistsCache = null;
+const REQUIRED_MARKET_CENTER_COLUMNS = {
+    company_registered_name: 'TEXT',
+    kw_office_id: 'TEXT',
+    contact_number: 'TEXT',
+    contact_email: 'TEXT',
+    has_individual_cap: 'BOOLEAN NOT NULL DEFAULT FALSE',
+    agent_default_cap: 'NUMERIC(18,2)',
+    market_center_default_split: 'NUMERIC(10,4)',
+    agent_default_split: 'NUMERIC(10,4)',
+    productivity_coach: 'TEXT',
+    property24_opt_in: 'BOOLEAN NOT NULL DEFAULT FALSE',
+    property24_auction_approved: 'BOOLEAN NOT NULL DEFAULT FALSE',
+    market_center_property24_id: 'TEXT',
+    private_property_id: 'TEXT',
+    entegral_opt_in: 'BOOLEAN NOT NULL DEFAULT FALSE',
+    entegral_url: 'TEXT',
+    entegral_portals: "TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]",
+    country: 'TEXT',
+    province: 'TEXT',
+    city: 'TEXT',
+    suburb: 'TEXT',
+    erf_number: 'TEXT',
+    unit_number: 'TEXT',
+    door_number: 'TEXT',
+    estate_name: 'TEXT',
+    street_number: 'TEXT',
+    street_name: 'TEXT',
+    postal_code: 'TEXT',
+    longitude: 'NUMERIC(10,7)',
+    latitude: 'NUMERIC(10,7)',
+    override_display_location: 'BOOLEAN NOT NULL DEFAULT FALSE',
+    display_longitude: 'NUMERIC(10,7)',
+    display_latitude: 'NUMERIC(10,7)',
+    document_logo_image_url: 'TEXT',
+    white_logo_image_url: 'TEXT',
+};
+async function ensureMarketCenterSchema() {
+    if (!pool)
+        return;
+    const tableExists = await pool.query(`SELECT to_regclass('migration.core_market_centers') AS exists`);
+    if (!tableExists.rows[0]?.exists)
+        return;
+    const existingColumnsResult = await pool.query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'migration'
+      AND table_name = 'core_market_centers'
+    `);
+    const existingColumns = new Set(existingColumnsResult.rows.map((row) => row.column_name));
+    const missingColumnDefs = Object.entries(REQUIRED_MARKET_CENTER_COLUMNS)
+        .filter(([columnName]) => !existingColumns.has(columnName))
+        .map(([columnName, columnType]) => `ADD COLUMN IF NOT EXISTS ${columnName} ${columnType}`);
+    if (missingColumnDefs.length === 0)
+        return;
+    await pool.query(`
+    ALTER TABLE migration.core_market_centers
+    ${missingColumnDefs.join(',\n    ')}
+    `);
+    // Refresh cache after schema changes so subsequent queries include new columns.
+    marketCenterColumnCache = null;
+}
 async function getMarketCenterColumns() {
     if (!pool)
         return new Set();
+    await ensureMarketCenterSchema();
     if (marketCenterColumnCache)
         return marketCenterColumnCache;
     const result = await pool.query(`
@@ -132,6 +195,8 @@ function buildManualMarketCenterId() {
 async function saveNotes(marketCenterId, notes) {
     if (!pool)
         return;
+    if (!(await hasMarketCenterNotesTable()))
+        return;
     await pool.query(`DELETE FROM migration.market_center_notes WHERE market_center_id = $1`, [marketCenterId]);
     for (const note of notes) {
         await pool.query(`INSERT INTO migration.market_center_notes (market_center_id, note_text, created_by)
@@ -199,6 +264,8 @@ router.get('/', async (req, res) => {
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'kw_office_id')},
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'city')},
         mc.logo_image_url,
+        ${optionalMarketCenterTextColumn(marketCenterColumns, 'document_logo_image_url')},
+        ${optionalMarketCenterTextColumn(marketCenterColumns, 'white_logo_image_url')},
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'market_center_property24_id')},
         ${optionalMarketCenterBooleanColumn(marketCenterColumns, 'property24_opt_in')},
         COALESCE(agent_totals.agent_count, 0)::text AS agent_count,
@@ -269,6 +336,8 @@ router.get('/:id/details', async (req, res) => {
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'entegral_url')},
         ${optionalMarketCenterTextArrayColumn(marketCenterColumns, 'entegral_portals')},
         mc.logo_image_url,
+        ${optionalMarketCenterTextColumn(marketCenterColumns, 'document_logo_image_url')},
+        ${optionalMarketCenterTextColumn(marketCenterColumns, 'white_logo_image_url')},
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'country')},
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'province')},
         ${optionalMarketCenterTextColumn(marketCenterColumns, 'city')},
@@ -345,9 +414,14 @@ router.get('/:id/details', async (req, res) => {
         return res.status(500).json({ error: message });
     }
 });
-router.post('/', async (req, res) => {
+router.post('/', resolvePermissions, async (req, res) => {
     if (!pool) {
         return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+    }
+    // Only Regional Admin may create new market centres
+    const perms = req.permissions;
+    if (perms.scope !== 'GLOBAL') {
+        return res.status(403).json({ error: 'Permission denied: only Regional Admins may create market centres' });
     }
     const name = toText(req.body?.name);
     const sourceMarketCenterId = toText(req.body?.source_market_center_id) ?? buildManualMarketCenterId();
@@ -355,92 +429,68 @@ router.post('/', async (req, res) => {
         return res.status(400).json({ error: 'name is required.' });
     }
     try {
+        const marketCenterColumns = await getMarketCenterColumns();
+        const values = [];
+        const insertColumns = [];
+        const insertValueSql = [];
+        const addInsertValue = (columnName, value) => {
+            if (!marketCenterColumns.has(columnName))
+                return;
+            values.push(value);
+            insertColumns.push(columnName);
+            insertValueSql.push(`$${values.length}`);
+        };
+        addInsertValue('source_market_center_id', sourceMarketCenterId);
+        addInsertValue('name', name);
+        addInsertValue('status_name', toText(req.body?.status_name));
+        addInsertValue('company_registered_name', toText(req.body?.company_registered_name));
+        addInsertValue('kw_office_id', toText(req.body?.kw_office_id));
+        addInsertValue('frontdoor_id', toText(req.body?.frontdoor_id));
+        addInsertValue('contact_number', toText(req.body?.contact_number));
+        addInsertValue('contact_email', toText(req.body?.contact_email));
+        addInsertValue('has_individual_cap', toBool(req.body?.has_individual_cap));
+        addInsertValue('agent_default_cap', toNumber(req.body?.agent_default_cap));
+        addInsertValue('market_center_default_split', toNumber(req.body?.market_center_default_split));
+        addInsertValue('agent_default_split', toNumber(req.body?.agent_default_split));
+        addInsertValue('productivity_coach', toText(req.body?.productivity_coach));
+        addInsertValue('property24_opt_in', toBool(req.body?.property24_opt_in));
+        addInsertValue('property24_auction_approved', toBool(req.body?.property24_auction_approved));
+        addInsertValue('market_center_property24_id', toText(req.body?.market_center_property24_id));
+        addInsertValue('private_property_id', toText(req.body?.private_property_id));
+        addInsertValue('entegral_opt_in', toBool(req.body?.entegral_opt_in));
+        addInsertValue('entegral_url', toText(req.body?.entegral_url));
+        addInsertValue('entegral_portals', toStringArray(req.body?.entegral_portals));
+        addInsertValue('logo_image_url', toText(req.body?.logo_image_url));
+        addInsertValue('document_logo_image_url', toText(req.body?.document_logo_image_url));
+        addInsertValue('white_logo_image_url', toText(req.body?.white_logo_image_url));
+        addInsertValue('country', toText(req.body?.country));
+        addInsertValue('province', toText(req.body?.province));
+        addInsertValue('city', toText(req.body?.city));
+        addInsertValue('suburb', toText(req.body?.suburb));
+        addInsertValue('erf_number', toText(req.body?.erf_number));
+        addInsertValue('unit_number', toText(req.body?.unit_number));
+        addInsertValue('door_number', toText(req.body?.door_number));
+        addInsertValue('estate_name', toText(req.body?.estate_name));
+        addInsertValue('street_number', toText(req.body?.street_number));
+        addInsertValue('street_name', toText(req.body?.street_name));
+        addInsertValue('postal_code', toText(req.body?.postal_code));
+        addInsertValue('longitude', toNumber(req.body?.longitude));
+        addInsertValue('latitude', toNumber(req.body?.latitude));
+        addInsertValue('override_display_location', toBool(req.body?.override_display_location));
+        addInsertValue('display_longitude', toNumber(req.body?.display_longitude));
+        addInsertValue('display_latitude', toNumber(req.body?.display_latitude));
+        if (marketCenterColumns.has('updated_at')) {
+            insertColumns.push('updated_at');
+            insertValueSql.push('NOW()');
+        }
         const insert = await pool.query(`
       INSERT INTO migration.core_market_centers (
-        source_market_center_id,
-        name,
-        status_name,
-        company_registered_name,
-        kw_office_id,
-        frontdoor_id,
-        contact_number,
-        contact_email,
-        has_individual_cap,
-        agent_default_cap,
-        market_center_default_split,
-        agent_default_split,
-        productivity_coach,
-        property24_opt_in,
-        property24_auction_approved,
-        market_center_property24_id,
-        private_property_id,
-        entegral_opt_in,
-        entegral_url,
-        entegral_portals,
-        logo_image_url,
-        country,
-        province,
-        city,
-        suburb,
-        erf_number,
-        unit_number,
-        door_number,
-        estate_name,
-        street_number,
-        street_name,
-        postal_code,
-        longitude,
-        latitude,
-        override_display_location,
-        display_longitude,
-        display_latitude,
-        updated_at
+        ${insertColumns.join(',\n        ')}
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-        $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-        $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-        $31,$32,$33,$34,$35,$36,$37,NOW()
+        ${insertValueSql.join(',')}
       )
       RETURNING id::text
-      `, [
-            sourceMarketCenterId,
-            name,
-            toText(req.body?.status_name),
-            toText(req.body?.company_registered_name),
-            toText(req.body?.kw_office_id),
-            toText(req.body?.frontdoor_id),
-            toText(req.body?.contact_number),
-            toText(req.body?.contact_email),
-            toBool(req.body?.has_individual_cap),
-            toNumber(req.body?.agent_default_cap),
-            toNumber(req.body?.market_center_default_split),
-            toNumber(req.body?.agent_default_split),
-            toText(req.body?.productivity_coach),
-            toBool(req.body?.property24_opt_in),
-            toBool(req.body?.property24_auction_approved),
-            toText(req.body?.market_center_property24_id),
-            toText(req.body?.private_property_id),
-            toBool(req.body?.entegral_opt_in),
-            toText(req.body?.entegral_url),
-            toStringArray(req.body?.entegral_portals),
-            toText(req.body?.logo_image_url),
-            toText(req.body?.country),
-            toText(req.body?.province),
-            toText(req.body?.city),
-            toText(req.body?.suburb),
-            toText(req.body?.erf_number),
-            toText(req.body?.unit_number),
-            toText(req.body?.door_number),
-            toText(req.body?.estate_name),
-            toText(req.body?.street_number),
-            toText(req.body?.street_name),
-            toText(req.body?.postal_code),
-            toNumber(req.body?.longitude),
-            toNumber(req.body?.latitude),
-            toBool(req.body?.override_display_location),
-            toNumber(req.body?.display_longitude),
-            toNumber(req.body?.display_latitude),
-        ]);
+      `, values);
         await saveNotes(Number(insert.rows[0].id), toStringArray(req.body?.notes));
         return res.status(201).json({ id: insert.rows[0].id, source_market_center_id: sourceMarketCenterId });
     }
@@ -449,7 +499,7 @@ router.post('/', async (req, res) => {
         return res.status(500).json({ error: message });
     }
 });
-router.put('/:id', async (req, res) => {
+router.put('/:id', resolvePermissions, async (req, res) => {
     if (!pool) {
         return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
     }
@@ -457,92 +507,84 @@ router.put('/:id', async (req, res) => {
     if (!Number.isFinite(id)) {
         return res.status(400).json({ error: 'Invalid market center id.' });
     }
+    // Enforce edit permission based on active scope
+    const perms = req.permissions;
+    if (perms.scope !== 'GLOBAL') {
+        if (perms.scope === 'OWN') {
+            return res.status(403).json({ error: 'Permission denied: agents may not edit market centres' });
+        }
+        // MARKET_CENTRE scope: Office Admin may only edit their assigned MC
+        const targetMc = await pool.query(`SELECT source_market_center_id FROM migration.core_market_centers WHERE id = $1 LIMIT 1`, [id]);
+        if (!targetMc.rows[0]) {
+            return res.status(404).json({ error: 'Market center not found.' });
+        }
+        if (targetMc.rows[0].source_market_center_id !== perms.marketCenterId) {
+            return res.status(403).json({ error: 'Permission denied: you may only edit your assigned market centre' });
+        }
+    }
     const name = toText(req.body?.name);
     if (!name) {
         return res.status(400).json({ error: 'name is required.' });
     }
     try {
+        const marketCenterColumns = await getMarketCenterColumns();
+        const values = [];
+        const setClauses = [];
+        const addSetValue = (columnName, value) => {
+            if (!marketCenterColumns.has(columnName))
+                return;
+            values.push(value);
+            setClauses.push(`${columnName} = $${values.length}`);
+        };
+        addSetValue('name', name);
+        addSetValue('status_name', toText(req.body?.status_name));
+        addSetValue('company_registered_name', toText(req.body?.company_registered_name));
+        addSetValue('kw_office_id', toText(req.body?.kw_office_id));
+        addSetValue('frontdoor_id', toText(req.body?.frontdoor_id));
+        addSetValue('contact_number', toText(req.body?.contact_number));
+        addSetValue('contact_email', toText(req.body?.contact_email));
+        addSetValue('has_individual_cap', toBool(req.body?.has_individual_cap));
+        addSetValue('agent_default_cap', toNumber(req.body?.agent_default_cap));
+        addSetValue('market_center_default_split', toNumber(req.body?.market_center_default_split));
+        addSetValue('agent_default_split', toNumber(req.body?.agent_default_split));
+        addSetValue('productivity_coach', toText(req.body?.productivity_coach));
+        addSetValue('property24_opt_in', toBool(req.body?.property24_opt_in));
+        addSetValue('property24_auction_approved', toBool(req.body?.property24_auction_approved));
+        addSetValue('market_center_property24_id', toText(req.body?.market_center_property24_id));
+        addSetValue('private_property_id', toText(req.body?.private_property_id));
+        addSetValue('entegral_opt_in', toBool(req.body?.entegral_opt_in));
+        addSetValue('entegral_url', toText(req.body?.entegral_url));
+        addSetValue('entegral_portals', toStringArray(req.body?.entegral_portals));
+        addSetValue('logo_image_url', toText(req.body?.logo_image_url));
+        addSetValue('document_logo_image_url', toText(req.body?.document_logo_image_url));
+        addSetValue('white_logo_image_url', toText(req.body?.white_logo_image_url));
+        addSetValue('country', toText(req.body?.country));
+        addSetValue('province', toText(req.body?.province));
+        addSetValue('city', toText(req.body?.city));
+        addSetValue('suburb', toText(req.body?.suburb));
+        addSetValue('erf_number', toText(req.body?.erf_number));
+        addSetValue('unit_number', toText(req.body?.unit_number));
+        addSetValue('door_number', toText(req.body?.door_number));
+        addSetValue('estate_name', toText(req.body?.estate_name));
+        addSetValue('street_number', toText(req.body?.street_number));
+        addSetValue('street_name', toText(req.body?.street_name));
+        addSetValue('postal_code', toText(req.body?.postal_code));
+        addSetValue('longitude', toNumber(req.body?.longitude));
+        addSetValue('latitude', toNumber(req.body?.latitude));
+        addSetValue('override_display_location', toBool(req.body?.override_display_location));
+        addSetValue('display_longitude', toNumber(req.body?.display_longitude));
+        addSetValue('display_latitude', toNumber(req.body?.display_latitude));
+        if (marketCenterColumns.has('updated_at')) {
+            setClauses.push('updated_at = NOW()');
+        }
+        values.push(id);
         const update = await pool.query(`
       UPDATE migration.core_market_centers
       SET
-        name = $1,
-        status_name = $2,
-        company_registered_name = $3,
-        kw_office_id = $4,
-        frontdoor_id = $5,
-        contact_number = $6,
-        contact_email = $7,
-        has_individual_cap = $8,
-        agent_default_cap = $9,
-        market_center_default_split = $10,
-        agent_default_split = $11,
-        productivity_coach = $12,
-        property24_opt_in = $13,
-        property24_auction_approved = $14,
-        market_center_property24_id = $15,
-        private_property_id = $16,
-        entegral_opt_in = $17,
-        entegral_url = $18,
-        entegral_portals = $19,
-        logo_image_url = $20,
-        country = $21,
-        province = $22,
-        city = $23,
-        suburb = $24,
-        erf_number = $25,
-        unit_number = $26,
-        door_number = $27,
-        estate_name = $28,
-        street_number = $29,
-        street_name = $30,
-        postal_code = $31,
-        longitude = $32,
-        latitude = $33,
-        override_display_location = $34,
-        display_longitude = $35,
-        display_latitude = $36,
-        updated_at = NOW()
-      WHERE id = $37
+        ${setClauses.join(',\n        ')}
+      WHERE id = $${values.length}
       RETURNING id::text
-      `, [
-            name,
-            toText(req.body?.status_name),
-            toText(req.body?.company_registered_name),
-            toText(req.body?.kw_office_id),
-            toText(req.body?.frontdoor_id),
-            toText(req.body?.contact_number),
-            toText(req.body?.contact_email),
-            toBool(req.body?.has_individual_cap),
-            toNumber(req.body?.agent_default_cap),
-            toNumber(req.body?.market_center_default_split),
-            toNumber(req.body?.agent_default_split),
-            toText(req.body?.productivity_coach),
-            toBool(req.body?.property24_opt_in),
-            toBool(req.body?.property24_auction_approved),
-            toText(req.body?.market_center_property24_id),
-            toText(req.body?.private_property_id),
-            toBool(req.body?.entegral_opt_in),
-            toText(req.body?.entegral_url),
-            toStringArray(req.body?.entegral_portals),
-            toText(req.body?.logo_image_url),
-            toText(req.body?.country),
-            toText(req.body?.province),
-            toText(req.body?.city),
-            toText(req.body?.suburb),
-            toText(req.body?.erf_number),
-            toText(req.body?.unit_number),
-            toText(req.body?.door_number),
-            toText(req.body?.estate_name),
-            toText(req.body?.street_number),
-            toText(req.body?.street_name),
-            toText(req.body?.postal_code),
-            toNumber(req.body?.longitude),
-            toNumber(req.body?.latitude),
-            toBool(req.body?.override_display_location),
-            toNumber(req.body?.display_longitude),
-            toNumber(req.body?.display_latitude),
-            id,
-        ]);
+      `, values);
         if (update.rowCount === 0) {
             return res.status(404).json({ error: 'Market center not found.' });
         }
@@ -590,6 +632,94 @@ router.post('/:id/upload-logo', async (req, res, next) => {
             return res.status(404).json({ error: 'Market center not found.' });
         }
         return res.json({ logo_image_url: imageUrl });
+    }
+    catch (error) {
+        if (!isGcs && req.file.path) {
+            await fs.unlink(req.file.path).catch(() => undefined);
+        }
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return res.status(500).json({ error: message });
+    }
+});
+router.post('/:id/upload-document-logo', async (req, res, next) => {
+    const isGcs = !storageConfig.localUploadsEnabled;
+    try {
+        await runUploadMiddleware(req, res);
+    }
+    catch (error) {
+        return next(error);
+    }
+    if (!pool) {
+        return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+    }
+    if (!req.file) {
+        return res.status(400).json({ error: 'No image file provided.' });
+    }
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: 'Invalid market center id.' });
+    }
+    try {
+        let imageUrl;
+        if (isGcs) {
+            const { publicUrl } = await uploadToGcs(req.file.buffer, req.file.originalname, 'market-center-doc-logo', req.file.mimetype);
+            imageUrl = publicUrl;
+        }
+        else {
+            imageUrl = `/uploads/market-centers/${req.file.filename}`;
+        }
+        const result = await pool.query(`UPDATE migration.core_market_centers SET document_logo_image_url = $1, updated_at = NOW() WHERE id = $2 RETURNING id::text`, [imageUrl, id]);
+        if (result.rowCount === 0) {
+            if (!isGcs && req.file.path) {
+                await fs.unlink(req.file.path).catch(() => undefined);
+            }
+            return res.status(404).json({ error: 'Market center not found.' });
+        }
+        return res.json({ document_logo_image_url: imageUrl });
+    }
+    catch (error) {
+        if (!isGcs && req.file.path) {
+            await fs.unlink(req.file.path).catch(() => undefined);
+        }
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return res.status(500).json({ error: message });
+    }
+});
+router.post('/:id/upload-white-logo', async (req, res, next) => {
+    const isGcs = !storageConfig.localUploadsEnabled;
+    try {
+        await runUploadMiddleware(req, res);
+    }
+    catch (error) {
+        return next(error);
+    }
+    if (!pool) {
+        return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+    }
+    if (!req.file) {
+        return res.status(400).json({ error: 'No image file provided.' });
+    }
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: 'Invalid market center id.' });
+    }
+    try {
+        let imageUrl;
+        if (isGcs) {
+            const { publicUrl } = await uploadToGcs(req.file.buffer, req.file.originalname, 'market-center-white-logo', req.file.mimetype);
+            imageUrl = publicUrl;
+        }
+        else {
+            imageUrl = `/uploads/market-centers/${req.file.filename}`;
+        }
+        const result = await pool.query(`UPDATE migration.core_market_centers SET white_logo_image_url = $1, updated_at = NOW() WHERE id = $2 RETURNING id::text`, [imageUrl, id]);
+        if (result.rowCount === 0) {
+            if (!isGcs && req.file.path) {
+                await fs.unlink(req.file.path).catch(() => undefined);
+            }
+            return res.status(404).json({ error: 'Market center not found.' });
+        }
+        return res.json({ white_logo_image_url: imageUrl });
     }
     catch (error) {
         if (!isGcs && req.file.path) {

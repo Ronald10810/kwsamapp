@@ -15,9 +15,33 @@ param(
     [string]$CloudSqlConnectionName = "kwsa-mapp:africa-south1:kwsa-postgres",
     [string]$DatabaseUrlSecretName = "DATABASE_URL",
     [string]$OpenAiApiKeySecretName = "OPENAI_API_KEY",
+    [string]$SupportSmtpPassSecretName = "SUPPORT_SMTP_PASS",
+    [string]$Property24ApiKeySecretName = "PROPERTY24_API_KEY",
+    [string]$PrivatePropertyUsernameSecretName = "PRIVATE_PROPERTY_USERNAME",
+    [string]$PrivatePropertyPasswordSecretName = "PRIVATE_PROPERTY_PASSWORD",
+    [string]$PrivatePropertyPasswordAltSecretName = "PRIVATE_PROPERTY_PASSWORD_ALT",
+    [string]$KwwApiKeySecretName = "KWW_API_KEY",
+    [string]$KwwApiSecretSecretName = "KWW_API_SECRET",
+    [string]$EntegralGlobalAuthSecretName = "ENTEGRAL_GLOBAL_AUTH",
     [string]$OpenAiModel = "gpt-5",
     [string]$GoogleClientId = "768625368107-oficd2i4fn505g3lf7dt6sjmlv77b109.apps.googleusercontent.com",
     [string]$CorsOrigin = "https://kwmapp.co.za,https://uat.kwmapp.co.za,https://kwsa-frontend-test-768625368107.africa-south1.run.app",
+    [string]$SupportSmtpHost = "smtp.gmail.com",
+    [string]$SupportSmtpPort = "465",
+    [string]$SupportSmtpUser = "support@kwsa.co.za",
+    [string]$SupportFromEmail = "support@kwsa.co.za",
+    [string]$SupportFromName = "MAPP Support",
+    [string]$SupportReplyTo = "support@kwsa.co.za",
+    [string]$SupportSmokeAllowlist = "support@kwsa.co.za",
+    [string]$SupportEmailLogoUrl = "https://storage.googleapis.com/kwsa-mapp-uploads/support/email/KWSA_White.png",
+    [string]$Property24BaseUrl = "https://api.property24.com/listing/v51/",
+    [string]$Property24ListingsEndpoint = "listings",
+    [string]$Property24DefaultAgencyId = "37061",
+    [string]$PrivatePropertyBaseUrl = "https://services.privateproperty.co.za/AgentImport/AgentImport.asmx",
+    [string]$KwwBaseUrl = "https://partners.api.kw.com/v2/listings",
+    [string]$EntegralBaseUrl = "http://sync.entegral.net/api",
+    [string]$EntegralSourceId = "6",
+    [bool]$LocalAssociateSuspensionEnabled = $true,
     [string]$BackendUrlOverride = "",
     [bool]$CommunicationsConsoleEnabled = $false,
     [switch]$SkipSecretAccessorGrant = $true,
@@ -185,21 +209,26 @@ if (-not $SkipBackend) {
             }
             $runtimeServiceAccount = "${projectNumber}-compute@developer.gserviceaccount.com"
 
-            Invoke-CheckedCommand "Grant secret accessor (DATABASE_URL)" {
-                & $gcloudCmd secrets add-iam-policy-binding $DatabaseUrlSecretName `
-                    --project $ProjectId `
-                    --member "serviceAccount:$runtimeServiceAccount" `
-                    --role "roles/secretmanager.secretAccessor" `
-                    --quiet | Out-Null
-            } | Out-Null
-
-            Invoke-CheckedCommand "Grant secret accessor (OPENAI_API_KEY)" {
-                & $gcloudCmd secrets add-iam-policy-binding $OpenAiApiKeySecretName `
-                    --project $ProjectId `
-                    --member "serviceAccount:$runtimeServiceAccount" `
-                    --role "roles/secretmanager.secretAccessor" `
-                    --quiet | Out-Null
-            } | Out-Null
+            foreach ($secretName in @(
+                $DatabaseUrlSecretName,
+                $OpenAiApiKeySecretName,
+                $SupportSmtpPassSecretName,
+                $Property24ApiKeySecretName,
+                $PrivatePropertyUsernameSecretName,
+                $PrivatePropertyPasswordSecretName,
+                $PrivatePropertyPasswordAltSecretName,
+                $KwwApiKeySecretName,
+                $KwwApiSecretSecretName,
+                $EntegralGlobalAuthSecretName
+            )) {
+                Invoke-CheckedCommand "Grant secret accessor ($secretName)" {
+                    & $gcloudCmd secrets add-iam-policy-binding $secretName `
+                        --project $ProjectId `
+                        --member "serviceAccount:$runtimeServiceAccount" `
+                        --role "roles/secretmanager.secretAccessor" `
+                        --quiet | Out-Null
+                } | Out-Null
+            }
         }
 
         Write-Step "Deploying backend service to Cloud Run"
@@ -214,8 +243,40 @@ if (-not $SkipBackend) {
             "GCS_BUCKET_NAME: `"$GcsBucketName`"",
             "OPENAI_MODEL: `"$OpenAiModel`"",
             "GOOGLE_CLIENT_ID: `"$GoogleClientId`"",
-            "GOOGLE_CLOUD_PROJECT: `"$ProjectId`""
+            "GOOGLE_CLOUD_PROJECT: `"$ProjectId`"",
+            'TRAINING_HUB_ENABLED: "true"',
+            'SUPPORT_EMAIL_ENABLED: "true"',
+            "SUPPORT_SMTP_HOST: `"$SupportSmtpHost`"",
+            "SUPPORT_SMTP_PORT: `"$SupportSmtpPort`"",
+            'SUPPORT_SMTP_SECURE: "true"',
+            "SUPPORT_SMTP_USER: `"$SupportSmtpUser`"",
+            "SUPPORT_FROM_EMAIL: `"$SupportFromEmail`"",
+            "SUPPORT_FROM_NAME: `"$SupportFromName`"",
+            "SUPPORT_REPLY_TO: `"$SupportReplyTo`"",
+            "SUPPORT_SMOKE_ALLOWLIST: `"$SupportSmokeAllowlist`"",
+            "SUPPORT_EMAIL_LOGO_URL: `"$SupportEmailLogoUrl`"",
+            "PROPERTY24_BASE_URL: `"$Property24BaseUrl`"",
+            "PROPERTY24_LISTINGS_ENDPOINT: `"$Property24ListingsEndpoint`"",
+            "PROPERTY24_DEFAULT_AGENCY_ID: `"$Property24DefaultAgencyId`"",
+            "PRIVATE_PROPERTY_BASE_URL: `"$PrivatePropertyBaseUrl`"",
+            "KWW_BASE_URL: `"$KwwBaseUrl`"",
+            "ENTEGRAL_BASE_URL: `"$EntegralBaseUrl`"",
+            "ENTEGRAL_SOURCE_ID: `"$EntegralSourceId`"",
+            "LOCAL_ASSOCIATE_SUSPENSION_ENABLED: `"$($LocalAssociateSuspensionEnabled.ToString().ToLowerInvariant())`""
         ) | Set-Content -Path $backendEnvFilePath -Encoding UTF8
+
+        $backendSecrets = @(
+            "DATABASE_URL=${DatabaseUrlSecretName}:latest",
+            "OPENAI_API_KEY=${OpenAiApiKeySecretName}:latest",
+            "SUPPORT_SMTP_PASS=${SupportSmtpPassSecretName}:latest",
+            "PROPERTY24_API_KEY=${Property24ApiKeySecretName}:latest",
+            "PRIVATE_PROPERTY_USERNAME=${PrivatePropertyUsernameSecretName}:latest",
+            "PRIVATE_PROPERTY_PASSWORD=${PrivatePropertyPasswordSecretName}:latest",
+            "PRIVATE_PROPERTY_PASSWORD_ALT=${PrivatePropertyPasswordAltSecretName}:latest",
+            "KWW_API_KEY=${KwwApiKeySecretName}:latest",
+            "KWW_API_SECRET=${KwwApiSecretSecretName}:latest",
+            "ENTEGRAL_GLOBAL_AUTH=${EntegralGlobalAuthSecretName}:latest"
+        ) -join ","
 
         try {
             Invoke-CheckedCommand "Deploy backend service" {
@@ -226,7 +287,7 @@ if (-not $SkipBackend) {
                     --allow-unauthenticated `
                     --add-cloudsql-instances $CloudSqlConnectionName `
                     --env-vars-file $backendEnvFilePath `
-                    --set-secrets "DATABASE_URL=${DatabaseUrlSecretName}:latest,OPENAI_API_KEY=${OpenAiApiKeySecretName}:latest" `
+                    --set-secrets $backendSecrets `
                     --quiet
             }
         }
@@ -273,11 +334,7 @@ if (-not $SkipFrontend) {
     Write-Host "Backend URL: $backendUrl" -ForegroundColor DarkGray
 
     $frontendEnvBaseFile = Join-Path $frontendDir ".env.production"
-    $frontendEnvHadBaseFile = Test-Path $frontendEnvBaseFile
-    $frontendEnvBaseContent = $null
-    if ($frontendEnvHadBaseFile) {
-        $frontendEnvBaseContent = Get-Content -Path $frontendEnvBaseFile -Raw
-    }
+    $frontendGeneratedEnvFile = Join-Path $frontendDir "env.production.generated"
 
     $envLines = @()
     if (Test-Path $frontendEnvBaseFile) {
@@ -297,8 +354,8 @@ if (-not $SkipFrontend) {
     $envLines += "VITE_PORTAL_RECOVERY_ENABLED=true"
     $envLines += "VITE_TRAINING_HUB_ENABLED=true"
 
-    Set-Content -Path $frontendEnvBaseFile -Value $envLines -Encoding UTF8
-    Write-Host "Generated frontend env override: $frontendEnvBaseFile" -ForegroundColor DarkGray
+    Set-Content -Path $frontendGeneratedEnvFile -Value $envLines -Encoding UTF8
+    Write-Host "Generated frontend build env: $frontendGeneratedEnvFile" -ForegroundColor DarkGray
 
     if (-not $UseCloudBuildForFrontend) {
         throw "Frontend publishing currently expects -UseCloudBuildForFrontend."
@@ -318,7 +375,6 @@ if (-not $SkipFrontend) {
                         "--region", $frontendRegion,
                         "--allow-unauthenticated",
                         "--port", "8080",
-                        "--set-build-env-vars", "VITE_API_BASE_URL=$backendUrl,VITE_GOOGLE_CLIENT_ID=$GoogleClientId,VITE_TRAINING_HUB_ENABLED=true",
                         "--clear-base-image"
                     )
 
@@ -349,7 +405,6 @@ if (-not $SkipFrontend) {
                         "--region", $frontendRegion,
                         "--allow-unauthenticated",
                         "--port", "8080",
-                        "--set-build-env-vars", "VITE_API_BASE_URL=$backendUrl,VITE_GOOGLE_CLIENT_ID=$GoogleClientId,VITE_TRAINING_HUB_ENABLED=true",
                         "--clear-base-image"
                     )
 
@@ -366,12 +421,7 @@ if (-not $SkipFrontend) {
         }
     }
     finally {
-        if ($frontendEnvHadBaseFile) {
-            Set-Content -Path $frontendEnvBaseFile -Value $frontendEnvBaseContent -Encoding UTF8
-        }
-        else {
-            Remove-Item -Path $frontendEnvBaseFile -Force -ErrorAction SilentlyContinue
-        }
+        Remove-Item -Path $frontendGeneratedEnvFile -Force -ErrorAction SilentlyContinue
     }
 
     $frontendUrl = (Invoke-CheckedCommand "Resolve frontend URL" {

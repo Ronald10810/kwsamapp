@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '../services/apiUtils.js';
 
 export interface AuthUser {
   userId: number;
@@ -136,7 +137,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loadAccessControl = useCallback(async (authToken: string) => {
     try {
-      const res = await fetchWithTimeout('/api/auth/me', {
+      const res = await apiFetch('/api/auth/me', {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       if (!res.ok) return;
@@ -171,7 +172,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       let data: { contexts: UserContext[] } | null = null;
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const res = await fetchWithTimeout('/api/auth/contexts', {
+        const res = await apiFetch('/api/auth/contexts', {
           headers: { Authorization: `Bearer ${authToken}` },
         });
 
@@ -286,9 +287,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const login = useCallback(async (googleCredential: string) => {
-    const res = await fetch('/api/auth/google', {
+    const res = await apiFetch('/api/auth/google', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ credential: googleCredential }),
     });
 
@@ -311,9 +311,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadAccessControl, loadContexts]);
 
   const loginAsDev = useCallback(async (input?: { email?: string; name?: string; role?: string }) => {
-    const res = await fetch('/api/auth/dev-login', {
+    const res = await apiFetch('/api/auth/dev-login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input ?? {}),
     });
 

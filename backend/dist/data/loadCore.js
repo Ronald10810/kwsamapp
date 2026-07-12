@@ -1,5 +1,16 @@
 import { closePool, runInTransaction } from './db.js';
 const preserveExistingCoreData = (process.env.PRESERVE_CORE_EDITS ?? '').trim().toLowerCase() === 'true';
+function parseLoadMode(args) {
+    const onlyIndex = args.indexOf('--only');
+    if (onlyIndex === -1) {
+        return 'full';
+    }
+    const onlyValue = (args[onlyIndex + 1] ?? '').trim().toLowerCase();
+    if (onlyValue === 'associates') {
+        return 'associates';
+    }
+    throw new Error(`Unsupported --only value "${onlyValue || '(missing)'}". Supported: associates.`);
+}
 function normalizeText(value) {
     if (typeof value !== 'string')
         return null;
@@ -31,6 +42,54 @@ function normalizeDate(value) {
         return null;
     return date.toISOString().slice(0, 10);
 }
+function normalizeBoolean(value) {
+    if (typeof value === 'boolean')
+        return value;
+    if (typeof value === 'number') {
+        if (value === 1)
+            return true;
+        if (value === 0)
+            return false;
+        return null;
+    }
+    const text = normalizeText(value)?.toLowerCase();
+    if (!text)
+        return null;
+    if (['true', '1', 'yes', 'y'].includes(text))
+        return true;
+    if (['false', '0', 'no', 'n'].includes(text))
+        return false;
+    return null;
+}
+function normalizeZoningType(value) {
+    const text = normalizeText(value);
+    if (!text)
+        return null;
+    const zoningTypeMap = {
+        '1': 'Single Residential',
+        '2': 'General Residential',
+        '3': 'Local Business',
+        '4': 'General Business',
+        '5': 'General Industrial',
+        '6': 'Heavy Industrial',
+        '7': 'Agriculture',
+        '8': 'Rural',
+        '9': 'Mixed Use',
+    };
+    return zoningTypeMap[text] ?? text;
+}
+function fallbackZoningTypeFromPropertyType(value) {
+    const propertyType = normalizeText(value)?.toLowerCase() ?? '';
+    if (propertyType === 'residential')
+        return 'Single Residential';
+    if (propertyType === 'commercial' || propertyType === 'business')
+        return 'General Business';
+    if (propertyType === 'industrial')
+        return 'General Industrial';
+    if (propertyType === 'farm')
+        return 'Agriculture';
+    return 'Single Residential';
+}
 function payloadRecord(payload) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload))
         return {};
@@ -59,6 +118,365 @@ function payloadDate(record, keys) {
             return value;
     }
     return null;
+}
+function payloadBool(record, keys) {
+    for (const key of keys) {
+        const value = normalizeBoolean(record[key]);
+        if (value !== null)
+            return value;
+    }
+    return null;
+}
+function payloadObject(record, keys) {
+    for (const key of keys) {
+        const value = record[key];
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            return value;
+        }
+    }
+    return {};
+}
+function payloadArray(record, keys) {
+    for (const key of keys) {
+        const value = record[key];
+        if (Array.isArray(value))
+            return value;
+    }
+    return [];
+}
+function toTextList(value) {
+    if (Array.isArray(value)) {
+        const items = [];
+        for (const entry of value) {
+            if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+                const obj = entry;
+                const label = payloadText(obj, ['Name', 'name', 'Value', 'value', 'P24Tag', 'p24_tag']);
+                if (label)
+                    items.push(label);
+                continue;
+            }
+            const text = normalizeText(entry);
+            if (text)
+                items.push(text);
+        }
+        return items;
+    }
+    const text = normalizeText(value);
+    if (!text)
+        return [];
+    return text
+        .split(/[|,;]+/)
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+}
+function uniqueText(values) {
+    const out = [];
+    const seen = new Set();
+    for (const value of values) {
+        const key = value.toLowerCase();
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        out.push(value);
+    }
+    return out;
+}
+async function syncAssociateCollectionsFromCsvPayload(client, associateId, sourceAssociateId) {
+    const latestRaw = await client.query(`SELECT raw_payload
+     FROM staging.associates_raw
+     WHERE source_associate_id = $1
+       AND raw_payload IS NOT NULL
+     ORDER BY
+       CASE
+         WHEN NULLIF(BTRIM(COALESCE(raw_payload->>'Roles', raw_payload->>'_ext_role', '')), '') IS NOT NULL
+           OR NULLIF(BTRIM(COALESCE(raw_payload->>'JobTitles', raw_payload->>'_ext_job_title', '')), '') IS NOT NULL
+           OR NULLIF(BTRIM(COALESCE(raw_payload->>'ServiceCommunities', raw_payload->>'_ext_service_community', '')), '') IS NOT NULL
+           OR NULLIF(BTRIM(COALESCE(raw_payload->>'AdminMCs', raw_payload->>'admin_market_centers', '')), '') IS NOT NULL
+           OR NULLIF(BTRIM(COALESCE(raw_payload->>'AdminTeams', raw_payload->>'admin_teams', '')), '') IS NOT NULL
+           THEN 0
+         ELSE 1
+       END,
+       loaded_at DESC
+     LIMIT 1`, [sourceAssociateId]);
+    const payload = payloadRecord(latestRaw.rows[0]?.raw_payload);
+    const roles = uniqueText([
+        ...toTextList(payload['Roles']),
+        ...toTextList(payload['_ext_role']),
+        ...toTextList(payload['role']),
+        ...toTextList(payload['RoleName']),
+    ]);
+    const jobTitles = uniqueText([
+        ...toTextList(payload['JobTitles']),
+        ...toTextList(payload['_ext_job_title']),
+        ...toTextList(payload['job_title']),
+    ]);
+    const communities = uniqueText([
+        ...toTextList(payload['ServiceCommunities']),
+        ...toTextList(payload['_ext_service_community']),
+        ...toTextList(payload['service_community']),
+    ]);
+    const adminMarketCenters = uniqueText([
+        ...toTextList(payload['AdminMCs']),
+        ...toTextList(payload['admin_market_centers']),
+    ]);
+    const adminTeams = uniqueText([
+        ...toTextList(payload['AdminTeams']),
+        ...toTextList(payload['admin_teams']),
+    ]);
+    if (roles.length > 0) {
+        await client.query(`DELETE FROM migration.associate_roles WHERE associate_id = $1`, [associateId]);
+        for (const role of roles) {
+            await client.query(`INSERT INTO migration.associate_roles (associate_id, role_name) VALUES ($1, $2)`, [associateId, role]);
+        }
+    }
+    if (jobTitles.length > 0) {
+        await client.query(`DELETE FROM migration.associate_job_titles WHERE associate_id = $1`, [associateId]);
+        for (const title of jobTitles) {
+            await client.query(`INSERT INTO migration.associate_job_titles (associate_id, job_title) VALUES ($1, $2)`, [associateId, title]);
+        }
+    }
+    if (communities.length > 0) {
+        await client.query(`DELETE FROM migration.associate_service_communities WHERE associate_id = $1`, [associateId]);
+        for (const community of communities) {
+            await client.query(`INSERT INTO migration.associate_service_communities (associate_id, community_name) VALUES ($1, $2)`, [associateId, community]);
+        }
+    }
+    if (adminMarketCenters.length > 0) {
+        await client.query(`DELETE FROM migration.associate_admin_market_centers WHERE associate_id = $1`, [associateId]);
+        for (const sourceMarketCenterId of adminMarketCenters) {
+            await client.query(`INSERT INTO migration.associate_admin_market_centers (associate_id, source_market_center_id) VALUES ($1, $2)`, [associateId, sourceMarketCenterId]);
+        }
+    }
+    if (adminTeams.length > 0) {
+        await client.query(`DELETE FROM migration.associate_admin_teams WHERE associate_id = $1`, [associateId]);
+        for (const sourceTeamId of adminTeams) {
+            await client.query(`INSERT INTO migration.associate_admin_teams (associate_id, source_team_id) VALUES ($1, $2)`, [associateId, sourceTeamId]);
+        }
+    }
+}
+function areaTypeFromLegacyId(id) {
+    if (id === null)
+        return null;
+    const map = {
+        1: 'Bedroom',
+        2: 'Bathroom',
+        3: 'Bar',
+        4: 'Braai Room',
+        5: 'Dining Room',
+        7: 'Garage',
+        9: 'Kitchen',
+        10: 'Lounge',
+        12: 'Office',
+        13: 'Outbuilding',
+        14: 'Pool',
+        16: 'Parking',
+        17: 'Security',
+        23: 'Family TV Room',
+        24: 'Entrance Hall',
+    };
+    return map[id] ?? null;
+}
+async function syncListingCoreDetailsFromPayload() {
+    await runInTransaction(async (client) => {
+        const ssmsBuildingInfoRows = await client.query(`SELECT source_listing_id, listing_number, zoning_type
+       FROM staging.ssms_listing_building_info_raw
+       WHERE NULLIF(TRIM(zoning_type), '') IS NOT NULL`);
+        const ssmsZoningBySourceListingId = new Map();
+        const ssmsZoningByListingNumber = new Map();
+        for (const row of ssmsBuildingInfoRows.rows) {
+            const normalizedZoningType = normalizeZoningType(row.zoning_type);
+            if (!normalizedZoningType)
+                continue;
+            const sourceListingId = normalizeText(row.source_listing_id);
+            if (sourceListingId && !ssmsZoningBySourceListingId.has(sourceListingId)) {
+                ssmsZoningBySourceListingId.set(sourceListingId, normalizedZoningType);
+            }
+            const listingNumber = normalizeText(row.listing_number);
+            if (listingNumber && !ssmsZoningByListingNumber.has(listingNumber)) {
+                ssmsZoningByListingNumber.set(listingNumber, normalizedZoningType);
+            }
+        }
+        const listingRows = await client.query(`SELECT id::text, source_listing_id, listing_number, listing_payload FROM migration.core_listings`);
+        for (const listing of listingRows.rows) {
+            const payload = payloadRecord(listing.listing_payload);
+            const buildingInfo = payloadObject(payload, ['ListingBuildingInfo', 'listing_building_info']);
+            const sustainabilityInfo = payloadObject(payload, [
+                'ListingBuildingInfoSustainability',
+                'listing_building_info_sustainability',
+            ]);
+            const internetInfo = payloadObject(payload, ['ListingBuildingInfoInternet', 'listing_building_info_internet']);
+            const publicTransportInfo = payloadObject(payload, [
+                'ListingBuildingInfoPublicTransport',
+                'listing_building_info_public_transport',
+            ]);
+            const zoningObj = payloadObject(buildingInfo, ['ListingBuildingZoningType', 'listing_building_zoning_type']);
+            // Fall back to top-level payload keys for CSV-imported listings where building info is not nested
+            const erfSize = payloadNumber(buildingInfo, ['ErfSize', 'erf_size']) ?? payloadNumber(payload, ['ErfSize', 'erf_size']);
+            const floorArea = payloadNumber(buildingInfo, ['FloorArea', 'floor_area']) ?? payloadNumber(payload, ['FloorArea', 'floor_area']);
+            const constructionDate = payloadDate(buildingInfo, [
+                'ConstructionYear',
+                'ConstructionDate',
+                'construction_year',
+                'construction_date',
+            ]) ?? payloadDate(payload, ['ConstructionYear', 'ConstructionDate', 'construction_year', 'construction_date']);
+            const heightRestriction = payloadNumber(buildingInfo, [
+                'HeightRestriction',
+                'HeighRestriction',
+                'height_restriction',
+            ]) ?? payloadNumber(payload, ['HeightRestriction', 'HeighRestriction', 'height_restriction']);
+            const outBuildingSize = payloadNumber(buildingInfo, ['OutBuildingSize', 'out_building_size']) ?? payloadNumber(payload, ['OutBuildingSize', 'out_building_size']);
+            const zoningType = normalizeZoningType(payloadText(zoningObj, ['Name', 'name'])) ??
+                normalizeZoningType(payloadText(buildingInfo, ['ZoningType', 'zoning_type', 'ListingBuildingZoningType'])) ??
+                normalizeZoningType(payloadText(payload, ['ZoningType', 'zoning_type'])) ??
+                ssmsZoningBySourceListingId.get(normalizeText(listing.source_listing_id) ?? '') ??
+                ssmsZoningByListingNumber.get(normalizeText(listing.listing_number) ?? '') ??
+                fallbackZoningTypeFromPropertyType(payloadText(payload, ['PropertyType', 'property_type', 'PropType', 'prop_type']));
+            const isFurnished = payloadBool(buildingInfo, ['FurnishedProperty', 'is_furnished', 'IsFurnished']);
+            const petFriendly = payloadBool(buildingInfo, ['PetFriendly', 'pet_friendly']);
+            const hasStandaloneBuilding = payloadBool(buildingInfo, [
+                'HasStandaloneBuilding',
+                'has_standalone_building',
+            ]);
+            const hasFlatlet = payloadBool(buildingInfo, ['HasFlatlet', 'has_flatlet']);
+            const hasBackupWater = payloadBool(buildingInfo, ['HasBackupWater', 'has_backup_water']);
+            const wheelchairAccessible = payloadBool(buildingInfo, [
+                'WheelChairAccessible',
+                'WheelchairAccessible',
+                'wheelchair_accessible',
+            ]);
+            const hasGenerator = payloadBool(buildingInfo, ['HasGenerator', 'has_generator']);
+            const hasBorehole = payloadBool(sustainabilityInfo, ['HasBorehole', 'has_borehole']);
+            const hasGasGeyser = payloadBool(sustainabilityInfo, ['HasGasGeyser', 'has_gas_geyser']);
+            const hasSolarPanels = payloadBool(sustainabilityInfo, ['HasSolarPanels', 'has_solar_panels']);
+            const hasBackupBatteryOrInverter = payloadBool(sustainabilityInfo, [
+                'HasBackupBatteryOrInverter',
+                'has_backup_battery_or_inverter',
+            ]);
+            const hasSolarGeyser = payloadBool(sustainabilityInfo, ['HasSolarGeyser', 'has_solar_geyser']);
+            const hasWaterTank = payloadBool(sustainabilityInfo, ['HasWaterTank', 'has_water_tank']);
+            const adsl = payloadBool(internetInfo, ['ADSL', 'adsl']);
+            const fibre = payloadBool(internetInfo, ['Fibre', 'fibre']);
+            const isdn = payloadBool(internetInfo, ['ISDN', 'isdn']);
+            const dialup = payloadBool(internetInfo, ['DialUp', 'dialup']);
+            const fixedWimax = payloadBool(internetInfo, ['FixedWiMax', 'fixed_wimax']);
+            const satellite = payloadBool(internetInfo, ['Satellite', 'satellite']);
+            const nearbyBusService = payloadBool(publicTransportInfo, ['HasNearbyBusService', 'nearby_bus_service']);
+            const nearbyMinibusTaxiService = payloadBool(publicTransportInfo, [
+                'HasNearbyMinibusTaxiService',
+                'nearby_minibus_taxi_service',
+            ]);
+            const nearbyTrainService = payloadBool(publicTransportInfo, ['HasNearbyTrainService', 'nearby_train_service']);
+            await client.query(`UPDATE migration.core_listings
+         SET
+           erf_size = COALESCE($2::numeric, erf_size),
+           floor_area = COALESCE($3::numeric, floor_area),
+           construction_date = COALESCE($4::date, construction_date),
+           height_restriction = COALESCE($5::numeric, height_restriction),
+           out_building_size = COALESCE($6::numeric, out_building_size),
+           zoning_type = COALESCE($7, zoning_type),
+           is_furnished = COALESCE($8, is_furnished),
+           pet_friendly = COALESCE($9, pet_friendly),
+           has_standalone_building = COALESCE($10, has_standalone_building),
+           has_flatlet = COALESCE($11, has_flatlet),
+           has_backup_water = COALESCE($12, has_backup_water),
+           wheelchair_accessible = COALESCE($13, wheelchair_accessible),
+           has_generator = COALESCE($14, has_generator),
+           has_borehole = COALESCE($15, has_borehole),
+           has_gas_geyser = COALESCE($16, has_gas_geyser),
+           has_solar_panels = COALESCE($17, has_solar_panels),
+           has_backup_battery_or_inverter = COALESCE($18, has_backup_battery_or_inverter),
+           has_solar_geyser = COALESCE($19, has_solar_geyser),
+           has_water_tank = COALESCE($20, has_water_tank),
+           adsl = COALESCE($21, adsl),
+           fibre = COALESCE($22, fibre),
+           isdn = COALESCE($23, isdn),
+           dialup = COALESCE($24, dialup),
+           fixed_wimax = COALESCE($25, fixed_wimax),
+           satellite = COALESCE($26, satellite),
+           nearby_bus_service = COALESCE($27, nearby_bus_service),
+           nearby_minibus_taxi_service = COALESCE($28, nearby_minibus_taxi_service),
+           nearby_train_service = COALESCE($29, nearby_train_service),
+           updated_at = NOW()
+         WHERE id = $1`, [
+                Number(listing.id),
+                erfSize,
+                floorArea,
+                constructionDate,
+                heightRestriction,
+                outBuildingSize,
+                zoningType,
+                isFurnished,
+                petFriendly,
+                hasStandaloneBuilding,
+                hasFlatlet,
+                hasBackupWater,
+                wheelchairAccessible,
+                hasGenerator,
+                hasBorehole,
+                hasGasGeyser,
+                hasSolarPanels,
+                hasBackupBatteryOrInverter,
+                hasSolarGeyser,
+                hasWaterTank,
+                adsl,
+                fibre,
+                isdn,
+                dialup,
+                fixedWimax,
+                satellite,
+                nearbyBusService,
+                nearbyMinibusTaxiService,
+                nearbyTrainService,
+            ]);
+        }
+    });
+}
+async function syncListingFeaturesFromPayload() {
+    await runInTransaction(async (client) => {
+        const listingRows = await client.query(`SELECT id::text, listing_payload FROM migration.core_listings`);
+        for (const listing of listingRows.rows) {
+            const listingId = Number(listing.id);
+            const existingFeatures = await client.query(`SELECT COUNT(*)::text AS count FROM migration.listing_features WHERE listing_id = $1`, [listingId]);
+            if (Number(existingFeatures.rows[0]?.count ?? '0') > 0)
+                continue;
+            const payload = payloadRecord(listing.listing_payload);
+            const buildingInfo = payloadObject(payload, ['ListingBuildingInfo', 'listing_building_info']);
+            const buildingFeatures = uniqueText([
+                ...toTextList(payload['BuildingFeatures']),
+                ...toTextList(payload['building_features']),
+                ...toTextList(payload['ListingBuildingAreaFeatures']),
+                ...toTextList(payload['listing_building_area_features']),
+                ...toTextList(buildingInfo['ListingBuildingInfoAreaFeatures']),
+            ]);
+            const propertyDescriptives = uniqueText([
+                ...toTextList(payload['PropertyDescriptives']),
+                ...toTextList(payload['property_descriptives']),
+                ...toTextList(payload['DescriptiveFeatures']),
+                ...toTextList(payload['descriptive_features']),
+            ]);
+            const lifestyleTags = uniqueText([
+                ...toTextList(payload['LifestyleTags']),
+                ...toTextList(payload['lifestyle_tags']),
+                ...toTextList(payload['Lifestyle']),
+                ...toTextList(payload['lifestyle']),
+            ]);
+            const categories = [
+                { category: 'Building Features', values: buildingFeatures },
+                { category: 'Property Descriptives', values: propertyDescriptives },
+                { category: 'Lifestyle Tags', values: lifestyleTags },
+            ];
+            for (const category of categories) {
+                for (const [index, value] of category.values.entries()) {
+                    await client.query(`INSERT INTO migration.listing_features (
+               listing_id,
+               feature_category,
+               feature_value,
+               sort_order
+             ) VALUES ($1, $2, $3, $4)`, [listingId, category.category, value, index]);
+                }
+            }
+        }
+    });
 }
 function readObjectValue(record, keys) {
     for (const key of keys) {
@@ -262,6 +680,12 @@ async function syncListingPropertyAreasFromPayload() {
             { areaType: 'Bedroom', keys: ['Bedrooms', 'BedroomCount', 'bedrooms'] },
             { areaType: 'Bathroom', keys: ['Bathrooms', 'BathroomCount', 'bathrooms'] },
             { areaType: 'Garage', keys: ['Garages', 'GarageCount', 'garages'] },
+            { areaType: 'Parking', keys: ['ParkingBays', 'ParkingCount', 'parking_bays', 'parking_count'] },
+            { areaType: 'Kitchen', keys: ['Kitchens', 'KitchenCount', 'kitchens'] },
+            { areaType: 'Bar', keys: ['Bars', 'BarCount', 'bars'] },
+            { areaType: 'Office', keys: ['Offices', 'OfficeCount', 'offices'] },
+            { areaType: 'Outbuilding', keys: ['Outbuildings', 'OutBuildingCount', 'outbuildings'] },
+            { areaType: 'Security', keys: ['SecurityRooms', 'SecurityCount', 'security'] },
             { areaType: 'Pool', keys: ['Pools', 'PoolCount', 'pools'] },
             { areaType: 'Dining Room', keys: ['DiningRooms', 'DiningRoomCount', 'dining_rooms'] },
             { areaType: 'Family TV Room', keys: ['FamilyRooms', 'FamilyRoomCount', 'family_rooms'] },
@@ -269,14 +693,18 @@ async function syncListingPropertyAreasFromPayload() {
         ];
         for (const listing of listingRows.rows) {
             const listingId = Number(listing.id);
-            const existingAreas = await client.query(`SELECT COUNT(*)::text AS count FROM migration.listing_property_areas WHERE listing_id = $1`, [listingId]);
-            if (Number(existingAreas.rows[0]?.count ?? '0') > 0)
-                continue;
             const payload = payloadRecord(listing.listing_payload);
-            let sortOrder = 0;
+            const existingRows = await client.query(`SELECT area_type FROM migration.listing_property_areas WHERE listing_id = $1`, [listingId]);
+            const existingAreaTypes = new Set(existingRows.rows
+                .map((row) => normalizeText(row.area_type)?.toLowerCase())
+                .filter((value) => Boolean(value)));
+            const sortOrderLookup = await client.query(`SELECT MAX(sort_order)::text AS max_sort FROM migration.listing_property_areas WHERE listing_id = $1`, [listingId]);
+            let sortOrder = Number(sortOrderLookup.rows[0]?.max_sort ?? '-1') + 1;
             for (const mapping of areaMapping) {
                 const countValue = payloadNumber(payload, mapping.keys);
                 if (countValue === null || countValue <= 0)
+                    continue;
+                if (existingAreaTypes.has(mapping.areaType.toLowerCase()))
                     continue;
                 await client.query(`INSERT INTO migration.listing_property_areas (
              listing_id,
@@ -287,6 +715,53 @@ async function syncListingPropertyAreasFromPayload() {
              sub_features,
              sort_order
            ) VALUES ($1, $2, $3, NULL, NULL, ARRAY[]::TEXT[], $4)`, [listingId, mapping.areaType, Math.floor(countValue), sortOrder]);
+                existingAreaTypes.add(mapping.areaType.toLowerCase());
+                sortOrder += 1;
+            }
+            const payloadAreas = payloadArray(payload, ['ListingPropertyAreas', 'listing_property_areas', 'PropertyAreas']);
+            for (const area of payloadAreas) {
+                if (!area || typeof area !== 'object' || Array.isArray(area))
+                    continue;
+                const areaRecord = area;
+                const areaTypeObject = payloadObject(areaRecord, ['ListingPropertyAreaType', 'listing_property_area_type']);
+                const areaTypeId = payloadNumber(areaRecord, ['ListingPropertyAreaTypeId', 'listing_property_area_type_id']) ??
+                    payloadNumber(areaTypeObject, ['Id', 'id']);
+                const areaType = payloadText(areaRecord, ['AreaName', 'area_name', 'AreaType', 'area_type']) ??
+                    payloadText(areaTypeObject, ['Name', 'name']) ??
+                    areaTypeFromLegacyId(areaTypeId !== null ? Math.floor(areaTypeId) : null);
+                if (!areaType)
+                    continue;
+                if (existingAreaTypes.has(areaType.toLowerCase()))
+                    continue;
+                const areaCount = payloadNumber(areaRecord, ['Count', 'count', 'Quantity', 'quantity']);
+                const areaSize = payloadNumber(areaRecord, ['Size', 'size']);
+                const areaDescription = payloadText(areaRecord, ['Description', 'description']);
+                const subFeatures = uniqueText([
+                    ...toTextList(areaRecord['SubFeatures']),
+                    ...toTextList(areaRecord['sub_features']),
+                    ...toTextList(areaRecord['Features']),
+                    ...toTextList(areaRecord['features']),
+                    ...toTextList(areaRecord['ListingPropertyFeatures']),
+                    ...toTextList(areaRecord['listing_property_features']),
+                ]);
+                await client.query(`INSERT INTO migration.listing_property_areas (
+             listing_id,
+             area_type,
+             count,
+             size,
+             description,
+             sub_features,
+             sort_order
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [
+                    listingId,
+                    areaType,
+                    areaCount !== null ? Math.floor(areaCount) : null,
+                    areaSize,
+                    areaDescription,
+                    subFeatures,
+                    sortOrder,
+                ]);
+                existingAreaTypes.add(areaType.toLowerCase());
                 sortOrder += 1;
             }
         }
@@ -414,7 +889,7 @@ async function loadAssociates() {
               office_number, national_id, ffc_number, kwsa_email, private_email,
               growth_share_sponsor, proposed_growth_share_sponsor, temporary_growth_share_sponsor,
               start_date::text, end_date::text, anniversary_date::text, cap_date::text,
-              total_cap_amount::text, manual_cap::text, agent_split::text
+              total_cap_amount::text, manual_cap, agent_split::text
        FROM migration.associates_prepared`);
         for (const row of rows) {
             const marketCenterLookup = row.market_center_name
@@ -521,7 +996,7 @@ async function loadAssociates() {
                 row.anniversary_date,
                 row.cap_date,
                 row.total_cap_amount ? Number(row.total_cap_amount) : null,
-                row.manual_cap ? Number(row.manual_cap) : null,
+                row.manual_cap ?? null,
                 row.agent_split ? Number(row.agent_split) : null,
             ]);
             if (upsert.rowCount === 0) {
@@ -533,20 +1008,61 @@ async function loadAssociates() {
         ON CONFLICT (source_associate_id)
         DO UPDATE SET core_associate_id = EXCLUDED.core_associate_id, mapped_at = NOW()
         `, [row.source_associate_id, Number(upsert.rows[0].id)]);
+            await syncAssociateCollectionsFromCsvPayload(client, Number(upsert.rows[0].id), row.source_associate_id);
         }
     });
 }
 async function loadListings() {
     await runInTransaction(async (client) => {
-        const { rows } = await client.query(`SELECT source_listing_id, listing_number, status_name, market_center_name, sale_or_rent,
-              address_line, erf_number, unit_number, door_number, estate_name, street_number, street_name, postal_code,
-              suburb, city, province, country, longitude::text, latitude::text, price::text, expiry_date::text,
-              property_title, short_title, property_description, listing_images_json, listing_payload
-       FROM migration.listings_prepared`);
+        const { rows } = await client.query(`SELECT p.source_listing_id, p.listing_number, p.status_name, p.market_center_name, p.sale_or_rent,
+              p.address_line, p.erf_number, p.unit_number, p.door_number, p.estate_name, p.street_number, p.street_name, p.postal_code,
+              p.suburb, p.city, p.province, p.country, p.longitude::text, p.latitude::text, p.price::text, p.expiry_date::text,
+              p.property_title, p.short_title, p.property_description, p.listing_images_json, p.listing_payload,
+              ssms.status_name AS ssms_status_name,
+              ssms.listing_status_tag AS ssms_listing_status_tag,
+              ssms.sale_or_rent AS ssms_sale_or_rent
+       FROM migration.listings_prepared p
+       LEFT JOIN LATERAL (
+         SELECT
+           NULLIF(TRIM(d.status_name), '') AS status_name,
+           NULLIF(TRIM(d.listing_status_tag), '') AS listing_status_tag,
+           NULLIF(TRIM(d.sale_or_rent), '') AS sale_or_rent
+         FROM staging.ssms_listing_details_raw d
+         WHERE (
+           NULLIF(TRIM(d.source_listing_id), '') IS NOT NULL
+           AND p.source_listing_id = NULLIF(TRIM(d.source_listing_id), '')
+         ) OR (
+           NULLIF(TRIM(d.listing_number), '') IS NOT NULL
+           AND p.listing_number = NULLIF(TRIM(d.listing_number), '')
+         )
+         ORDER BY
+           (NULLIF(TRIM(d.source_listing_id), '') = p.source_listing_id) DESC,
+           (NULLIF(TRIM(d.listing_status_tag), '') IS NOT NULL) DESC,
+           (NULLIF(TRIM(d.status_name), '') IS NOT NULL) DESC
+         LIMIT 1
+       ) ssms ON TRUE`);
         for (const row of rows) {
             const payload = payloadRecord(row.listing_payload);
+            const resolvedStatusName = row.ssms_status_name ?? row.status_name;
+            const resolvedListingStatusTag = row.ssms_listing_status_tag
+                ?? payloadText(payload, ['listing_status_tag', 'ListingStatusTag', 'status_tag', 'StatusTag']);
+            const resolvedSaleOrRent = row.ssms_sale_or_rent
+                ?? row.sale_or_rent
+                ?? payloadText(payload, ['sale_or_rent', 'SaleOrRent', 'SaleType']);
+            const resolvedListingPayload = {
+                ...payload,
+                ...(resolvedStatusName ? { status_name: resolvedStatusName } : {}),
+                ...(resolvedListingStatusTag ? { listing_status_tag: resolvedListingStatusTag } : {}),
+                ...(resolvedSaleOrRent ? { sale_or_rent: resolvedSaleOrRent } : {}),
+            };
             const signedDate = payloadDate(payload, ['SignedDate', 'signed_date']);
             const onMarketSinceDate = payloadDate(payload, ['OnMarketSinceDate', 'OnMarketSince', 'on_market_since_date', 'ListDate']);
+            const propertyType = payloadText(payload, ['property_type', 'PropertyType', 'ListingType', 'listing_type']);
+            const propertySubType = payloadText(payload, ['property_sub_type', 'PropertySubType', 'SubType']);
+            const bedrooms = payloadNumber(payload, ['BedroomCount', 'bedroom_count', 'Bedrooms', 'bedrooms']);
+            const bathrooms = payloadNumber(payload, ['BathroomCount', 'bathroom_count', 'Bathrooms', 'bathrooms']);
+            const garages = payloadNumber(payload, ['GarageCount', 'garage_count', 'Garages', 'garages']);
+            const parking = payloadNumber(payload, ['ParkingCount', 'parking_count', 'ParkingBays', 'parking_bays']);
             const ratesAndTaxes = payloadNumber(payload, ['RatesandTaxes', 'RatesAndTaxes', 'rates_and_taxes']);
             const monthlyLevy = payloadNumber(payload, ['MonthlyLevy', 'monthly_levy']);
             const erfSize = payloadNumber(payload, ['ErfSize', 'erf_size']);
@@ -568,6 +1084,7 @@ async function loadListings() {
           market_center_id,
           listing_number,
           status_name,
+          listing_status_tag,
           sale_or_rent,
           address_line,
           erf_number,
@@ -594,20 +1111,27 @@ async function loadListings() {
           property_title,
           short_title,
           property_description,
+          property_type,
+          property_sub_type,
+          bedrooms,
+          bathrooms,
+          garages,
+          parking,
           listing_images_json,
           listing_payload,
           updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::numeric,$20::numeric,$21::numeric,$22::date,$23::date,$24::date,$25::numeric,$26::numeric,$27::numeric,$28::numeric,$29,$30,$31,$32::jsonb,$33::jsonb,NOW())
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::numeric,$21::numeric,$22::numeric,$23::date,$24::date,$25::date,$26::numeric,$27::numeric,$28::numeric,$29::numeric,$30,$31,$32,$33,$34,$35::int,$36::int,$37::int,$38::int,$39::jsonb,$40::jsonb,NOW())
         ON CONFLICT (source_listing_id)
-        DO ${preserveExistingCoreData ? 'NOTHING' : 'UPDATE SET\n          source_market_center_id = EXCLUDED.source_market_center_id,\n          market_center_id = EXCLUDED.market_center_id,\n          listing_number = EXCLUDED.listing_number,\n          status_name = EXCLUDED.status_name,\n          sale_or_rent = EXCLUDED.sale_or_rent,\n          address_line = EXCLUDED.address_line,\n          erf_number = EXCLUDED.erf_number,\n          unit_number = EXCLUDED.unit_number,\n          door_number = EXCLUDED.door_number,\n          estate_name = EXCLUDED.estate_name,\n          street_number = EXCLUDED.street_number,\n          street_name = EXCLUDED.street_name,\n          postal_code = EXCLUDED.postal_code,\n          suburb = EXCLUDED.suburb,\n          city = EXCLUDED.city,\n          province = EXCLUDED.province,\n          country = EXCLUDED.country,\n          longitude = EXCLUDED.longitude,\n          latitude = EXCLUDED.latitude,\n          price = EXCLUDED.price,\n          expiry_date = EXCLUDED.expiry_date,\n          signed_date = EXCLUDED.signed_date,\n          on_market_since_date = EXCLUDED.on_market_since_date,\n          rates_and_taxes = EXCLUDED.rates_and_taxes,\n          monthly_levy = EXCLUDED.monthly_levy,\n          erf_size = EXCLUDED.erf_size,\n          floor_area = EXCLUDED.floor_area,\n          property_title = EXCLUDED.property_title,\n          short_title = EXCLUDED.short_title,\n          property_description = EXCLUDED.property_description,\n          listing_images_json = EXCLUDED.listing_images_json,\n          listing_payload = EXCLUDED.listing_payload,\n          updated_at = NOW()'}
+        DO ${preserveExistingCoreData ? 'NOTHING' : 'UPDATE SET\n          source_market_center_id = EXCLUDED.source_market_center_id,\n          market_center_id = EXCLUDED.market_center_id,\n          listing_number = EXCLUDED.listing_number,\n          status_name = EXCLUDED.status_name,\n          listing_status_tag = EXCLUDED.listing_status_tag,\n          sale_or_rent = EXCLUDED.sale_or_rent,\n          address_line = EXCLUDED.address_line,\n          erf_number = EXCLUDED.erf_number,\n          unit_number = EXCLUDED.unit_number,\n          door_number = EXCLUDED.door_number,\n          estate_name = EXCLUDED.estate_name,\n          street_number = EXCLUDED.street_number,\n          street_name = EXCLUDED.street_name,\n          postal_code = EXCLUDED.postal_code,\n          suburb = EXCLUDED.suburb,\n          city = EXCLUDED.city,\n          province = EXCLUDED.province,\n          country = EXCLUDED.country,\n          longitude = EXCLUDED.longitude,\n          latitude = EXCLUDED.latitude,\n          price = COALESCE(EXCLUDED.price, migration.core_listings.price),\n          expiry_date = EXCLUDED.expiry_date,\n          signed_date = COALESCE(EXCLUDED.signed_date, migration.core_listings.signed_date),\n          on_market_since_date = COALESCE(EXCLUDED.on_market_since_date, migration.core_listings.on_market_since_date),\n          rates_and_taxes = EXCLUDED.rates_and_taxes,\n          monthly_levy = EXCLUDED.monthly_levy,\n          erf_size = COALESCE(EXCLUDED.erf_size, migration.core_listings.erf_size),\n          floor_area = COALESCE(EXCLUDED.floor_area, migration.core_listings.floor_area),\n          property_title = EXCLUDED.property_title,\n          short_title = EXCLUDED.short_title,\n          property_description = EXCLUDED.property_description,\n          property_type = COALESCE(EXCLUDED.property_type, migration.core_listings.property_type),\n          property_sub_type = COALESCE(EXCLUDED.property_sub_type, migration.core_listings.property_sub_type),\n          bedrooms = COALESCE(EXCLUDED.bedrooms, migration.core_listings.bedrooms),\n          bathrooms = COALESCE(EXCLUDED.bathrooms, migration.core_listings.bathrooms),\n          garages = COALESCE(EXCLUDED.garages, migration.core_listings.garages),\n          parking = COALESCE(EXCLUDED.parking, migration.core_listings.parking),\n          listing_images_json = EXCLUDED.listing_images_json,\n          listing_payload = EXCLUDED.listing_payload,\n          updated_at = NOW()'}
         RETURNING id
         `, [
                 row.source_listing_id,
                 sourceMarketCenterId,
                 marketCenterId,
                 row.listing_number,
-                row.status_name,
-                row.sale_or_rent,
+                resolvedStatusName,
+                resolvedListingStatusTag,
+                resolvedSaleOrRent,
                 row.address_line,
                 row.erf_number,
                 row.unit_number,
@@ -633,8 +1157,14 @@ async function loadListings() {
                 row.property_title,
                 row.short_title,
                 row.property_description,
+                propertyType,
+                propertySubType,
+                bedrooms,
+                bathrooms,
+                garages,
+                parking,
                 JSON.stringify(row.listing_images_json ?? []),
-                JSON.stringify(row.listing_payload ?? {}),
+                JSON.stringify(resolvedListingPayload),
             ]);
             if (upsert.rowCount === 0) {
                 upsert = await client.query(`SELECT id::text AS id FROM migration.core_listings WHERE source_listing_id = $1 LIMIT 1`, [row.source_listing_id]);
@@ -745,14 +1275,22 @@ async function loadTransactions() {
     });
 }
 async function main() {
+    const mode = parseLoadMode(process.argv.slice(2));
     if (preserveExistingCoreData) {
         console.log('PRESERVE_CORE_EDITS=true -> existing core records will not be overwritten by loadCore.');
+    }
+    if (mode === 'associates') {
+        await loadAssociates();
+        console.log('Loaded associates prepared dataset into migration.core_associates only.');
+        return;
     }
     await clearRejections();
     await loadMarketCenters();
     await loadTeams();
     await loadAssociates();
     await loadListings();
+    await syncListingCoreDetailsFromPayload();
+    await syncListingFeaturesFromPayload();
     await syncListingPropertyAreasFromPayload();
     await syncListingAgentsFromPayload();
     await loadTransactions();

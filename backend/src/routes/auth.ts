@@ -457,6 +457,7 @@ router.get('/contexts', requireAuthNoAssociate, async (req, res) => {
        FROM migration.core_associates a
        LEFT JOIN migration.core_market_centers mc
          ON mc.source_market_center_id = a.source_market_center_id
+         AND LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1')
        LEFT JOIN migration.core_teams ct
          ON ct.source_team_id = a.source_team_id
        WHERE a.id = $1
@@ -478,6 +479,7 @@ router.get('/contexts', requireAuthNoAssociate, async (req, res) => {
                FROM migration.associate_admin_market_centers amc
                LEFT JOIN migration.core_market_centers mc
                  ON mc.source_market_center_id = amc.source_market_center_id
+                 AND LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1')
               WHERE amc.associate_id = $1`,
             [assoc.id]
           ),
@@ -540,7 +542,7 @@ router.get('/contexts', requireAuthNoAssociate, async (req, res) => {
         label: `Office Admin${assoc.market_center_name ? ` — ${assoc.market_center_name}` : ''}`,
         role: 'Office Admin',
         marketCenter: assoc.market_center_name ?? null,
-        marketCenterId: assoc.market_center_id ?? assoc.source_market_center_id,
+          marketCenterId: assoc.source_market_center_id,
         associateId: assoc.id,
       });
     }
@@ -555,7 +557,7 @@ router.get('/contexts', requireAuthNoAssociate, async (req, res) => {
         label: `Office Admin${mc.market_center_name ? ` — ${mc.market_center_name}` : ` — ${mcId}`}`,
         role: 'Office Admin',
         marketCenter: mc.market_center_name ?? null,
-        marketCenterId: mc.market_center_id ?? mcId,
+          marketCenterId: mc.source_market_center_id,
         associateId: assoc?.id ?? null,
       });
     }

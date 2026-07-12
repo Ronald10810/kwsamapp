@@ -3,12 +3,17 @@ import multer from 'multer';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import { recomputeAllTransactionAgentCalculations } from '../services/transactionCalculations.js';
+import sharp from 'sharp';
+import { scheduleTransactionAgentRecompute } from '../services/transactionRecomputeQueue.js';
 import { getOptionalPgPool } from '../config/db.js';
 import { ensureLocalUploadDirs, resolveLocalUploadDir, storageConfig } from '../config/storage.js';
 import { uploadToGcs } from '../services/gcsStorage.js';
+import { resolvePermissions } from '../middleware/permissions.js';
+import { clearAssociateAccessCache } from '../middleware/requireAuth.js';
+import { getTodayInAppTimeZone } from '../utils/timeZone.js';
 const router = Router();
 const pool = getOptionalPgPool();
+const LOCAL_ASSOCIATE_SUSPENSION_ENABLED = String(process.env.LOCAL_ASSOCIATE_SUSPENSION_ENABLED ?? 'false').trim().toLowerCase() === 'true';
 // File upload setup
 const imagesDir = resolveLocalUploadDir('images');
 const documentsDir = resolveLocalUploadDir('documents');
@@ -23,17 +28,8 @@ async function ensureUploadDirs() {
 }
 // Initialize directories on module load
 await ensureUploadDirs();
-// Configure multer storage — use memory storage when GCS is enabled
-const imageStorageEngine = storageConfig.localUploadsEnabled
-    ? multer.diskStorage({
-        destination: imagesDir,
-        filename: (_req, file, cb) => {
-            const uniqueSuffix = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
-            const ext = path.extname(file.originalname);
-            cb(null, `image-${uniqueSuffix}${ext}`);
-        },
-    })
-    : multer.memoryStorage();
+// Image uploads must be processed by Sharp before persisting, so keep them in memory.
+const imageStorageEngine = multer.memoryStorage();
 const documentStorageEngine = storageConfig.localUploadsEnabled
     ? multer.diskStorage({
         destination: documentsDir,
@@ -46,13 +42,14 @@ const documentStorageEngine = storageConfig.localUploadsEnabled
     : multer.memoryStorage();
 const uploadImage = multer({
     storage: imageStorageEngine,
-    limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
+    limits: { fileSize: 2 * 1024 * 1024 }, // 2MB - aligned with portal requirements
     fileFilter: (_req, file, cb) => {
-        if (file.mimetype.startsWith('image/')) {
+        // Portal requirement: JPEG only
+        if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg') {
             cb(null, true);
         }
         else {
-            cb(new Error('Only image files are allowed'));
+            cb(new Error('Only JPEG images are allowed. Please convert your image to JPEG format.'));
         }
     },
 });
@@ -69,6 +66,54 @@ const uploadDocument = multer({
         }
     },
 });
+// Helper function to compress and validate agent image (1080x1080px JPEG, max 2MB for portals)
+async function processAgentImage(inputBuffer) {
+    const maxDimension = 1080;
+    const maxFileSize = 2 * 1024 * 1024; // 2MB
+    try {
+        // Get image metadata
+        const metadata = await sharp(inputBuffer).metadata();
+        const width = metadata.width ?? 0;
+        const height = metadata.height ?? 0;
+        if (width === 0 || height === 0) {
+            throw new Error('Invalid image dimensions');
+        }
+        // Check if image needs resizing to square
+        let pipeline = sharp(inputBuffer);
+        // If not square, resize and add white background to make it square
+        if (width !== height) {
+            const size = Math.max(width, height);
+            pipeline = pipeline
+                .resize(size, size, {
+                fit: 'contain',
+                background: { r: 255, g: 255, b: 255, alpha: 1 },
+            });
+        }
+        // Resize to 1080x1080 if larger
+        if (width > maxDimension || height > maxDimension) {
+            pipeline = pipeline.resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true });
+        }
+        // Convert to JPEG with high quality but compressed for portals
+        const compressedBuffer = await pipeline
+            .jpeg({ quality: 85, progressive: true })
+            .toBuffer();
+        if (compressedBuffer.length > maxFileSize) {
+            throw new Error(`Compressed image exceeds 2MB limit (${(compressedBuffer.length / 1024 / 1024).toFixed(2)}MB). Please use a lower resolution image.`);
+        }
+        return {
+            buffer: compressedBuffer,
+            width: maxDimension,
+            height: maxDimension,
+            size: compressedBuffer.length,
+        };
+    }
+    catch (error) {
+        if (error instanceof Error) {
+            throw new Error(`Image processing failed: ${error.message}`);
+        }
+        throw error;
+    }
+}
 async function runUploadMiddleware(req, res, middleware) {
     await new Promise((resolve, reject) => {
         middleware(req, res, (error) => {
@@ -85,6 +130,13 @@ function toText(value) {
         return null;
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
+}
+function toEmail(value) {
+    const text = toText(value);
+    if (!text)
+        return null;
+    const compact = text.replace(/\s+/g, '');
+    return compact.length > 0 ? compact : null;
 }
 function toNumber(value) {
     if (typeof value === 'number' && Number.isFinite(value))
@@ -104,6 +156,17 @@ function toDate(value) {
         return null;
     return d.toISOString().slice(0, 10);
 }
+function firstOfNextMonthFromDateText(dateText) {
+    const [yearText, monthText] = dateText.split('-');
+    const year = Number(yearText);
+    const month = Number(monthText);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
+        return dateText;
+    }
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? year + 1 : year;
+    return `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+}
 function toBool(value) {
     if (typeof value === 'boolean')
         return value;
@@ -115,6 +178,29 @@ function toBool(value) {
         return value === 1;
     return false;
 }
+function toNullableBool(value) {
+    if (value === null || value === undefined)
+        return null;
+    if (typeof value === 'boolean')
+        return value;
+    if (typeof value === 'number') {
+        if (value === 1)
+            return true;
+        if (value === 0)
+            return false;
+        return null;
+    }
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (!normalized || normalized === 'not applicable' || normalized === 'n/a' || normalized === 'na')
+            return null;
+        if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on')
+            return true;
+        if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off')
+            return false;
+    }
+    return null;
+}
 function toStringArray(value) {
     if (!Array.isArray(value))
         return [];
@@ -122,12 +208,117 @@ function toStringArray(value) {
         .map((entry) => toText(entry))
         .filter((entry) => Boolean(entry));
 }
+function normalizeListKey(value) {
+    return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function uniqueNormalizedStrings(values) {
+    const seen = new Set();
+    const output = [];
+    for (const value of values) {
+        const trimmed = value.trim();
+        if (!trimmed)
+            continue;
+        const key = normalizeListKey(trimmed);
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        output.push(trimmed);
+    }
+    return output;
+}
+function normalizeIdentifier(value) {
+    return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+function resolveEffectiveScopeMarketCenterId(perms) {
+    const value = perms.homeMcId ?? perms.marketCenterId ?? null;
+    return value && value.trim().length > 0 ? value.trim() : null;
+}
+async function resolveMarketCenterScopeMatch(client, targetAssociateId, activeMarketCenterId) {
+    const targetResult = await client.query(`SELECT
+       COALESCE(NULLIF(TRIM(a.source_market_center_id), ''), NULLIF(TRIM(mc.source_market_center_id), '')) AS source_market_center_id,
+       a.market_center_id::text AS market_center_id
+     FROM migration.core_associates a
+     LEFT JOIN migration.core_market_centers mc ON mc.id = a.market_center_id
+     WHERE a.id = $1
+     LIMIT 1`, [targetAssociateId]);
+    const target = targetResult.rows[0];
+    if (!target) {
+        return { allowed: false, notFound: true };
+    }
+    const activeMcRaw = String(activeMarketCenterId ?? '').trim();
+    const activeMcNorm = normalizeIdentifier(activeMcRaw);
+    const targetSourceNorm = normalizeIdentifier(target.source_market_center_id);
+    let activeMcDbId = null;
+    let activeResolvedSourceNorm = '';
+    const activeBySource = await client.query(`SELECT id::text AS id, source_market_center_id
+       FROM migration.core_market_centers
+      WHERE source_market_center_id = $1
+      LIMIT 1`, [activeMcRaw]);
+    if (activeBySource.rows[0]) {
+        activeMcDbId = Number(activeBySource.rows[0].id);
+        activeResolvedSourceNorm = normalizeIdentifier(activeBySource.rows[0].source_market_center_id);
+    }
+    else {
+        const activeById = await client.query(`SELECT id::text AS id, source_market_center_id
+         FROM migration.core_market_centers
+        WHERE id::text = $1
+        LIMIT 1`, [activeMcRaw]);
+        if (activeById.rows[0]) {
+            activeMcDbId = Number(activeById.rows[0].id);
+            activeResolvedSourceNorm = normalizeIdentifier(activeById.rows[0].source_market_center_id);
+        }
+    }
+    const targetMcDbId = target.market_center_id ? Number(target.market_center_id) : null;
+    const sourceMatch = Boolean(targetSourceNorm) && (targetSourceNorm === activeMcNorm
+        || (Boolean(activeResolvedSourceNorm) && targetSourceNorm === activeResolvedSourceNorm));
+    const dbIdMatch = activeMcDbId !== null && targetMcDbId !== null && activeMcDbId === targetMcDbId;
+    return { allowed: sourceMatch || dbIdMatch, notFound: false };
+}
+async function resolveAdminMarketCenterIds(client, values) {
+    const requested = uniqueNormalizedStrings(values);
+    if (requested.length === 0)
+        return [];
+    const result = await client.query(`SELECT
+       input.raw_value,
+       resolved.source_market_center_id
+     FROM UNNEST($1::text[]) AS input(raw_value)
+     LEFT JOIN LATERAL (
+       SELECT mc.source_market_center_id, mc.id
+       FROM migration.core_market_centers mc
+       WHERE LOWER(TRIM(COALESCE(mc.source_market_center_id, ''))) = LOWER(TRIM(input.raw_value))
+          OR LOWER(TRIM(COALESCE(mc.name, ''))) = LOWER(TRIM(input.raw_value))
+       ORDER BY
+         CASE
+           WHEN LOWER(TRIM(COALESCE(mc.source_market_center_id, ''))) = LOWER(TRIM(input.raw_value)) THEN 0
+           ELSE 1
+         END,
+         mc.id ASC
+       LIMIT 1
+     ) resolved ON TRUE`, [requested]);
+    return uniqueNormalizedStrings(result.rows.map((row) => (row.source_market_center_id ?? row.raw_value).trim()).filter(Boolean));
+}
 /** Strip all whitespace from a phone number string before persisting. */
 function toPhone(value) {
     const text = toText(value);
     if (!text)
         return null;
     return text.replace(/\s+/g, '') || null;
+}
+function normalizeProperty24Fields(property24OptIn, rawAgentProperty24Id, rawProperty24Status) {
+    if (!property24OptIn) {
+        return {
+            agentProperty24Id: null,
+            property24Status: 'Not opted in',
+        };
+    }
+    const directId = toText(rawAgentProperty24Id);
+    const statusText = toText(rawProperty24Status);
+    const statusNumericId = statusText && /^\d+$/.test(statusText) ? statusText : null;
+    const agentProperty24Id = directId ?? statusNumericId;
+    return {
+        agentProperty24Id,
+        property24Status: statusText ?? (agentProperty24Id ? 'Registered' : 'Pending registration'),
+    };
 }
 function toSocialMediaEntries(value) {
     if (!Array.isArray(value))
@@ -172,13 +363,141 @@ function buildManualAssociateId() {
     return `MAN-ASSOC-${ts}-${rand}`;
 }
 const HOME_TRANSACTION_STATUSES = ['Start', 'Working', 'Submitted', 'Pending', 'Registered'];
+async function ensureAssociateAccessSuspensionTable() {
+    if (!pool || !LOCAL_ASSOCIATE_SUSPENSION_ENABLED)
+        return;
+    await pool.query(`
+    CREATE TABLE IF NOT EXISTS migration.associate_access_suspension (
+      associate_id BIGINT PRIMARY KEY REFERENCES migration.core_associates(id) ON DELETE CASCADE,
+      is_temporarily_suspended BOOLEAN NOT NULL DEFAULT false,
+      suspended_reason TEXT NULL,
+      suspended_by_email TEXT NULL,
+      suspended_at TIMESTAMPTZ NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+async function getMappAccessPayload(associateId) {
+    if (!pool || !LOCAL_ASSOCIATE_SUSPENSION_ENABLED) {
+        return {
+            feature_enabled: LOCAL_ASSOCIATE_SUSPENSION_ENABLED,
+            is_temporarily_suspended: false,
+            suspended_reason: null,
+            suspended_by_email: null,
+            suspended_at: null,
+        };
+    }
+    await ensureAssociateAccessSuspensionTable();
+    const suspension = await pool.query(`
+    SELECT
+      is_temporarily_suspended,
+      suspended_reason,
+      suspended_by_email,
+      suspended_at::text
+    FROM migration.associate_access_suspension
+    WHERE associate_id = $1
+    LIMIT 1
+    `, [associateId]);
+    const row = suspension.rows[0];
+    return {
+        feature_enabled: LOCAL_ASSOCIATE_SUSPENSION_ENABLED,
+        is_temporarily_suspended: Boolean(row?.is_temporarily_suspended),
+        suspended_reason: row?.suspended_reason ?? null,
+        suspended_by_email: row?.suspended_by_email ?? null,
+        suspended_at: row?.suspended_at ?? null,
+    };
+}
+async function resolveCurrentAssociateByEmail(userEmail) {
+    if (!pool)
+        return null;
+    const associateResult = await pool.query(`
+    SELECT a.id::text, a.kwuid
+    FROM migration.core_associates a
+    WHERE LOWER(TRIM(COALESCE(a.kwsa_email, ''))) = $1
+       OR (
+         LOWER(TRIM(COALESCE(a.email, ''))) = $1
+         AND LOWER(TRIM(COALESCE(a.email, ''))) LIKE '%@kwsa.co.za'
+       )
+    ORDER BY
+      CASE
+        WHEN LOWER(TRIM(COALESCE(a.kwsa_email, ''))) = $1 THEN 0
+        ELSE 1
+      END,
+      a.updated_at DESC,
+      a.id DESC
+    LIMIT 1
+    `, [userEmail]);
+    const row = associateResult.rows[0];
+    if (!row)
+        return null;
+    const id = Number(row.id);
+    if (!Number.isFinite(id))
+        return null;
+    return { id, kwuid: row.kwuid ?? null };
+}
+async function fetchFeaturedListingsForAssociate(associateId) {
+    if (!pool)
+        return [];
+    const result = await pool.query(`
+    SELECT
+      cl.id::text AS listing_id,
+      cl.listing_number,
+      cl.status_name,
+      cl.listing_status_tag,
+      cl.address_line,
+      cl.suburb,
+      cl.city,
+      cl.price::text,
+      CASE
+        WHEN cl.listing_images_json IS NOT NULL
+          AND cl.listing_images_json::text NOT IN ('[]', 'null', '')
+        THEN (
+          SELECT value
+          FROM jsonb_array_elements_text(cl.listing_images_json) AS value
+          WHERE COALESCE(TRIM(value), '') <> ''
+          LIMIT 1
+        )
+        ELSE (
+          SELECT li.file_url
+          FROM migration.listing_images li
+          WHERE li.listing_id = cl.id
+            AND COALESCE(TRIM(li.file_url), '') <> ''
+          ORDER BY li.sort_order ASC, li.id ASC
+          LIMIT 1
+        )
+      END AS main_image_url
+    FROM migration.associate_featured_listings afl
+    INNER JOIN migration.core_listings cl ON cl.id = afl.listing_id
+    WHERE afl.associate_id = $1
+    ORDER BY afl.id ASC
+    `, [associateId]);
+    return result.rows
+        .map((row) => {
+        const listingId = Number(row.listing_id);
+        if (!Number.isFinite(listingId))
+            return null;
+        return {
+            listingId,
+            listingNumber: row.listing_number,
+            statusName: row.status_name,
+            listingStatusTag: row.listing_status_tag,
+            addressLine: row.address_line,
+            suburb: row.suburb,
+            city: row.city,
+            price: row.price !== null ? Number(row.price) : null,
+            mainImageUrl: row.main_image_url,
+            selected: true,
+        };
+    })
+        .filter((row) => Boolean(row));
+}
 async function saveCollections(client, associateId, body) {
     const socialMedia = toSocialMediaEntries(body.social_media);
-    const roles = toStringArray(body.roles);
-    const jobTitles = toStringArray(body.job_titles);
-    const serviceCommunities = toStringArray(body.service_communities);
-    const adminMarketCenters = toStringArray(body.admin_market_centers);
-    const adminTeams = toStringArray(body.admin_teams);
+    const roles = uniqueNormalizedStrings(toStringArray(body.roles));
+    const jobTitles = uniqueNormalizedStrings(toStringArray(body.job_titles));
+    const serviceCommunities = uniqueNormalizedStrings(toStringArray(body.service_communities));
+    const adminMarketCenters = await resolveAdminMarketCenterIds(client, toStringArray(body.admin_market_centers));
+    const adminTeams = uniqueNormalizedStrings(toStringArray(body.admin_teams));
     const commissionNotes = toStringArray(body.commission_notes);
     const dateNotes = toStringArray(body.date_notes);
     const documentNotes = toStringArray(body.document_notes);
@@ -235,9 +554,11 @@ router.get('/options', async (_req, res) => {
     try {
         const result = await pool.query(`
       SELECT
+        a.id::text AS id,
         a.source_associate_id,
         a.full_name,
         a.source_market_center_id,
+        a.market_center_id::text AS market_center_id,
         mc.name AS market_center_name
       FROM migration.core_associates a
       LEFT JOIN migration.core_market_centers mc ON mc.id = a.market_center_id
@@ -245,9 +566,11 @@ router.get('/options', async (_req, res) => {
       `);
         return res.json({
             items: result.rows.map((row) => ({
+                id: row.id,
                 source_associate_id: row.source_associate_id,
                 full_name: row.full_name,
                 source_market_center_id: row.source_market_center_id,
+                market_center_id: row.market_center_id,
                 market_center_name: row.market_center_name,
             })),
         });
@@ -265,27 +588,39 @@ router.get('/me/home', async (req, res) => {
     if (!userEmail) {
         return res.status(401).json({ error: 'Unauthorised' });
     }
+    const activeContextId = req.headers['x-active-context']?.trim().toLowerCase() ?? '';
+    const isTeamContext = /^(lead_agent|team_agent|team_admin)(_.+)?$/.test(activeContextId);
     try {
         const associateResult = await pool.query(`
       SELECT
         a.id::text,
         a.source_associate_id,
+        a.kwuid,
         a.full_name,
         a.status_name,
+        a.listing_approval_required,
         a.kwsa_email,
         a.private_email,
         a.email,
         a.source_market_center_id,
-        a.source_team_id
+        a.source_team_id,
+        ct.id::text AS team_id,
+        ct.name AS team_name,
+        mc.name AS market_center_name,
+        mc.logo_image_url AS market_center_logo_image_url,
+        mc.document_logo_image_url AS market_center_document_logo_image_url
       FROM migration.core_associates a
+      LEFT JOIN migration.core_teams ct ON ct.source_team_id = a.source_team_id
+      LEFT JOIN migration.core_market_centers mc ON mc.id = a.market_center_id
       WHERE LOWER(TRIM(COALESCE(a.kwsa_email, ''))) = $1
-         OR LOWER(TRIM(COALESCE(a.private_email, ''))) = $1
-         OR LOWER(TRIM(COALESCE(a.email, ''))) = $1
+         OR (
+           LOWER(TRIM(COALESCE(a.email, ''))) = $1
+           AND LOWER(TRIM(COALESCE(a.email, ''))) LIKE '%@kwsa.co.za'
+         )
       ORDER BY
         CASE
           WHEN LOWER(TRIM(COALESCE(a.kwsa_email, ''))) = $1 THEN 0
-          WHEN LOWER(TRIM(COALESCE(a.private_email, ''))) = $1 THEN 1
-          ELSE 2
+          ELSE 1
         END,
         a.updated_at DESC,
         a.id DESC
@@ -302,6 +637,9 @@ router.get('/me/home', async (req, res) => {
                 generated_at: new Date().toISOString(),
                 email: userEmail,
                 associate: null,
+                market_center: null,
+                cap_type: 'individual',
+                team_name: null,
                 cap: {
                     period_start_date: null,
                     period_end_date: null,
@@ -314,50 +652,370 @@ router.get('/me/home', async (req, res) => {
                     total: 0,
                     items: [],
                 },
+                registered_mtd: {
+                    total_transactions: 0,
+                    total_gci: 0,
+                },
                 transactions_by_status: statusDefaults,
             });
         }
         const associateId = Number(associate.id);
-        const [capResult, listingCountResult, listingsResult, txStatusResult] = await Promise.all([
-            pool.query(`
-        WITH cycle_candidates AS (
+        let resolvedTeamSourceId = associate.source_team_id ?? null;
+        let resolvedTeamDbId = associate.team_id ? Number(associate.team_id) : null;
+        let resolvedTeamName = associate.team_name ?? null;
+        if (isTeamContext && Number.isFinite(associateId)) {
+            const contextMatch = /^(lead_agent|team_agent|team_admin)(?:_(.+))?$/.exec(activeContextId);
+            const teamToken = contextMatch?.[2]?.trim() ?? '';
+            const allowedTeamsResult = await pool.query(`WITH allowed_source_teams AS (
+           SELECT source_team_id
+           FROM migration.core_associates
+           WHERE id = $1::bigint
+             AND source_team_id IS NOT NULL
+           UNION
+           SELECT source_team_id
+           FROM migration.associate_admin_teams
+           WHERE associate_id = $1::bigint
+         )
+         SELECT
+           t.source_team_id,
+           t.id::text AS team_db_id,
+           t.name AS team_name
+         FROM migration.core_teams t
+         INNER JOIN allowed_source_teams a ON a.source_team_id = t.source_team_id`, [associateId]);
+            const normalize = (value) => (value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+            const normalizedToken = normalize(teamToken);
+            const matchedTeam = normalizedToken
+                ? allowedTeamsResult.rows.find((row) => normalize(row.source_team_id) === normalizedToken || normalize(row.team_db_id) === normalizedToken)
+                : allowedTeamsResult.rows.find((row) => (row.source_team_id ?? '').trim().length > 0);
+            if (matchedTeam) {
+                resolvedTeamSourceId = matchedTeam.source_team_id ?? resolvedTeamSourceId;
+                resolvedTeamDbId = matchedTeam.team_db_id ? Number(matchedTeam.team_db_id) : resolvedTeamDbId;
+                resolvedTeamName = matchedTeam.team_name ?? resolvedTeamName;
+            }
+        }
+        const useTeamCap = isTeamContext && !!resolvedTeamSourceId;
+        // ── TEAM CAP BRANCH ────────────────────────────────────────────────────
+        if (useTeamCap) {
+            const [teamCapResult, listingCountResult, listingsResult, txStatusResult, registeredMtdResult] = await Promise.all([
+                pool.query(`
+          WITH cap_base AS (
+            SELECT
+              ca.id AS associate_id,
+              ca.cap_date,
+              GREATEST(COALESCE(ca.cap, 0), 0)::numeric(18,2) AS associate_cap_amount,
+              CASE
+                WHEN ca.cap_date IS NULL THEN NULL::date
+                ELSE make_date(
+                  EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                  EXTRACT(MONTH FROM ca.cap_date)::int,
+                  EXTRACT(DAY FROM ca.cap_date)::int
+                )
+              END AS anniversary_this_year
+            FROM migration.core_associates ca
+            WHERE ca.team_id = $1
+          ),
+          cycle_windows AS (
+            SELECT
+              cb.associate_id,
+              cb.cap_date,
+              cb.associate_cap_amount,
+              CASE
+                WHEN cb.cap_date IS NULL THEN NULL::date
+                WHEN cb.anniversary_this_year >= CURRENT_DATE THEN cb.anniversary_this_year
+                ELSE (cb.anniversary_this_year + INTERVAL '1 year')::date
+              END AS next_cap_date
+            FROM cap_base cb
+          ),
+          latest_caps AS (
+            SELECT
+              tac.associate_id,
+              COALESCE(tac.cap_amount, 0) AS cap_amount,
+              COALESCE(tac.cap_remaining, 0) AS cap_remaining,
+              tac.cap_cycle_end_date,
+              ROW_NUMBER() OVER (
+                PARTITION BY tac.associate_id
+                ORDER BY tac.effective_reporting_date DESC NULLS LAST, tac.updated_at DESC, tac.id DESC
+              ) AS rn
+            FROM migration.transaction_agent_calculations tac
+            WHERE tac.associate_id IS NOT NULL
+          ),
+          latest_cycle_registered_caps AS (
+            SELECT
+              tac.associate_id,
+              COALESCE(tac.cap_amount, 0) AS cap_amount,
+              COALESCE(tac.cap_remaining, 0) AS cap_remaining,
+              ROW_NUMBER() OVER (
+                PARTITION BY tac.associate_id
+                ORDER BY tac.effective_reporting_date DESC NULLS LAST, tac.updated_at DESC, tac.id DESC
+              ) AS rn
+            FROM migration.transaction_agent_calculations tac
+            INNER JOIN cycle_windows cw ON cw.associate_id = tac.associate_id
+            WHERE tac.associate_id IS NOT NULL
+              AND tac.is_registered = true
+              AND cw.next_cap_date IS NOT NULL
+              AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
+              AND tac.effective_reporting_date::date < cw.next_cap_date
+          ),
+          associate_base AS (
+            SELECT
+              ca.id,
+              ca.team_id,
+              COALESCE(cw.next_cap_date, ca.cap_date, lc.cap_cycle_end_date) AS cap_date
+            FROM migration.core_associates ca
+            LEFT JOIN cycle_windows cw ON cw.associate_id = ca.id
+            LEFT JOIN latest_caps lc ON lc.associate_id = ca.id AND lc.rn = 1
+            LEFT JOIN latest_cycle_registered_caps lrc ON lrc.associate_id = ca.id AND lrc.rn = 1
+            WHERE ca.team_id = $1
+              AND LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1')
+          ),
+          latest_team_cap AS (
+            SELECT
+              tc.team_id,
+              COALESCE(tc.team_cap_amount, 0)::numeric(18,2) AS team_cap_amount,
+              tc.cap_year,
+              ROW_NUMBER() OVER (
+                PARTITION BY tc.team_id
+                ORDER BY tc.cap_year DESC NULLS LAST, tc.id DESC
+              ) AS rn
+            FROM migration.team_caps tc
+            WHERE tc.team_id = $1
+          ),
+          team_member_counts AS (
+            SELECT
+              ab.team_id,
+              MIN(ab.cap_date) AS cap_date
+            FROM associate_base ab
+            WHERE ab.team_id IS NOT NULL
+            GROUP BY ab.team_id
+          ),
+          team_base AS (
+            SELECT
+              t.id AS team_id,
+              GREATEST(COALESCE(ltc.team_cap_amount, 0), 0)::numeric(18,2) AS cap_amount,
+              ltc.cap_year,
+              tmc.cap_date
+            FROM migration.core_teams t
+            INNER JOIN team_member_counts tmc ON tmc.team_id = t.id
+            LEFT JOIN latest_team_cap ltc ON ltc.team_id = t.id AND ltc.rn = 1
+            WHERE t.id = $1
+            GROUP BY t.id, ltc.team_cap_amount, ltc.cap_year, tmc.cap_date
+          ),
+          team_achieved AS (
+            SELECT
+              tb.team_id,
+              COALESCE(SUM(tac.market_center_dollar), 0)::text AS team_cap_achieved
+            FROM team_base tb
+            INNER JOIN migration.core_associates ca ON ca.team_id = tb.team_id
+            INNER JOIN migration.transaction_agent_calculations tac ON tac.associate_id = ca.id
+            WHERE tac.is_registered = true
+              AND (
+                tb.cap_date IS NULL
+                OR (
+                  tac.effective_reporting_date::date >= (tb.cap_date - INTERVAL '1 year')::date
+                  AND tac.effective_reporting_date::date < tb.cap_date
+                )
+              )
+            GROUP BY tb.team_id
+          )
           SELECT
-            tac.cap_cycle_start_date,
-            tac.cap_cycle_end_date,
-            MAX(tac.cap_amount) AS cap_amount,
-            MAX(tac.effective_reporting_date) AS latest_effective_date,
+            tb.cap_year::text,
+            tb.cap_amount::text AS team_cap_amount,
+            tb.cap_date::text AS cap_date,
             CASE
-              WHEN tac.cap_cycle_start_date IS NOT NULL
-               AND tac.cap_cycle_end_date IS NOT NULL
-               AND CURRENT_DATE BETWEEN tac.cap_cycle_start_date AND tac.cap_cycle_end_date
-                THEN 1
-              ELSE 0
-            END AS current_cycle_rank
+              WHEN tb.cap_date IS NULL THEN NULL
+              ELSE (tb.cap_date - INTERVAL '1 year')::date::text
+            END AS period_start_date,
+            CASE
+              WHEN tb.cap_date IS NULL THEN NULL
+              ELSE (tb.cap_date - INTERVAL '1 day')::date::text
+            END AS period_end_date,
+            COALESCE(ta.team_cap_achieved, '0') AS team_cap_achieved
+          FROM team_base tb
+          LEFT JOIN team_achieved ta ON ta.team_id = tb.team_id
+          LIMIT 1
+          `, [resolvedTeamDbId]),
+                pool.query(`
+          SELECT COUNT(DISTINCT la.listing_id)::text AS total
+          FROM migration.listing_agents la
+          INNER JOIN migration.core_associates ca ON ca.id = la.associate_id
+          INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
+          WHERE ca.source_team_id = $1
+            AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+          `, [resolvedTeamSourceId]),
+                pool.query(`
+          SELECT
+            cl.id::text,
+            cl.source_listing_id,
+            cl.listing_number,
+            cl.status_name,
+            cl.listing_status_tag,
+            cl.address_line,
+            cl.suburb,
+            cl.city,
+            cl.price::text
+          FROM migration.listing_agents la
+          INNER JOIN migration.core_associates ca ON ca.id = la.associate_id
+          INNER JOIN migration.core_listings cl ON cl.id = la.listing_id
+          WHERE ca.source_team_id = $1
+            AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+          ORDER BY cl.updated_at DESC, cl.id DESC
+          LIMIT 25
+          `, [resolvedTeamSourceId]),
+                pool.query(`
+          SELECT
+            LOWER(TRIM(COALESCE(ct.transaction_status, ''))) AS status_key,
+            COUNT(DISTINCT ct.id)::text AS total_transactions,
+            COALESCE(SUM(COALESCE(tac.transaction_gci_before_fees, tac.gci_after_fees_excl_vat, ct.total_gci, 0)), 0)::text AS total_gci
+          FROM migration.transaction_agents ta
+          INNER JOIN migration.core_associates ca ON ca.id = ta.associate_id
+          INNER JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
+          LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
+          WHERE ca.source_team_id = $1
+            AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date, ct.transaction_date::date) >= date_trunc('month', CURRENT_DATE)::date
+            AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) IN ('start', 'working', 'submitted', 'pending', 'registered')
+          GROUP BY LOWER(TRIM(COALESCE(ct.transaction_status, '')))
+          `, [resolvedTeamSourceId]),
+                pool.query(`
+          SELECT
+            COUNT(DISTINCT ct.id)::text AS total_transactions,
+            COALESCE(SUM(COALESCE(tac.transaction_gci_before_fees, tac.gci_after_fees_excl_vat, ct.total_gci, 0)), 0)::text AS total_gci
+          FROM migration.transaction_agents ta
+          INNER JOIN migration.core_associates ca ON ca.id = ta.associate_id
+          INNER JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
+          LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
+          WHERE ca.source_team_id = $1
+            AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date, ct.transaction_date::date) >= date_trunc('month', CURRENT_DATE)::date
+            AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
+          `, [resolvedTeamSourceId]),
+            ]);
+            const teamCapAmount = Number(teamCapResult.rows[0]?.team_cap_amount ?? 0) || 0;
+            const teamCapAchieved = Number(teamCapResult.rows[0]?.team_cap_achieved ?? 0) || 0;
+            const teamCapRemaining = Math.max(teamCapAmount - teamCapAchieved, 0);
+            const teamProgressPct = teamCapAmount > 0 ? Math.min((teamCapAchieved / teamCapAmount) * 100, 100) : 0;
+            const capYear = teamCapResult.rows[0]?.cap_year ? Number(teamCapResult.rows[0].cap_year) : new Date().getFullYear();
+            const teamPeriodStartDate = teamCapResult.rows[0]?.period_start_date ?? `${capYear}-01-01`;
+            const teamPeriodEndDate = teamCapResult.rows[0]?.period_end_date ?? `${capYear}-12-31`;
+            const registeredMtdRow = registeredMtdResult.rows[0];
+            const statusMap = new Map(statusDefaults.map((entry) => [entry.status.toLowerCase(), entry]));
+            for (const row of txStatusResult.rows) {
+                const current = statusMap.get(row.status_key);
+                if (!current)
+                    continue;
+                current.total_transactions = Number(row.total_transactions ?? 0);
+                current.total_gci = Number(row.total_gci ?? 0);
+            }
+            return res.json({
+                generated_at: new Date().toISOString(),
+                email: userEmail,
+                associate,
+                market_center: {
+                    source_market_center_id: associate.source_market_center_id ?? null,
+                    name: associate.market_center_name ?? null,
+                    logo_image_url: associate.market_center_logo_image_url ?? null,
+                    document_logo_image_url: associate.market_center_document_logo_image_url ?? null,
+                },
+                cap_type: 'team',
+                team_name: resolvedTeamName ?? null,
+                cap: {
+                    period_start_date: teamPeriodStartDate,
+                    period_end_date: teamPeriodEndDate,
+                    total_cap_amount: teamCapAmount,
+                    cap_achieved: teamCapAchieved,
+                    cap_remaining: teamCapRemaining,
+                    progress_pct: Number(teamProgressPct.toFixed(2)),
+                },
+                active_listings: {
+                    total: Number(listingCountResult.rows[0]?.total ?? 0),
+                    items: listingsResult.rows,
+                },
+                registered_mtd: {
+                    total_transactions: Number(registeredMtdRow?.total_transactions ?? 0),
+                    total_gci: Number(registeredMtdRow?.total_gci ?? 0),
+                },
+                transactions_by_status: HOME_TRANSACTION_STATUSES.map((status) => statusMap.get(status.toLowerCase())),
+            });
+        }
+        // ── END TEAM CAP BRANCH ────────────────────────────────────────────────
+        const [capResult, listingCountResult, listingsResult, txStatusResult, registeredMtdResult] = await Promise.all([
+            pool.query(`
+        WITH cap_base AS (
+          SELECT
+            ca.id AS associate_id,
+            ca.cap_date,
+            GREATEST(COALESCE(ca.cap, 0), 0)::numeric(18,2) AS associate_cap_amount,
+            CASE
+              WHEN ca.cap_date IS NULL THEN NULL::date
+              ELSE make_date(
+                EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                EXTRACT(MONTH FROM ca.cap_date)::int,
+                EXTRACT(DAY FROM ca.cap_date)::int
+              )
+            END AS anniversary_this_year
+          FROM migration.core_associates ca
+          WHERE ca.id = $1
+        ),
+        cycle_windows AS (
+          SELECT
+            cb.associate_id,
+            cb.associate_cap_amount,
+            CASE
+              WHEN cb.cap_date IS NULL THEN NULL::date
+              WHEN cb.anniversary_this_year >= CURRENT_DATE THEN cb.anniversary_this_year
+              ELSE (cb.anniversary_this_year + INTERVAL '1 year')::date
+            END AS next_cap_date
+          FROM cap_base cb
+        ),
+        latest_caps AS (
+          SELECT
+            tac.associate_id,
+            COALESCE(tac.cap_amount, 0) AS cap_amount,
+            COALESCE(tac.cap_remaining, 0) AS cap_remaining,
+            ROW_NUMBER() OVER (
+              PARTITION BY tac.associate_id
+              ORDER BY tac.effective_reporting_date DESC NULLS LAST, tac.updated_at DESC, tac.id DESC
+            ) AS rn
           FROM migration.transaction_agent_calculations tac
           WHERE tac.associate_id = $1
-          GROUP BY tac.cap_cycle_start_date, tac.cap_cycle_end_date
         ),
-        chosen_cycle AS (
-          SELECT *
-          FROM cycle_candidates
-          ORDER BY current_cycle_rank DESC,
-                   COALESCE(cap_cycle_end_date, latest_effective_date) DESC NULLS LAST,
-                   latest_effective_date DESC NULLS LAST
-          LIMIT 1
+        latest_cycle_registered_caps AS (
+          SELECT
+            tac.associate_id,
+            COALESCE(tac.cap_amount, 0) AS cap_amount,
+            COALESCE(tac.cap_remaining, 0) AS cap_remaining,
+            ROW_NUMBER() OVER (
+              PARTITION BY tac.associate_id
+              ORDER BY tac.effective_reporting_date DESC NULLS LAST, tac.updated_at DESC, tac.id DESC
+            ) AS rn
+          FROM migration.transaction_agent_calculations tac
+          INNER JOIN cycle_windows cw ON cw.associate_id = tac.associate_id
+          WHERE tac.associate_id = $1
+            AND tac.is_registered = true
+            AND cw.next_cap_date IS NOT NULL
+            AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
+            AND tac.effective_reporting_date::date < cw.next_cap_date
         )
         SELECT
-          tac.cap_cycle_start_date::text,
-          tac.cap_cycle_end_date::text,
-          COALESCE(tac.cap_amount, 0)::text AS cap_amount,
-          COALESCE(tac.cap_remaining, 0)::text AS cap_remaining
-        FROM migration.transaction_agent_calculations tac
-        INNER JOIN chosen_cycle c
-          ON tac.cap_cycle_start_date IS NOT DISTINCT FROM c.cap_cycle_start_date
-         AND tac.cap_cycle_end_date IS NOT DISTINCT FROM c.cap_cycle_end_date
-        WHERE tac.associate_id = $1
-        ORDER BY tac.effective_reporting_date DESC NULLS LAST,
-                 tac.updated_at DESC,
-                 tac.id DESC
+          CASE
+            WHEN cw.next_cap_date IS NULL THEN NULL
+            ELSE (cw.next_cap_date - INTERVAL '1 year')::date::text
+          END AS cap_cycle_start_date,
+          CASE
+            WHEN cw.next_cap_date IS NULL THEN NULL
+            ELSE (cw.next_cap_date - INTERVAL '1 day')::date::text
+          END AS cap_cycle_end_date,
+          GREATEST(COALESCE(lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)::text AS cap_amount,
+          GREATEST(
+            COALESCE(
+              lrc.cap_remaining,
+              COALESCE(lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0)
+            ),
+            0
+          )::text AS cap_remaining
+        FROM migration.core_associates ca
+        LEFT JOIN cycle_windows cw ON cw.associate_id = ca.id
+        LEFT JOIN latest_caps lc ON lc.associate_id = ca.id AND lc.rn = 1
+        LEFT JOIN latest_cycle_registered_caps lrc ON lrc.associate_id = ca.id AND lrc.rn = 1
+        WHERE ca.id = $1
         LIMIT 1
         `, [associateId]),
             pool.query(`
@@ -389,13 +1047,25 @@ router.get('/me/home', async (req, res) => {
         SELECT
           LOWER(TRIM(COALESCE(ct.transaction_status, ''))) AS status_key,
           COUNT(DISTINCT ct.id)::text AS total_transactions,
-          COALESCE(SUM(COALESCE(tac.gci_after_fees_excl_vat, ct.total_gci, 0)), 0)::text AS total_gci
+          COALESCE(SUM(COALESCE(tac.transaction_gci_before_fees, tac.gci_after_fees_excl_vat, ct.total_gci, 0)), 0)::text AS total_gci
         FROM migration.transaction_agents ta
         INNER JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
         LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
         WHERE ta.associate_id = $1
+          AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date, ct.transaction_date::date) >= date_trunc('month', CURRENT_DATE)::date
           AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) IN ('start', 'working', 'submitted', 'pending', 'registered')
         GROUP BY LOWER(TRIM(COALESCE(ct.transaction_status, '')))
+        `, [associateId]),
+            pool.query(`
+        SELECT
+          COUNT(DISTINCT ct.id)::text AS total_transactions,
+          COALESCE(SUM(COALESCE(tac.transaction_gci_before_fees, tac.gci_after_fees_excl_vat, ct.total_gci, 0)), 0)::text AS total_gci
+        FROM migration.transaction_agents ta
+        INNER JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
+        LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
+        WHERE ta.associate_id = $1
+          AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date, ct.transaction_date::date) >= date_trunc('month', CURRENT_DATE)::date
+          AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
         `, [associateId]),
         ]);
         const capRow = capResult.rows[0];
@@ -403,6 +1073,7 @@ router.get('/me/home', async (req, res) => {
         const capRemaining = Number(capRow?.cap_remaining ?? 0) || 0;
         const capAchieved = Math.max(capAmount - capRemaining, 0);
         const progressPct = capAmount > 0 ? Math.min((capAchieved / capAmount) * 100, 100) : 0;
+        const registeredMtdRow = registeredMtdResult.rows[0];
         const statusMap = new Map(statusDefaults.map((entry) => [entry.status.toLowerCase(), entry]));
         for (const row of txStatusResult.rows) {
             const current = statusMap.get(row.status_key);
@@ -415,6 +1086,14 @@ router.get('/me/home', async (req, res) => {
             generated_at: new Date().toISOString(),
             email: userEmail,
             associate,
+            market_center: {
+                source_market_center_id: associate.source_market_center_id ?? null,
+                name: associate.market_center_name ?? null,
+                logo_image_url: associate.market_center_logo_image_url ?? null,
+                document_logo_image_url: associate.market_center_document_logo_image_url ?? null,
+            },
+            cap_type: 'individual',
+            team_name: associate.team_name ?? null,
             cap: {
                 period_start_date: capRow?.cap_cycle_start_date ?? null,
                 period_end_date: capRow?.cap_cycle_end_date ?? null,
@@ -427,6 +1106,10 @@ router.get('/me/home', async (req, res) => {
                 total: Number(listingCountResult.rows[0]?.total ?? 0),
                 items: listingsResult.rows,
             },
+            registered_mtd: {
+                total_transactions: Number(registeredMtdRow?.total_transactions ?? 0),
+                total_gci: Number(registeredMtdRow?.total_gci ?? 0),
+            },
             transactions_by_status: HOME_TRANSACTION_STATUSES.map((status) => statusMap.get(status.toLowerCase())),
         });
     }
@@ -435,13 +1118,201 @@ router.get('/me/home', async (req, res) => {
         return res.status(500).json({ error: message });
     }
 });
-router.get('/:id/details', async (req, res) => {
+router.get('/me/featured-listings', async (req, res) => {
+    if (!pool) {
+        return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+    }
+    const userEmail = req.user?.email?.trim().toLowerCase() ?? '';
+    if (!userEmail) {
+        return res.status(401).json({ error: 'Unauthorised' });
+    }
+    try {
+        const associate = await resolveCurrentAssociateByEmail(userEmail);
+        if (!associate)
+            return res.json({ items: [] });
+        const items = await fetchFeaturedListingsForAssociate(associate.id);
+        return res.json({ items });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return res.status(500).json({ error: message });
+    }
+});
+router.get('/me/featured-listings/search', async (req, res) => {
+    if (!pool) {
+        return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+    }
+    const userEmail = req.user?.email?.trim().toLowerCase() ?? '';
+    if (!userEmail) {
+        return res.status(401).json({ error: 'Unauthorised' });
+    }
+    const q = String(req.query.q ?? '').trim();
+    try {
+        const associate = await resolveCurrentAssociateByEmail(userEmail);
+        if (!associate)
+            return res.json({ items: [] });
+        const result = await pool.query(`
+      SELECT
+        cl.id::text AS listing_id,
+        cl.listing_number,
+        cl.status_name,
+        cl.listing_status_tag,
+        cl.address_line,
+        cl.suburb,
+        cl.city,
+        cl.price::text,
+        CASE
+          WHEN cl.listing_images_json IS NOT NULL
+            AND cl.listing_images_json::text NOT IN ('[]', 'null', '')
+          THEN (
+            SELECT value
+            FROM jsonb_array_elements_text(cl.listing_images_json) AS value
+            WHERE COALESCE(TRIM(value), '') <> ''
+            LIMIT 1
+          )
+          ELSE (
+            SELECT li.file_url
+            FROM migration.listing_images li
+            WHERE li.listing_id = cl.id
+              AND COALESCE(TRIM(li.file_url), '') <> ''
+            ORDER BY li.sort_order ASC, li.id ASC
+            LIMIT 1
+          )
+        END AS main_image_url,
+        CASE WHEN afl.listing_id IS NULL THEN false ELSE true END AS selected
+      FROM migration.core_listings cl
+      LEFT JOIN migration.associate_featured_listings afl
+        ON afl.associate_id = $1 AND afl.listing_id = cl.id
+      WHERE LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+        AND (
+          $2 = ''
+          OR cl.listing_number ILIKE ('%' || $2 || '%')
+          OR cl.address_line ILIKE ('%' || $2 || '%')
+          OR cl.suburb ILIKE ('%' || $2 || '%')
+          OR cl.city ILIKE ('%' || $2 || '%')
+        )
+      ORDER BY
+        CASE WHEN afl.listing_id IS NULL THEN 1 ELSE 0 END,
+        cl.updated_at DESC,
+        cl.id DESC
+      LIMIT 60
+      `, [associate.id, q]);
+        const items = result.rows
+            .map((row) => {
+            const listingId = Number(row.listing_id);
+            if (!Number.isFinite(listingId))
+                return null;
+            return {
+                listingId,
+                listingNumber: row.listing_number,
+                statusName: row.status_name,
+                listingStatusTag: row.listing_status_tag,
+                addressLine: row.address_line,
+                suburb: row.suburb,
+                city: row.city,
+                price: row.price !== null ? Number(row.price) : null,
+                mainImageUrl: row.main_image_url,
+                selected: row.selected,
+            };
+        })
+            .filter((row) => Boolean(row));
+        return res.json({ items });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return res.status(500).json({ error: message });
+    }
+});
+router.put('/me/featured-listings', async (req, res) => {
+    if (!pool) {
+        return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+    }
+    const userEmail = req.user?.email?.trim().toLowerCase() ?? '';
+    if (!userEmail) {
+        return res.status(401).json({ error: 'Unauthorised' });
+    }
+    const body = (req.body ?? {});
+    const listingIds = Array.isArray(body.listingIds)
+        ? body.listingIds.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
+        : [];
+    const uniqueListingIds = [...new Set(listingIds)];
+    if (uniqueListingIds.length > 6) {
+        return res.status(400).json({ error: 'You can select up to 6 featured listings.' });
+    }
+    try {
+        const associate = await resolveCurrentAssociateByEmail(userEmail);
+        if (!associate) {
+            return res.status(404).json({ error: 'Associate profile not found for current user.' });
+        }
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query(`DELETE FROM migration.associate_featured_listings WHERE associate_id = $1`, [associate.id]);
+            if (uniqueListingIds.length > 0) {
+                const validListings = await client.query(`
+          SELECT cl.id::text AS id
+          FROM migration.core_listings cl
+          WHERE cl.id = ANY($1::bigint[])
+            AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
+          `, [uniqueListingIds]);
+                const validSet = new Set(validListings.rows.map((row) => Number(row.id)));
+                for (const listingId of uniqueListingIds) {
+                    if (!validSet.has(listingId))
+                        continue;
+                    await client.query(`
+            INSERT INTO migration.associate_featured_listings (associate_id, listing_id)
+            VALUES ($1, $2)
+            `, [associate.id, listingId]);
+                }
+            }
+            await client.query('COMMIT');
+        }
+        catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+        finally {
+            client.release();
+        }
+        const items = await fetchFeaturedListingsForAssociate(associate.id);
+        return res.json({ items });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return res.status(500).json({ error: message });
+    }
+});
+router.get('/:id/details', resolvePermissions, async (req, res) => {
     if (!pool) {
         return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
     }
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
         return res.status(400).json({ error: 'Invalid associate id.' });
+    }
+    const perms = req.permissions;
+    if (!perms) {
+        return res.status(403).json({ error: 'Permission denied.' });
+    }
+    const effectiveScopeMarketCenterId = resolveEffectiveScopeMarketCenterId(perms);
+    const useOfficeAdminMarketCenterFallback = perms.scope === 'OWN' && perms.isOfficeAdmin && Boolean(effectiveScopeMarketCenterId);
+    if (perms.scope === 'OWN' && !useOfficeAdminMarketCenterFallback) {
+        const currentAssociateId = Number(perms.associateDbId ?? 0);
+        if (!Number.isFinite(currentAssociateId) || currentAssociateId !== id) {
+            return res.status(403).json({ error: 'Permission denied: you may only access your own associate profile.' });
+        }
+    }
+    if (perms.scope === 'MARKET_CENTRE' || useOfficeAdminMarketCenterFallback) {
+        if (!effectiveScopeMarketCenterId) {
+            return res.status(403).json({ error: 'Permission denied: no active office admin market centre context.' });
+        }
+        const scopeMatch = await resolveMarketCenterScopeMatch(pool, id, effectiveScopeMarketCenterId);
+        if (scopeMatch.notFound) {
+            return res.status(404).json({ error: 'Associate not found.' });
+        }
+        if (!scopeMatch.allowed) {
+            return res.status(403).json({ error: 'Permission denied: associate is not in your market centre' });
+        }
     }
     try {
         const base = await pool.query(`
@@ -478,7 +1349,7 @@ router.get('/:id/details', async (req, res) => {
         a.private_property_opt_in,
         a.private_property_status,
         a.cap::text,
-        a.manual_cap::text,
+        a.manual_cap,
         a.agent_split::text,
         a.projected_cos::text,
         a.projected_cap::text,
@@ -498,7 +1369,23 @@ router.get('/:id/details', async (req, res) => {
             pool.query(`SELECT role_name FROM migration.associate_roles WHERE associate_id = $1 ORDER BY id ASC`, [id]),
             pool.query(`SELECT job_title FROM migration.associate_job_titles WHERE associate_id = $1 ORDER BY id ASC`, [id]),
             pool.query(`SELECT community_name FROM migration.associate_service_communities WHERE associate_id = $1 ORDER BY id ASC`, [id]),
-            pool.query(`SELECT source_market_center_id FROM migration.associate_admin_market_centers WHERE associate_id = $1 ORDER BY id ASC`, [id]),
+            pool.query(`SELECT COALESCE(resolved.source_market_center_id, amc.source_market_center_id) AS source_market_center_id
+         FROM migration.associate_admin_market_centers amc
+         LEFT JOIN LATERAL (
+           SELECT mc.source_market_center_id, mc.id
+           FROM migration.core_market_centers mc
+           WHERE LOWER(TRIM(COALESCE(mc.source_market_center_id, ''))) = LOWER(TRIM(COALESCE(amc.source_market_center_id, '')))
+              OR LOWER(TRIM(COALESCE(mc.name, ''))) = LOWER(TRIM(COALESCE(amc.source_market_center_id, '')))
+           ORDER BY
+             CASE
+               WHEN LOWER(TRIM(COALESCE(mc.source_market_center_id, ''))) = LOWER(TRIM(COALESCE(amc.source_market_center_id, ''))) THEN 0
+               ELSE 1
+             END,
+             mc.id ASC
+           LIMIT 1
+         ) resolved ON TRUE
+         WHERE amc.associate_id = $1
+         ORDER BY amc.id ASC`, [id]),
             pool.query(`SELECT source_team_id FROM migration.associate_admin_teams WHERE associate_id = $1 ORDER BY id ASC`, [id]),
             pool.query(`
         SELECT document_type, document_name, document_url, uploaded_by, uploaded_at::text
@@ -517,19 +1404,73 @@ router.get('/:id/details', async (req, res) => {
         const commissionNotes = notes.rows.filter((n) => n.note_type === 'commission');
         const dateNotes = notes.rows.filter((n) => n.note_type === 'dates');
         const documentNotes = notes.rows.filter((n) => n.note_type === 'documents');
+        const mappAccess = await getMappAccessPayload(id);
         return res.json({
             ...payload,
             social_media: socialMedia.rows,
-            roles: roles.rows.map((row) => row.role_name),
-            job_titles: jobTitles.rows.map((row) => row.job_title),
-            service_communities: serviceCommunities.rows.map((row) => row.community_name),
-            admin_market_centers: adminMarketCenters.rows.map((row) => row.source_market_center_id),
-            admin_teams: adminTeams.rows.map((row) => row.source_team_id),
+            roles: uniqueNormalizedStrings(roles.rows.map((row) => row.role_name)),
+            job_titles: uniqueNormalizedStrings(jobTitles.rows.map((row) => row.job_title)),
+            service_communities: uniqueNormalizedStrings(serviceCommunities.rows.map((row) => row.community_name)),
+            admin_market_centers: uniqueNormalizedStrings(adminMarketCenters.rows.map((row) => row.source_market_center_id)),
+            admin_teams: uniqueNormalizedStrings(adminTeams.rows.map((row) => row.source_team_id)),
             documents: documents.rows,
             commission_notes: commissionNotes,
             date_notes: dateNotes,
             document_notes: documentNotes,
+            mapp_access: mappAccess,
         });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return res.status(500).json({ error: message });
+    }
+});
+router.patch('/:id/access-suspension', resolvePermissions, async (req, res) => {
+    if (!pool) {
+        return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+    }
+    if (!LOCAL_ASSOCIATE_SUSPENSION_ENABLED) {
+        return res.status(400).json({
+            error: 'Local feature flag is currently off. Enable LOCAL_ASSOCIATE_SUSPENSION_ENABLED in backend env to test suspension controls.',
+        });
+    }
+    const perms = req.permissions;
+    if (!perms || (!perms.isRegionalAdmin && !perms.isOfficeAdmin)) {
+        return res.status(403).json({ error: 'Permission denied.' });
+    }
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: 'Invalid associate id.' });
+    }
+    const body = (req.body ?? {});
+    const isTemporarilySuspended = toBool(body.is_temporarily_suspended);
+    const suspendedReason = isTemporarilySuspended ? toText(body.suspended_reason) : null;
+    if (isTemporarilySuspended && !suspendedReason) {
+        return res.status(400).json({ error: 'Suspension reason is required when suspending access.' });
+    }
+    const suspendedByEmail = req.user?.email?.trim().toLowerCase() ?? null;
+    try {
+        await ensureAssociateAccessSuspensionTable();
+        await pool.query(`
+      INSERT INTO migration.associate_access_suspension (
+        associate_id,
+        is_temporarily_suspended,
+        suspended_reason,
+        suspended_by_email,
+        suspended_at,
+        updated_at
+      ) VALUES ($1, $2, $3, $4, CASE WHEN $2 THEN NOW() ELSE NULL END, NOW())
+      ON CONFLICT (associate_id)
+      DO UPDATE SET
+        is_temporarily_suspended = EXCLUDED.is_temporarily_suspended,
+        suspended_reason = EXCLUDED.suspended_reason,
+        suspended_by_email = EXCLUDED.suspended_by_email,
+        suspended_at = CASE WHEN EXCLUDED.is_temporarily_suspended THEN NOW() ELSE NULL END,
+        updated_at = NOW()
+      `, [id, isTemporarilySuspended, suspendedReason, suspendedByEmail]);
+        clearAssociateAccessCache();
+        const mappAccess = await getMappAccessPayload(id);
+        return res.json({ mapp_access: mappAccess });
     }
     catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
@@ -603,7 +1544,7 @@ router.get('/', async (req, res) => {
         COALESCE(a.kwsa_email, a.email) AS email,
         a.status_name,
         a.kwuid,
-        a.source_market_center_id,
+        COALESCE(NULLIF(TRIM(a.source_market_center_id), ''), NULLIF(TRIM(mc.source_market_center_id), '')) AS source_market_center_id,
         a.source_team_id,
         a.image_url,
         a.mobile_number,
@@ -632,9 +1573,16 @@ router.get('/', async (req, res) => {
         return res.status(500).json({ error: message });
     }
 });
-router.post('/', async (req, res) => {
+router.post('/', resolvePermissions, async (req, res) => {
     if (!pool) {
         return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+    }
+    const perms = req.permissions;
+    if (!perms || (!perms.isRegionalAdmin && !perms.isOfficeAdmin)) {
+        return res.status(403).json({ error: 'Permission denied: only regional or office admins can create associates.' });
+    }
+    if (perms.scope === 'OWN') {
+        return res.status(403).json({ error: 'Permission denied: active context cannot create associates.' });
     }
     const body = (req.body ?? {});
     const firstName = toText(body.first_name);
@@ -642,20 +1590,27 @@ router.post('/', async (req, res) => {
     const fallbackFullName = [firstName, lastName].filter(Boolean).join(' ').trim();
     const fullName = toText(body.full_name) ?? (fallbackFullName.length > 0 ? fallbackFullName : null);
     const sourceAssociateId = toText(body.source_associate_id) ?? buildManualAssociateId();
-    const sourceMarketCenterId = toText(body.source_market_center_id);
+    let sourceMarketCenterId = toText(body.source_market_center_id);
     const sourceTeamId = toText(body.source_team_id);
+    if (perms.scope === 'MARKET_CENTRE') {
+        const effectiveScopeMarketCenterId = resolveEffectiveScopeMarketCenterId(perms);
+        if (!effectiveScopeMarketCenterId) {
+            return res.status(403).json({ error: 'Permission denied: no active office admin market centre context.' });
+        }
+        sourceMarketCenterId = effectiveScopeMarketCenterId;
+    }
     if (!fullName) {
         return res.status(400).json({ error: 'full_name (or first_name/last_name) is required.' });
     }
     const nationalId = toText(body.national_id);
     const ffcNumber = toText(body.ffc_number);
-    const kwsaEmail = toText(body.kwsa_email) ?? toText(body.email);
-    const privateEmail = toText(body.private_email);
+    const kwsaEmail = toEmail(body.kwsa_email) ?? toEmail(body.email);
+    const privateEmail = toEmail(body.private_email);
     const mobileNumber = toPhone(body.mobile_number);
     const officeNumber = toPhone(body.office_number);
     const imageUrl = toText(body.image_url);
     const growthShareSponsor = toText(body.growth_share_sponsor);
-    const temporaryGrowthShareSponsor = toText(body.temporary_growth_share_sponsor);
+    const temporaryGrowthShareSponsor = toNullableBool(body.temporary_growth_share_sponsor);
     const proposedGrowthShareSponsor = toText(body.proposed_growth_share_sponsor);
     const kwuid = toText(body.kwuid);
     const vested = toBool(body.vested);
@@ -663,22 +1618,24 @@ router.post('/', async (req, res) => {
     const listingApprovalRequired = toBool(body.listing_approval_required);
     const excludeFromIndividualReports = toBool(body.exclude_from_individual_reports);
     const property24OptIn = toBool(body.property24_opt_in);
-    const agentProperty24Id = toText(body.agent_property24_id);
-    const property24Status = toText(body.property24_status);
+    const normalizedP24 = normalizeProperty24Fields(property24OptIn, body.agent_property24_id, body.property24_status);
+    const agentProperty24Id = normalizedP24.agentProperty24Id;
+    const property24Status = normalizedP24.property24Status;
     const entegralOptIn = toBool(body.entegral_opt_in);
-    const agentEntegralId = toText(body.agent_entegral_id);
-    const entegralStatus = toText(body.entegral_status);
+    const agentEntegralId = null;
+    const entegralStatus = entegralOptIn ? 'Pending registration' : 'Not opted in';
     const privatePropertyOptIn = toBool(body.private_property_opt_in);
-    const privatePropertyStatus = toText(body.private_property_status);
+    const privatePropertyStatus = privatePropertyOptIn ? 'Pending activation' : 'Not opted in';
     const cap = toNumber(body.cap);
-    const manualCap = toNumber(body.manual_cap);
+    const manualCap = toBool(body.manual_cap);
     const agentSplit = toNumber(body.agent_split);
     const projectedCos = toNumber(body.projected_cos);
     const projectedCap = toNumber(body.projected_cap);
-    const startDate = toDate(body.start_date);
+    const startDate = getTodayInAppTimeZone();
     const endDate = toDate(body.end_date);
-    const anniversaryDate = toDate(body.anniversary_date);
-    const capDate = toDate(body.cap_date);
+    const firstOfNextMonth = firstOfNextMonthFromDateText(startDate);
+    const anniversaryDate = firstOfNextMonth;
+    const capDate = firstOfNextMonth;
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -783,9 +1740,8 @@ router.post('/', async (req, res) => {
         ]);
         const associateId = Number(insert.rows[0].id);
         await saveCollections(client, associateId, body);
-        await recomputeAllTransactionAgentCalculations(client);
         await client.query('COMMIT');
-        return res.status(201).json({ id: insert.rows[0].id, source_associate_id: sourceAssociateId });
+        res.status(201).json({ id: insert.rows[0].id, source_associate_id: sourceAssociateId });
     }
     catch (error) {
         await client.query('ROLLBACK');
@@ -795,14 +1751,38 @@ router.post('/', async (req, res) => {
     finally {
         client.release();
     }
+    // Fire background recalculation after response — do not block the save.
+    scheduleTransactionAgentRecompute('agents-create');
+    return;
 });
-router.put('/:id', async (req, res) => {
+router.put('/:id', resolvePermissions, async (req, res) => {
     if (!pool) {
         return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
     }
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
         return res.status(400).json({ error: 'Invalid associate id.' });
+    }
+    const perms = req.permissions;
+    if (!perms) {
+        return res.status(403).json({ error: 'Permission denied.' });
+    }
+    const effectiveScopeMarketCenterId = resolveEffectiveScopeMarketCenterId(perms);
+    const useOfficeAdminMarketCenterFallback = perms.scope === 'OWN' && perms.isOfficeAdmin && Boolean(effectiveScopeMarketCenterId);
+    if (perms.scope === 'OWN' && !useOfficeAdminMarketCenterFallback) {
+        return res.status(403).json({ error: 'Permission denied: active context cannot edit associates.' });
+    }
+    if (perms.scope === 'MARKET_CENTRE' || useOfficeAdminMarketCenterFallback) {
+        if (!effectiveScopeMarketCenterId) {
+            return res.status(403).json({ error: 'Permission denied: no active office admin market centre context.' });
+        }
+        const scopeMatch = await resolveMarketCenterScopeMatch(pool, id, effectiveScopeMarketCenterId);
+        if (scopeMatch.notFound) {
+            return res.status(404).json({ error: 'Associate not found.' });
+        }
+        if (!scopeMatch.allowed) {
+            return res.status(403).json({ error: 'Permission denied: associate is not in your market centre' });
+        }
     }
     const body = (req.body ?? {});
     const firstName = toText(body.first_name);
@@ -813,6 +1793,8 @@ router.put('/:id', async (req, res) => {
         return res.status(400).json({ error: 'full_name (or first_name/last_name) is required.' });
     }
     const sourceMarketCenterId = toText(body.source_market_center_id);
+    const property24OptIn = toBool(body.property24_opt_in);
+    const normalizedP24 = normalizeProperty24Fields(property24OptIn, body.agent_property24_id, body.property24_status);
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -873,33 +1855,33 @@ router.put('/:id', async (req, res) => {
             firstName,
             lastName,
             fullName,
-            toText(body.kwsa_email) ?? toText(body.email),
+            toEmail(body.kwsa_email) ?? toEmail(body.email),
             toText(body.status_name),
             toText(body.kwuid),
             toText(body.image_url),
             toPhone(body.mobile_number),
             toText(body.national_id),
             toText(body.ffc_number),
-            toText(body.kwsa_email) ?? toText(body.email),
-            toText(body.private_email),
+            toEmail(body.kwsa_email) ?? toEmail(body.email),
+            toEmail(body.private_email),
             toPhone(body.office_number),
             toText(body.growth_share_sponsor),
-            toText(body.temporary_growth_share_sponsor),
+            toNullableBool(body.temporary_growth_share_sponsor),
             toText(body.proposed_growth_share_sponsor),
             toBool(body.vested),
             toDate(body.vesting_period_start_date),
             toBool(body.listing_approval_required),
             toBool(body.exclude_from_individual_reports),
-            toBool(body.property24_opt_in),
-            toText(body.agent_property24_id),
-            toText(body.property24_status),
+            property24OptIn,
+            normalizedP24.agentProperty24Id,
+            normalizedP24.property24Status,
             toBool(body.entegral_opt_in),
             toText(body.agent_entegral_id),
             toText(body.entegral_status),
             toBool(body.private_property_opt_in),
             toText(body.private_property_status),
             toNumber(body.cap),
-            toNumber(body.manual_cap),
+            toBool(body.manual_cap),
             toNumber(body.agent_split),
             toNumber(body.projected_cos),
             toNumber(body.projected_cap),
@@ -914,9 +1896,8 @@ router.put('/:id', async (req, res) => {
             return res.status(404).json({ error: 'Associate not found.' });
         }
         await saveCollections(client, id, body);
-        await recomputeAllTransactionAgentCalculations(client);
         await client.query('COMMIT');
-        return res.json({ id: result.rows[0].id });
+        res.json({ id: result.rows[0].id });
     }
     catch (error) {
         await client.query('ROLLBACK');
@@ -926,6 +1907,9 @@ router.put('/:id', async (req, res) => {
     finally {
         client.release();
     }
+    // Fire background recalculation after response is sent — do not block the save.
+    scheduleTransactionAgentRecompute('agents-update');
+    return;
 });
 router.post('/:id/upload-image', async (req, res, next) => {
     const isGcs = !storageConfig.localUploadsEnabled;
@@ -946,29 +1930,41 @@ router.post('/:id/upload-image', async (req, res, next) => {
         return res.status(400).json({ error: 'Invalid associate id.' });
     }
     try {
+        const rawImageBuffer = req.file.buffer?.length
+            ? req.file.buffer
+            : (req.file.path ? await fs.readFile(req.file.path) : null);
+        if (!rawImageBuffer) {
+            return res.status(400).json({ error: 'Could not read uploaded image data.' });
+        }
+        // Process and compress the image to portal specifications (1080x1080 JPEG, max 2MB)
+        const processedImage = await processAgentImage(rawImageBuffer);
+        const filename = `agent-profile-${id}-${Date.now()}.jpg`;
         let imageUrl;
         if (isGcs) {
-            const { publicUrl } = await uploadToGcs(req.file.buffer, req.file.originalname, 'image', req.file.mimetype);
+            const { publicUrl } = await uploadToGcs(processedImage.buffer, filename, 'image', 'image/jpeg');
             imageUrl = publicUrl;
         }
         else {
-            imageUrl = `/uploads/images/${req.file.filename}`;
+            // Write compressed image to disk
+            if (storageConfig.localUploadsEnabled) {
+                const outputPath = path.join(imagesDir, filename);
+                await fs.writeFile(outputPath, processedImage.buffer);
+            }
+            imageUrl = `/uploads/images/${filename}`;
         }
         // Update the image_url in the database
         const result = await pool.query(`UPDATE migration.core_associates SET image_url = $1, updated_at = NOW() WHERE id = $2 RETURNING id::text`, [imageUrl, id]);
         if (result.rowCount === 0) {
-            if (!isGcs && req.file.path) {
-                await fs.unlink(req.file.path).catch(() => undefined);
-            }
             return res.status(404).json({ error: 'Associate not found.' });
         }
-        return res.json({ image_url: imageUrl });
+        return res.json({
+            image_url: imageUrl,
+            message: `Image successfully processed and optimized for portals (1080x1080px JPEG, ${(processedImage.size / 1024).toFixed(0)}KB)`,
+        });
     }
     catch (error) {
-        if (!isGcs && req.file.path) {
-            await fs.unlink(req.file.path).catch(() => undefined);
-        }
         const message = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`[agents] Image upload/processing error for associate ${id}:`, message);
         return res.status(500).json({ error: message });
     }
 });
@@ -1008,6 +2004,37 @@ router.post('/:id/upload-document', async (req, res, next) => {
             return res.status(400).json({ error: 'Failed to save document record.' });
         }
         return res.json({ document_url: documentUrl });
+    }
+    catch (error) {
+        if (!isGcs && req.file.path) {
+            await fs.unlink(req.file.path).catch(() => undefined);
+        }
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return res.status(500).json({ error: message });
+    }
+});
+router.post('/upload-document-temp', async (req, res, next) => {
+    const isGcs = !storageConfig.localUploadsEnabled;
+    try {
+        await runUploadMiddleware(req, res, uploadDocument.single('document'));
+    }
+    catch (error) {
+        return next(error);
+    }
+    if (!req.file) {
+        return res.status(400).json({ error: 'No document file provided.' });
+    }
+    try {
+        let documentUrl;
+        if (isGcs) {
+            const { publicUrl } = await uploadToGcs(req.file.buffer, req.file.originalname, 'doc', req.file.mimetype);
+            documentUrl = publicUrl;
+        }
+        else {
+            documentUrl = `/uploads/documents/${req.file.filename}`;
+        }
+        // Return a URL that can be attached to the create payload before the associate exists.
+        return res.json({ document_url: documentUrl, document_name: req.file.originalname });
     }
     catch (error) {
         if (!isGcs && req.file.path) {

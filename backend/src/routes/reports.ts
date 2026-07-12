@@ -3063,8 +3063,16 @@ router.get('/mc-dashboard/filter-options', resolvePermissions, async (req, res) 
       const rows = await pool.query<{ id: string; name: string }>(
         `
         SELECT source_market_center_id AS id, COALESCE(NULLIF(TRIM(name), ''), source_market_center_id) AS name
-        FROM migration.core_market_centers
-        WHERE NULLIF(TRIM(source_market_center_id), '') IS NOT NULL
+        FROM migration.core_market_centers mc
+        WHERE NULLIF(TRIM(mc.source_market_center_id), '') IS NOT NULL
+          AND LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1')
+          AND EXISTS (
+            SELECT 1
+            FROM migration.core_associates a
+            WHERE REGEXP_REPLACE(LOWER(TRIM(COALESCE(a.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g')
+                    = REGEXP_REPLACE(LOWER(TRIM(COALESCE(mc.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g')
+              AND LOWER(TRIM(COALESCE(a.status_name, ''))) IN ('active', '1')
+          )
         ORDER BY name
         `
       );
@@ -3085,6 +3093,7 @@ router.get('/mc-dashboard/filter-options', resolvePermissions, async (req, res) 
       SELECT source_market_center_id AS id, COALESCE(NULLIF(TRIM(name), ''), source_market_center_id) AS name
       FROM migration.core_market_centers
       WHERE source_market_center_id = $1
+        AND LOWER(TRIM(COALESCE(status_name, ''))) IN ('active', '1')
       LIMIT 1
       `,
       [selected]

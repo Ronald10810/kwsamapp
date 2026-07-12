@@ -23,6 +23,19 @@ This folder is the new modern rewrite of the legacy `current-system` platform.
 2. Backend and frontend projects will be developed in their respective folders.
 3. The API will target PostgreSQL, and file uploads will target a local GCS emulator.
 
+### Local UAT parity mode (frontend)
+
+Use this when you want local UI behavior to match UAT APIs exactly.
+
+1. From repo root, run:
+   - `npm.cmd run dev:frontend:uat-parity`
+2. This writes `frontend/.env.local` with UAT API proxy target and starts Vite.
+3. The frontend will run locally while `/api` requests proxy to the UAT backend.
+
+If you only want to generate the env file without starting frontend:
+
+- `npm.cmd run env:frontend:uat-parity`
+
 ## Test To Live Publishing
 
 - Hosted test frontend: Cloud Run service `kwsa-frontend-test`
