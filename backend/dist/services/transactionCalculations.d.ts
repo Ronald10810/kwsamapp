@@ -41,6 +41,7 @@ export type RawAgentRow = {
     source_rental_id: string | null;
     source_rental_payment_schedule_id: string | null;
     associate_team_id: string | null;
+    team_cap_date: string | null;
     team_cap_amount: string | null;
     team_commission_split_to_team: string | null;
     transaction_source_team_id: string | null;
@@ -148,6 +149,11 @@ export type ScopedDryRunResult = {
     };
     team_nagel_cap_impact: TeamNagelCapImpactSummary | null;
 };
+export type ScopedRecomputeResult = {
+    strict_transaction_numbers: string[];
+    affected_rows_count: number;
+    affected_transaction_ids: number[];
+};
 export declare const DEFAULT_CAP004_STRICT_TRANSACTION_NUMBERS: string[];
 type SplitResolutionInput = {
     outside: boolean;
@@ -184,5 +190,6 @@ export declare function selectScopedEnvelopeForTesting(calculatedRowsWithMeta: A
 }>;
 export declare function previewScopedTransactionAgentCalculations(db: Queryable, strictTransactionNumbers?: string[]): Promise<ScopedDryRunResult>;
 export declare function recomputeAllTransactionAgentCalculations(db: Queryable): Promise<void>;
+export declare function recomputeScopedTransactionAgentCalculations(db: Queryable, strictTransactionNumbers: string[]): Promise<ScopedRecomputeResult>;
 export {};
 //# sourceMappingURL=transactionCalculations.d.ts.map

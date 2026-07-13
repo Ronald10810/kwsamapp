@@ -757,26 +757,6 @@ function buildSnapshotCalculatedRows(transaction: TransactionRow | null | undefi
     }));
 }
 
-function buildFinancialSignature(rows: CalculatedSummaryItem[]): string {
-  const totals = rows.reduce((acc, row) => {
-    acc.gciAfterFees += toNumberOrZero(row.gci_after_fees_excl_vat);
-    acc.associate += toNumberOrZero(row.associate_dollar);
-    acc.mc += toNumberOrZero(row.market_center_dollar);
-    acc.team += toNumberOrZero(row.team_dollar);
-    acc.capRemaining += toNumberOrZero(row.display_cap_remaining ?? row.current_cap_remaining ?? row.cap_remaining);
-    return acc;
-  }, { gciAfterFees: 0, associate: 0, mc: 0, team: 0, capRemaining: 0 });
-
-  return [
-    rows.length,
-    roundMoney(totals.gciAfterFees).toFixed(2),
-    roundMoney(totals.associate).toFixed(2),
-    roundMoney(totals.mc).toFixed(2),
-    roundMoney(totals.team).toFixed(2),
-    roundMoney(totals.capRemaining).toFixed(2),
-  ].join('|');
-}
-
 function UiIcon({
   kind,
   className = 'h-4 w-4',
@@ -1060,7 +1040,6 @@ export default function TransactionsPage() {
   const [editTab, setEditTab] = useState<TransactionEditTab>('details');
   const [quickSummaryRow, setQuickSummaryRow] = useState<TransactionRow | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [isRecalculatingSummary, setIsRecalculatingSummary] = useState(false);
   const [forceSummaryPreview, setForceSummaryPreview] = useState(false);
   const [summaryPreviewNotice, setSummaryPreviewNotice] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -1305,6 +1284,7 @@ export default function TransactionsPage() {
   const {
     data: quickSummaryData,
     isLoading: isQuickSummaryLoading,
+    error: quickSummaryError,
   } = useQuery({
     queryKey: ['transaction-quick-summary', activeContextId, quickSummaryRow?.id],
     queryFn: async ({ signal }) => {
@@ -1640,7 +1620,6 @@ export default function TransactionsPage() {
     transactionId: string,
     successNotice: string,
     options?: {
-      showBusy?: boolean;
       timeoutMs?: number;
       failSilently?: boolean;
     }
@@ -1654,11 +1633,7 @@ export default function TransactionsPage() {
       }
     };
 
-    const showBusy = options?.showBusy !== false;
     const timeoutMs = options?.timeoutMs ?? 90000;
-    if (showBusy) {
-      setIsRecalculatingSummary(true);
-    }
     try {
       const response = await fetchWithTimeout(
         `/api/transactions/${transactionId}/recalculate?mode=queued`,
@@ -1694,10 +1669,6 @@ export default function TransactionsPage() {
         return false;
       }
       throw error;
-    } finally {
-      if (showBusy) {
-        setIsRecalculatingSummary(false);
-      }
     }
   }
 
@@ -1838,7 +1809,7 @@ export default function TransactionsPage() {
         void recalculateSavedTransactionSummary(
           savedTransactionId,
           'Saved and recalculated using backend rules. This summary now reflects persisted values.',
-          { showBusy: false, timeoutMs: 12000, failSilently: true }
+          { timeoutMs: 12000, failSilently: true }
         );
       }
     } catch (error) {
@@ -1850,7 +1821,7 @@ export default function TransactionsPage() {
           void recalculateSavedTransactionSummary(
             editingId,
             'Saved and recalculated using backend rules. This summary now reflects persisted values.',
-            { showBusy: false, timeoutMs: 12000, failSilently: true }
+            { timeoutMs: 12000, failSilently: true }
           );
           return;
         }
@@ -2189,14 +2160,8 @@ export default function TransactionsPage() {
   const calculatedSummaryRows = shouldUseLivePreviewRows
     ? livePreviewRows
     : savedCalculatedSummaryRows;
-  const previewWouldChangeNumbers = useMemo(
-    () => buildFinancialSignature(livePreviewRows) !== buildFinancialSignature(savedCalculatedSummaryRows),
-    [livePreviewRows, savedCalculatedSummaryRows]
-  );
-  const snapshotQuickCalculatedRows = useMemo(() => buildSnapshotCalculatedRows(quickSummaryRow), [quickSummaryRow]);
-  const quickSummaryCalculatedRows = (quickSummaryData?.items?.length ?? 0) > 0
-    ? (quickSummaryData?.items ?? [])
-    : snapshotQuickCalculatedRows;
+  const quickSummaryCalculatedRows = quickSummaryData?.items ?? [];
+  const quickSummaryFetchFailed = Boolean(quickSummaryError) && !isQuickSummaryLoading && quickSummaryCalculatedRows.length === 0;
   const isShowingPreviewForEdit = Boolean(editingId) && shouldUseLivePreviewRows;
 
   const editSummaryHeaderMeta = useMemo(() => {
@@ -3093,49 +3058,7 @@ export default function TransactionsPage() {
                   <div className="space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h3 className="text-lg font-semibold text-slate-900">{isEditingRentalTransaction ? 'Rental Transaction Summary' : 'Transaction Summary'}</h3>
-                      {editingId && !isEditingRentalTransaction && (
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!editingId) {
-                                return;
-                              }
-
-                              if (!hasSummaryRelevantUnsavedChanges) {
-                                void (async () => {
-                                  setForceSummaryPreview(false);
-                                  const statusLabel = (form.transaction_status || currentEditingRow?.transaction_status || '').trim() || 'Unknown';
-                                  const isRegistered = statusLabel.toLowerCase() === 'registered';
-                                  setSummaryPreviewNotice('Recalculating saved summary using backend rules...');
-                                  try {
-                                    await recalculateSavedTransactionSummary(
-                                      editingId,
-                                      isRegistered
-                                        ? 'Saved summary recalculated using backend rules.'
-                                        : `Recalculation complete. Current status is ${statusLabel}; Market Centre allocation and cap progression only apply once status is Registered.`
-                                    );
-                                  } catch (error) {
-                                    setSummaryPreviewNotice(error instanceof Error ? error.message : 'Failed to recalculate saved summary');
-                                  }
-                                })();
-                                return;
-                              }
-                              setForceSummaryPreview(true);
-                              setSummaryPreviewNotice(
-                                previewWouldChangeNumbers
-                                  ? 'Preview mode active: these values are not saved yet. Click Save to apply them.'
-                                  : 'Preview completed: no financial difference was detected from the currently saved summary for these edits.'
-                              );
-                            }}
-                            disabled={isRecalculatingSummary}
-                            className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100"
-                            title="Recalculate unsaved preview values, or if there are no unsaved changes, recompute the saved backend summary."
-                          >
-                            {isRecalculatingSummary ? 'Recalculating...' : 'Recalculate Preview'}
-                          </button>
-                        </div>
-                      )}
+                      {editingId && !isEditingRentalTransaction && <div className="flex items-center gap-2" />}
                     </div>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                       <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
@@ -3265,7 +3188,7 @@ export default function TransactionsPage() {
                         : currentEditingRow
                           ? (isEditingRentalTransaction
                             ? 'These values are calculated from rental payment details and participant splits.'
-                            : 'These values are calculated and saved by the backend. Click Recalculate Preview to see how unsaved edits will affect this summary.')
+                            : 'These values are calculated and saved by the backend. Save changes to apply updated summary values.')
                           : 'Complete price, role, and split fields to preview projected values before saving.')}
                     </div>
                   </div>
@@ -3986,6 +3909,11 @@ export default function TransactionsPage() {
                 </div>
               </div>
               <p className="px-1 pb-2 pt-1 text-xs text-slate-500">Totals above aggregate all summary rows for this transaction.</p>
+              {quickSummaryFetchFailed && (
+                <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  Unable to load the live calculated summary for this transaction. The modal is not using a stale snapshot fallback.
+                </div>
+              )}
               {quickSummaryCalculatedRows.length > 1 && (
                 <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Per-Agent Payout Snapshot</div>

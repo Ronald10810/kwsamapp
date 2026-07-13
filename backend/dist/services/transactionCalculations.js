@@ -80,6 +80,9 @@ export function resolveSplitPctsForTesting(input) {
 function isRegisteredStatus(status) {
     return (status ?? '').trim().toLowerCase() === 'registered';
 }
+function isWithdrawnStatus(status) {
+    return (status ?? '').trim().toLowerCase() === 'withdrawn';
+}
 function getEffectiveReportingDate(row) {
     const statusChangeDate = toDate(row.status_change_date);
     const transactionDate = toDate(row.transaction_date);
@@ -152,6 +155,21 @@ function isTeamTransaction(row) {
         row.transaction_current_source_team_id,
     ].some((value) => (value ?? '').trim().length > 0);
 }
+function getTeamProgressKey(row) {
+    const associateTeamId = (row.associate_team_id ?? '').trim();
+    if (associateTeamId.length > 0)
+        return `team-id-${associateTeamId}`;
+    const currentSourceTeamId = (row.transaction_current_source_team_id ?? '').trim();
+    if (currentSourceTeamId.length > 0)
+        return `team-source-${currentSourceTeamId}`;
+    const transactionSourceTeamId = (row.transaction_source_team_id ?? '').trim();
+    if (transactionSourceTeamId.length > 0)
+        return `team-source-${transactionSourceTeamId}`;
+    const associateSourceTeamId = (row.associate_source_team_id ?? '').trim();
+    if (associateSourceTeamId.length > 0)
+        return `team-source-${associateSourceTeamId}`;
+    return null;
+}
 export async function fetchRawRows(db) {
     const result = await db.query(`
     SELECT
@@ -195,6 +213,7 @@ export async function fetchRawRows(db) {
       ct.source_rental_id::text,
       ct.source_rental_payment_schedule_id::text,
       ca.team_id::text AS associate_team_id,
+      team_cycle.team_cap_date::text AS team_cap_date,
       team_cap.team_cap_amount::text AS team_cap_amount,
       team_cap.commission_split_to_team::text AS team_commission_split_to_team,
       ct.source_team_id AS transaction_source_team_id,
@@ -214,6 +233,13 @@ export async function fetchRawRows(db) {
       ORDER BY tc.cap_year DESC NULLS LAST, tc.id DESC
       LIMIT 1
     ) team_cap ON true
+    LEFT JOIN LATERAL (
+      SELECT MIN(ca_team.cap_date)::date AS team_cap_date
+      FROM migration.core_associates ca_team
+      WHERE ca.team_id IS NOT NULL
+        AND ca_team.team_id = ca.team_id
+        AND LOWER(TRIM(COALESCE(ca_team.status_name, ''))) IN ('active', '1')
+    ) team_cycle ON true
     LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
     LEFT JOIN LATERAL (
       SELECT
@@ -344,11 +370,19 @@ export function buildPreCapCalculatedRowsWithMeta(groups) {
                     ? roundMoney(transactionNetComm * splitRatio)
                     : roundMoney(agentGci - totalPrAndGs);
             const countsTowardCap = rentalTransaction ? row.counts_toward_cap !== false : true;
+            const paymentMarketCenterDollar = roundMoney(toNumber(row.payment_mc_dollar));
+            const requiresCapProgression = !outside
+                && row.manual_cap !== true
+                && authoritativePaymentDetails
+                && paymentMarketCenterDollar <= 0
+                && gciAfterFees > 0;
             const configuredTeamSplitPct = normalizeTeamSplit(toNumber(row.team_commission_split_to_team));
             const resolvedSplit = resolveSplitPcts({
                 outside,
                 teamTransaction,
-                authoritativePaymentDetails,
+                // When cap progression must be recomputed, ignore imported split percentages and
+                // derive split from current rules so MC contribution/cap remaining stay consistent.
+                authoritativePaymentDetails: authoritativePaymentDetails && !requiresCapProgression,
                 configuredTeamSplitPct,
                 associateSplitPct: toNumber(row.agent_split),
                 gciAfterFees,
@@ -362,19 +396,18 @@ export function buildPreCapCalculatedRowsWithMeta(groups) {
             const associateCapAmount = outside ? 0 : roundMoney(toNumber(row.cap));
             const teamCapAmount = outside ? 0 : roundMoney(toNumber(row.team_cap_amount));
             const capAmount = teamTransaction && teamCapAmount > 0 ? teamCapAmount : associateCapAmount;
-            const cycle = buildCapCycle(effectiveDate, row.cap_date);
+            const capCycleAnchor = teamTransaction
+                ? (row.team_cap_date ?? row.cap_date)
+                : row.cap_date;
+            const cycle = buildCapCycle(effectiveDate, capCycleAnchor);
             const capCycleStartDate = toIsoDate(cycle.start);
             const capCycleEndDate = toIsoDate(cycle.end);
-            const paymentMarketCenterDollar = roundMoney(toNumber(row.payment_mc_dollar));
-            const requiresCapProgression = !outside
-                && row.manual_cap !== true
-                && authoritativePaymentDetails
-                && paymentMarketCenterDollar <= 0
-                && gciAfterFees > 0;
-            let associateDollar = authoritativePaymentDetails
+            let associateDollar = authoritativePaymentDetails && !requiresCapProgression
                 ? roundMoney(toNumber(row.payment_associate_dollar))
                 : outside ? roundMoney(gciAfterFees) : associateDollarPreCap;
-            let teamDollar = authoritativePaymentDetails ? roundMoney(toNumber(row.payment_team_dollar)) : 0;
+            let teamDollar = authoritativePaymentDetails && !requiresCapProgression
+                ? roundMoney(toNumber(row.payment_team_dollar))
+                : 0;
             if (!outside && teamTransaction) {
                 teamDollar = roundMoney(teamDollar + associateDollar);
                 associateDollar = 0;
@@ -420,9 +453,8 @@ export function buildPreCapCalculatedRowsWithMeta(groups) {
                 counts_toward_cap: countsTowardCap,
             };
             const associateKey = row.associate_id ?? row.source_associate_id ?? `outside-${row.transaction_agent_id}`;
-            const capProgressKey = teamTransaction && row.associate_team_id
-                ? `team-${row.associate_team_id}`
-                : associateKey;
+            const teamProgressKey = teamTransaction ? getTeamProgressKey(row) : null;
+            const capProgressKey = teamProgressKey ?? associateKey;
             metaRows.push({
                 row: normalizedRow,
                 cap_progress_key: capProgressKey,
@@ -457,40 +489,36 @@ export function applyCapProgressionToCalculatedRowsWithMeta(baseMetaRows) {
         const row = entry.row;
         const cycleKey = `${entry.cap_progress_key}|${row.cap_cycle_start_date}`;
         const shouldConsumeCap = !row.is_rental_transaction || row.counts_toward_cap;
+        const withdrawn = isWithdrawnStatus(row.transaction_status);
         if (row.is_outside_agent) {
             row.cap_remaining = 0;
             row.cap_contribution = 0;
             rows.push(row);
             continue;
         }
-        if (row.has_authoritative_payment_details && !row.requires_cap_progression && !row.is_team_transaction) {
-            if (row.cap_amount > 0 && row.is_registered && shouldConsumeCap) {
-                const capUsedAfter = roundMoney(Math.max(row.cap_amount - row.cap_remaining, 0));
-                const capUsedBefore = capProgressByCycle.get(cycleKey) ?? 0;
-                capProgressByCycle.set(cycleKey, roundMoney(Math.max(capUsedBefore, capUsedAfter)));
-            }
-            rows.push(row);
-            continue;
-        }
         const capUsedBefore = capProgressByCycle.get(cycleKey) ?? 0;
         const capAmount = row.cap_amount;
         const capLeft = Math.max(capAmount - capUsedBefore, 0);
-        if (!shouldConsumeCap) {
+        if (!shouldConsumeCap || withdrawn) {
+            if (withdrawn && row.market_center_dollar > 0) {
+                const restored = row.market_center_dollar;
+                row.market_center_dollar = 0;
+                if (row.is_team_transaction) {
+                    row.team_dollar = roundMoney(row.team_dollar + restored);
+                }
+                else {
+                    row.associate_dollar = roundMoney(row.associate_dollar + restored);
+                }
+            }
             row.cap_contribution = 0;
             row.cap_remaining = roundMoney(capLeft);
             rows.push(row);
             continue;
         }
         if (capAmount > 0) {
-            if (!row.is_registered) {
-                row.cap_contribution = 0;
-                row.cap_remaining = roundMoney(capLeft);
-                rows.push(row);
-                continue;
-            }
             const contribution = roundMoney(Math.min(row.market_center_dollar, capLeft));
             const overflow = roundMoney(row.market_center_dollar - contribution);
-            row.cap_contribution = contribution;
+            row.cap_contribution = row.is_registered ? contribution : 0;
             row.market_center_dollar = contribution;
             if (row.is_team_transaction) {
                 row.team_dollar = roundMoney(row.team_dollar + overflow);
@@ -499,9 +527,21 @@ export function applyCapProgressionToCalculatedRowsWithMeta(baseMetaRows) {
                 row.associate_dollar = roundMoney(row.associate_dollar + overflow);
             }
             row.cap_remaining = roundMoney(Math.max(capAmount - (capUsedBefore + contribution), 0));
-            capProgressByCycle.set(cycleKey, roundMoney(capUsedBefore + contribution));
+            if (contribution > 0) {
+                capProgressByCycle.set(cycleKey, roundMoney(capUsedBefore + contribution));
+            }
         }
         else {
+            if (row.market_center_dollar > 0) {
+                const overflow = row.market_center_dollar;
+                row.market_center_dollar = 0;
+                if (row.is_team_transaction) {
+                    row.team_dollar = roundMoney(row.team_dollar + overflow);
+                }
+                else {
+                    row.associate_dollar = roundMoney(row.associate_dollar + overflow);
+                }
+            }
             row.cap_contribution = 0;
             row.cap_remaining = 0;
         }
@@ -783,9 +823,7 @@ export async function previewScopedTransactionAgentCalculations(db, strictTransa
         team_nagel_cap_impact: teamNagelCapImpact,
     };
 }
-async function insertCalculatedRows(db, rows) {
-    // Replace the full snapshot each run.
-    await db.query(`TRUNCATE TABLE migration.transaction_agent_calculations`);
+async function upsertCalculatedRows(db, rows) {
     if (rows.length === 0) {
         return;
     }
@@ -869,6 +907,11 @@ async function insertCalculatedRows(db, rows) {
       `, values);
     }
 }
+async function insertCalculatedRows(db, rows) {
+    // Replace the full snapshot each run.
+    await db.query(`TRUNCATE TABLE migration.transaction_agent_calculations`);
+    await upsertCalculatedRows(db, rows);
+}
 async function ensureCalculationUniqueness(db) {
     // Keep latest row per transaction_agent_id before enforcing uniqueness.
     await db.query(`
@@ -907,5 +950,60 @@ export async function recomputeAllTransactionAgentCalculations(db) {
     const groups = groupByTransaction(rawRows);
     const calculated = buildCalculatedRows(groups);
     await insertCalculatedRows(db, calculated);
+}
+export async function recomputeScopedTransactionAgentCalculations(db, strictTransactionNumbers) {
+    const normalizedStrictTransactionNumbers = strictTransactionNumbers
+        .map((value) => value.trim().toUpperCase())
+        .filter((value) => value.length > 0);
+    if (normalizedStrictTransactionNumbers.length === 0) {
+        return {
+            strict_transaction_numbers: [],
+            affected_rows_count: 0,
+            affected_transaction_ids: [],
+        };
+    }
+    // Serialize scoped recompute operations to avoid race conditions with full recomputes.
+    await db.query(`SELECT pg_advisory_xact_lock(hashtext('kwsa:transaction-agent-calculations:recompute'))`);
+    await ensureCalculationColumns(db);
+    await ensureCalculationUniqueness(db);
+    const strictSet = new Set(normalizedStrictTransactionNumbers);
+    const rawRows = await fetchRawRows(db);
+    const groups = groupByTransaction(rawRows);
+    const calculatedWithMeta = buildCalculatedRowsWithMeta(groups);
+    const envelopeWithMeta = selectScopedEnvelopeForTesting(calculatedWithMeta.map((entry) => ({
+        transaction_number: entry.row.transaction_number,
+        cap_progress_key: entry.cap_progress_key,
+        cap_cycle_start_date: entry.row.cap_cycle_start_date,
+    })), normalizedStrictTransactionNumbers);
+    const envelopeKeySet = new Set(envelopeWithMeta.map((entry) => `${entry.cap_progress_key}|${entry.cap_cycle_start_date}`));
+    const envelopeRows = calculatedWithMeta
+        .filter((entry) => {
+        const key = `${entry.cap_progress_key}|${entry.row.cap_cycle_start_date}`;
+        return envelopeKeySet.has(key);
+    })
+        .map((entry) => entry.row);
+    const strictRows = calculatedWithMeta
+        .filter((entry) => strictSet.has((entry.row.transaction_number ?? '').trim().toUpperCase()))
+        .map((entry) => entry.row);
+    const strictTransactionIds = Array.from(new Set(strictRows.map((row) => row.transaction_id)));
+    const strictAgentIds = Array.from(new Set(strictRows.map((row) => row.transaction_agent_id)));
+    if (strictTransactionIds.length > 0) {
+        if (strictAgentIds.length > 0) {
+            await db.query(`
+        DELETE FROM migration.transaction_agent_calculations
+        WHERE transaction_id = ANY($1::int[])
+          AND transaction_agent_id <> ALL($2::int[])
+        `, [strictTransactionIds, strictAgentIds]);
+        }
+        else {
+            await db.query(`DELETE FROM migration.transaction_agent_calculations WHERE transaction_id = ANY($1::int[])`, [strictTransactionIds]);
+        }
+    }
+    await upsertCalculatedRows(db, envelopeRows);
+    return {
+        strict_transaction_numbers: normalizedStrictTransactionNumbers,
+        affected_rows_count: envelopeRows.length,
+        affected_transaction_ids: strictTransactionIds,
+    };
 }
 //# sourceMappingURL=transactionCalculations.js.map

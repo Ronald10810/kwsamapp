@@ -41,7 +41,7 @@ param(
     [string]$EntegralBaseUrl = "http://sync.entegral.net/api",
     [string]$EntegralSourceId = "6",
     [bool]$LocalAssociateSuspensionEnabled = $true,
-    [switch]$AllowUnauthenticated,
+    [bool]$AllowUnauthenticated = $true,
     [switch]$SkipLockfileSync
 )
 

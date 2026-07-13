@@ -4,6 +4,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { mkdir, unlink, writeFile } from 'fs/promises';
 import { scheduleTransactionAgentRecompute } from '../services/transactionRecomputeQueue.js';
+import { recomputeScopedTransactionAgentCalculations } from '../services/transactionCalculations.js';
 import { applyCapRefresh, canApplyCapRefresh, dryRunCapRefresh, loadCapRefreshRoleNames, } from '../services/capRefresh/index.js';
 import { env } from '../config/env.js';
 import { getOptionalPgPool } from '../config/db.js';
@@ -2319,7 +2320,7 @@ router.put('/:id', resolvePermissions, async (req, res) => {
             }
         }
         // First, update the transaction itself (without agent fields)
-        const existing = await pool.query(`SELECT transaction_status, transaction_type, sale_type, listing_number, source_listing_id
+        const existing = await pool.query(`SELECT transaction_status, transaction_type, sale_type, listing_number, source_listing_id, transaction_number
        FROM migration.core_transactions
        WHERE id = $1
        LIMIT 1`, [id]);
@@ -2401,7 +2402,7 @@ router.put('/:id', resolvePermissions, async (req, res) => {
         expected_date = $56::timestamptz,
         updated_at = NOW()
       WHERE id = $57
-      RETURNING id::text
+      RETURNING id::text, transaction_number
       `, [
             transactionNumber,
             transactionStatus,
@@ -2523,13 +2524,46 @@ router.put('/:id', resolvePermissions, async (req, res) => {
          )
          VALUES ($1, $2, $3, NOW(), $4, $5, $6)`, [id, previousStatus, transactionStatus, changedByName, changedByUserId, changedByEmail]);
         }
-        const recomputeWarning = scheduleTransactionAgentRecompute('transactions-update');
+        const strictTransactionNumber = (update.rows[0]?.transaction_number ?? existing.rows[0]?.transaction_number ?? '').trim();
+        if (!strictTransactionNumber) {
+            return res.status(500).json({ error: 'Saved transaction but could not determine transaction number for recalculation.' });
+        }
+        await recomputeScopedTransactionAgentCalculations(pool, [strictTransactionNumber]);
+        const recomputeWarning = statusChanged ? null : scheduleTransactionAgentRecompute('transactions-update');
         // Force next MC Dashboard request to recompute today's snapshot after transaction edits.
         const snapshotExists = await pool.query(`SELECT to_regclass('migration.mc_dashboard_daily_snapshots') AS exists`);
         if (snapshotExists.rows[0]?.exists) {
             await pool.query(`DELETE FROM migration.mc_dashboard_daily_snapshots WHERE snapshot_date = $1::date`, [getTodayInAppTimeZone()]);
         }
         return res.json({ id: update.rows[0].id, warning: recomputeWarning });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return res.status(500).json({ error: message });
+    }
+});
+router.post('/:id/recalculate', resolvePermissions, async (req, res) => {
+    if (!pool) {
+        return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+    }
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: 'Invalid transaction id.' });
+    }
+    try {
+        await ensureTransactionAuxTables(pool);
+        const perms = req.permissions;
+        const hasAccess = await canAccessTransactionByScope(pool, id, perms);
+        if (!hasAccess) {
+            return res.status(403).json({ error: 'Permission denied: you cannot recalculate this transaction' });
+        }
+        const tx = await pool.query(`SELECT transaction_number FROM migration.core_transactions WHERE id = $1 LIMIT 1`, [id]);
+        const transactionNumber = (tx.rows[0]?.transaction_number ?? '').trim();
+        if (!transactionNumber) {
+            return res.status(400).json({ error: 'Transaction number is required before recalculation can run.' });
+        }
+        await recomputeScopedTransactionAgentCalculations(pool, [transactionNumber]);
+        return res.json({ ok: true, queued: false, transaction_number: transactionNumber });
     }
     catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
@@ -3251,89 +3285,6 @@ async function fetchTeamCurrentCapRemainingByIds(db, teamIds) {
     }
     return lookup;
 }
-async function resolveTeamIdsBySourceTeamIds(db, sourceTeamIds) {
-    if (sourceTeamIds.length === 0)
-        return new Map();
-    const normalizedTokens = Array.from(new Set(sourceTeamIds.map((value) => normalizeKey(value)).filter(Boolean)));
-    if (normalizedTokens.length === 0)
-        return new Map();
-    const result = await db.query(`
-    SELECT
-      t.id::text AS team_id,
-      t.source_team_id,
-      t.name AS team_name
-    FROM migration.core_teams t
-    WHERE LOWER(TRIM(COALESCE(t.status_name, ''))) IN ('active', '1')
-    `);
-    const lookup = new Map();
-    for (const row of result.rows) {
-        const teamId = Number(row.team_id);
-        if (!Number.isFinite(teamId) || teamId <= 0)
-            continue;
-        const candidateTokens = [
-            normalizeKey(row.source_team_id),
-            normalizeKey(row.team_id),
-            normalizeKey(row.team_name),
-        ].filter((value) => value.length > 0);
-        for (const token of candidateTokens) {
-            if (!normalizedTokens.includes(token))
-                continue;
-            if (!lookup.has(token))
-                lookup.set(token, teamId);
-        }
-    }
-    return lookup;
-}
-async function buildQuickSummaryDisplayCapRemainingLookup(db, rows) {
-    const sourceTeamIds = Array.from(new Set(rows
-        .flatMap((row) => [
-        row.transaction_current_source_team_id,
-        row.transaction_source_team_id,
-        row.associate_source_team_id,
-    ])
-        .map((value) => (value ?? '').trim())
-        .filter((value) => value.length > 0)));
-    const sourceTeamLookup = await resolveTeamIdsBySourceTeamIds(db, sourceTeamIds);
-    const associateIds = Array.from(new Set(rows
-        .map((row) => Number(row.associate_id))
-        .filter((value) => Number.isFinite(value) && value > 0)));
-    const teamIds = Array.from(new Set(rows.flatMap((row) => {
-        const explicitTeamId = Number(row.associate_team_id);
-        const resolvedByCurrentSource = sourceTeamLookup.get(normalizeKey(row.transaction_current_source_team_id));
-        const resolvedByTransactionSource = sourceTeamLookup.get(normalizeKey(row.transaction_source_team_id));
-        const resolvedByAssociateSource = sourceTeamLookup.get(normalizeKey(row.associate_source_team_id));
-        return [explicitTeamId, resolvedByCurrentSource, resolvedByTransactionSource, resolvedByAssociateSource]
-            .filter((value) => typeof value === 'number' && Number.isFinite(value) && value > 0);
-    })));
-    const [associateLookup, teamLookup] = await Promise.all([
-        fetchAssociateCurrentCapRemainingByIds(db, associateIds),
-        fetchTeamCurrentCapRemainingByIds(db, teamIds),
-    ]);
-    const displayLookup = new Map();
-    for (const row of rows) {
-        const transactionAgentId = Number(row.transaction_agent_id);
-        if (!Number.isFinite(transactionAgentId))
-            continue;
-        const explicitTeamId = Number(row.associate_team_id);
-        const resolvedTeamId = Number.isFinite(explicitTeamId) && explicitTeamId > 0
-            ? explicitTeamId
-            : sourceTeamLookup.get(normalizeKey(row.transaction_current_source_team_id))
-                ?? sourceTeamLookup.get(normalizeKey(row.transaction_source_team_id))
-                ?? sourceTeamLookup.get(normalizeKey(row.associate_source_team_id))
-                ?? null;
-        const associateId = Number(row.associate_id);
-        const teamCap = resolvedTeamId != null ? teamLookup.get(resolvedTeamId) ?? null : null;
-        const hasApplicableTeamCap = teamCap != null && teamCap.cap_amount > 0;
-        const associateCapRemaining = Number.isFinite(associateId) && associateId > 0
-            ? associateLookup.get(associateId)?.cap_remaining ?? null
-            : null;
-        const fallbackCapRemaining = toNumber(row.cap_remaining) ?? 0;
-        displayLookup.set(transactionAgentId, hasApplicableTeamCap
-            ? teamCap.cap_remaining
-            : (associateCapRemaining ?? fallbackCapRemaining));
-    }
-    return displayLookup;
-}
 router.post('/preview-cap-remaining', resolvePermissions, async (req, res) => {
     if (!pool) {
         return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
@@ -3452,7 +3403,7 @@ router.get('/:id/calculated-summary', resolvePermissions, async (req, res) => {
         tac.associate_dollar::text,
         COALESCE(team_cap.team_cap_amount, tac.cap_amount)::text AS cap_amount,
         tac.cap_contribution::text,
-        COALESCE(team_cap.team_cap_remaining, tac.cap_remaining)::text AS cap_remaining,
+        tac.cap_remaining::text AS cap_remaining,
         tac.team_dollar::text,
         tac.market_center_dollar::text,
         tac.cap_cycle_start_date::text,
@@ -3695,16 +3646,9 @@ router.get('/:id/calculated-summary', resolvePermissions, async (req, res) => {
             }
         }
         const toMoneyText = (value) => value.toFixed(2);
-        const displayCapRemainingLookup = await buildQuickSummaryDisplayCapRemainingLookup(pool, result.rows);
         const items = result.rows.map((row) => {
-            const transactionAgentId = Number(row.transaction_agent_id);
             const transactionCapRemaining = row.cap_remaining;
-            const displayCapRemainingValue = Number.isFinite(transactionAgentId)
-                ? displayCapRemainingLookup.get(transactionAgentId)
-                : null;
-            const displayCapRemaining = displayCapRemainingValue == null
-                ? transactionCapRemaining
-                : displayCapRemainingValue.toFixed(2);
+            const displayCapRemaining = transactionCapRemaining ?? '0.00';
             const baseAssociateDollar = toNumber(row.associate_dollar) ?? 0;
             const baseTeamDollar = toNumber(row.team_dollar) ?? 0;
             const baseMarketCenterDollar = toNumber(row.market_center_dollar) ?? 0;
@@ -3714,7 +3658,7 @@ router.get('/:id/calculated-summary', resolvePermissions, async (req, res) => {
                 row.transaction_source_team_id,
                 row.transaction_current_source_team_id,
             ].some((value) => toText(value) != null);
-            const applicableCapRemaining = displayCapRemainingValue ?? (toNumber(transactionCapRemaining) ?? 0);
+            const applicableCapRemaining = toNumber(transactionCapRemaining) ?? 0;
             let adjustedAssociateDollar = baseAssociateDollar;
             let adjustedTeamDollar = baseTeamDollar;
             let adjustedMarketCenterDollar = baseMarketCenterDollar;
