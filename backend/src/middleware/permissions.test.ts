@@ -29,7 +29,7 @@ interface ResolveOutput {
 }
 
 function resolveScopeLogic(input: ResolveInput): ResolveOutput | { error: string } {
-  const { isRegionalAdmin, roles, adminMcIds, homeMcId, activeContextId } = input;
+  const { isRegionalAdmin, isOfficeAdmin, roles, adminMcIds, homeMcId, activeContextId } = input;
 
   if (isRegionalAdmin && (activeContextId === 'regional_admin' || !activeContextId)) {
     return { scope: 'GLOBAL', marketCenterId: null };
@@ -50,6 +50,10 @@ function resolveScopeLogic(input: ResolveInput): ResolveOutput | { error: string
       return { error: 'Permission denied: not an office admin for this market centre' };
     }
     return { scope: 'MARKET_CENTRE', marketCenterId: claimedMcId };
+  }
+
+  if ((activeContextId === 'offline_fallback' || !activeContextId) && isOfficeAdmin) {
+    return { scope: 'MARKET_CENTRE', marketCenterId: homeMcId ?? adminMcIds[0] ?? null };
   }
 
   return { scope: 'OWN', marketCenterId: null };
@@ -191,6 +195,30 @@ describe('resolvePermissions — scope resolution', () => {
       activeContextId: 'office_admin_MC002',
     });
     expect(result).toHaveProperty('error');
+  });
+
+  it('Office Admin without active context stays MARKET_CENTRE scoped to home MC', () => {
+    const result = resolveScopeLogic({
+      isRegionalAdmin: false,
+      isOfficeAdmin: true,
+      roles: ['OFFICE_ADMIN'],
+      adminMcIds: [],
+      homeMcId: 'MC001',
+      activeContextId: '',
+    });
+    expect(result).toEqual({ scope: 'MARKET_CENTRE', marketCenterId: 'MC001' });
+  });
+
+  it('Office Admin offline fallback context stays MARKET_CENTRE scoped to home MC', () => {
+    const result = resolveScopeLogic({
+      isRegionalAdmin: false,
+      isOfficeAdmin: true,
+      roles: ['OFFICE_ADMIN'],
+      adminMcIds: [],
+      homeMcId: 'MC001',
+      activeContextId: 'offline_fallback',
+    });
+    expect(result).toEqual({ scope: 'MARKET_CENTRE', marketCenterId: 'MC001' });
   });
 
   it('Agent context (agent_MC001) yields OWN scope', () => {

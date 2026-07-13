@@ -128,6 +128,11 @@ export async function resolvePermissions(req: Request, res: Response, next: Next
       }
       scope = 'MARKET_CENTRE';
       marketCenterId = claimedMcId;
+    } else if ((activeContextId === 'offline_fallback' || !activeContextId) && isOfficeAdmin) {
+      // Keep Office Admin users inside their market-centre boundary even when
+      // a context header is absent (for example after storage loss or fallback).
+      scope = 'MARKET_CENTRE';
+      marketCenterId = assoc.source_market_center_id ?? adminMcIds[0] ?? null;
     } else if (activeContextId === 'agent' || activeContextId === 'lead_agent' || activeContextId === 'team_admin' || activeContextId === 'team_agent' || !activeContextId) {
       // Agent/team contexts or no context — restrict to own records
       scope = 'OWN';

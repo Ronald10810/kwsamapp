@@ -473,6 +473,14 @@ router.get('/summary', async (_req, res) => {
             FROM tac_dedup tac
             LEFT JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
             LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+            LEFT JOIN migration.core_teams t ON t.id = ca.team_id
+            LEFT JOIN LATERAL (
+              SELECT t_src.name, t_src.source_team_id
+              FROM migration.core_teams t_src
+              WHERE NULLIF(TRIM(COALESCE(t_src.source_team_id, '')), '') = NULLIF(TRIM(COALESCE(ca.source_team_id, '')), '')
+              ORDER BY t_src.id DESC
+              LIMIT 1
+            ) t_source ON true
             LEFT JOIN migration.core_market_centers mc_office ON LOWER(TRIM(COALESCE(mc_office.name, ''))) = LOWER(TRIM(COALESCE(tac.office_name, '')))
             LEFT JOIN migration.core_market_centers mc_assoc ON mc_assoc.source_market_center_id = ca.source_market_center_id
             LEFT JOIN migration.core_market_centers mc_tx ON mc_tx.id = ct.market_center_id
@@ -480,6 +488,23 @@ router.get('/summary', async (_req, res) => {
             WHERE tac.is_outside_agent = false
               AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date) IS NOT NULL
               AND ca.id IS NOT NULL
+              AND ca.team_id IS NULL
+              AND t.id IS NULL
+              AND NULLIF(TRIM(COALESCE(ca.source_team_id, '')), '') IS NULL
+              AND NULLIF(TRIM(COALESCE(t_source.source_team_id, '')), '') IS NULL
+              AND NULLIF(TRIM(COALESCE(ct.current_source_team_id, '')), '') IS NULL
+              AND NULLIF(TRIM(COALESCE(ct.source_team_id, '')), '') IS NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM migration.associate_admin_teams aat
+                WHERE aat.associate_id = ca.id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM migration.associate_job_titles ajt
+                WHERE ajt.associate_id = ca.id
+                  AND LOWER(TRIM(COALESCE(ajt.job_title, ''))) IN ('lead agent', 'team agent', 'team admin')
+              )
               AND ${normalizedSaleTypeSql} = 'for sale'
               AND ${salesOnlyTransactionExclusionSql}
           ),

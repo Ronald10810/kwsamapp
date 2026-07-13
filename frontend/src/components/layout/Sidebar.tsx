@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
-import { REPORTS } from '../../pages/reportsConfig';
+import { getAccessibleReports } from '../../pages/reportsConfig';
 import { useAuth } from '../../contexts/AuthContext';
 import { isFeatureEnabled } from '../../config/featureFlags';
 
@@ -136,7 +136,8 @@ function NavIcon({ name }: { name: NavIconName }) {
 export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { isOfficeAdmin, isRegionalAdmin } = useAuth();
+  const { isOfficeAdmin, isRegionalAdmin, isAgent } = useAuth();
+  const accessibleReports = getAccessibleReports({ isOfficeAdmin, isRegionalAdmin, isAgent });
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
@@ -157,8 +158,8 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
 
   function handleReportsClick(): void {
     setReportsOpen((prev) => !prev);
-    if (!isReportsRoute) {
-      navigate(`/reports/${REPORTS[0].id}`);
+    if (!isReportsRoute && accessibleReports[0]) {
+      navigate(`/reports/${accessibleReports[0].id}`);
     }
   }
 
@@ -250,6 +251,7 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
           </Link>
         ))}
 
+        {accessibleReports.length > 0 && (
         <div className="rounded-lg border border-red-900/40 bg-black/10">
           <button
             type="button"
@@ -271,7 +273,7 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
 
           {reportsOpen && (
             <div className="space-y-1 px-3 pb-3 pt-1">
-              {REPORTS.map((report) => {
+              {accessibleReports.map((report) => {
                 const reportPath = `/reports/${report.id}`;
                 const reportActive = location.pathname === reportPath;
                 return (
@@ -292,6 +294,7 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
             </div>
           )}
         </div>
+        )}
       </nav>
 
 

@@ -194,6 +194,115 @@ function summarizeSelection(selected: string[], options: MultiSelectOption[], al
   return `${labels.slice(0, 2).join(', ')} +${labels.length - 2}`;
 }
 
+type ReportActionButtonVariant = 'default' | 'primary';
+
+export function ReportActionButton({
+  label,
+  onClick,
+  disabled,
+  variant = 'default',
+  className = '',
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  variant?: ReportActionButtonVariant;
+  className?: string;
+}) {
+  const isPrimary = variant === 'primary';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex h-8 items-center rounded-md border px-3 text-xs font-semibold transition-opacity disabled:opacity-40 ${className}`.trim()}
+      style={{
+        borderColor: isPrimary ? 'var(--brand-soft)' : 'var(--border-soft)',
+        color: isPrimary ? '#fff' : 'var(--text-muted)',
+        background: isPrimary ? 'var(--brand)' : 'var(--surface-strong)',
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+export function SortableHeaderButton({
+  label,
+  active = false,
+  direction = 'asc',
+  align = 'left',
+  onClick,
+}: {
+  label: string;
+  active?: boolean;
+  direction?: 'asc' | 'desc';
+  align?: 'left' | 'right';
+  onClick: () => void;
+}) {
+  const indicator = active ? (direction === 'asc' ? '↑' : '↓') : '↕';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex w-full items-center gap-1.5 ${align === 'right' ? 'justify-end' : 'justify-start'}`}
+      style={{ color: 'inherit' }}
+    >
+      <span>{label}</span>
+      <span className="inline-flex w-3 justify-center" style={{ color: active ? 'var(--brand)' : 'inherit', opacity: active ? 1 : 0.65 }}>{indicator}</span>
+    </button>
+  );
+}
+
+export function ReportPagination({
+  page,
+  totalPages,
+  pageSize,
+  totalItems,
+  onPageChange,
+  onPageSizeChange,
+  pageSizeOptions = [10, 25, 50, 100],
+}: {
+  page: number;
+  totalPages: number;
+  pageSize: number;
+  totalItems: number;
+  onPageChange: (nextPage: number) => void;
+  onPageSizeChange: (nextPageSize: number) => void;
+  pageSizeOptions?: number[];
+}) {
+  if (totalItems === 0) return null;
+
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(totalItems, page * pageSize);
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+      <div>
+        Showing {start}-{end} of {totalItems}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="inline-flex items-center gap-2">
+          <span>Rows</span>
+          <select
+            value={pageSize}
+            onChange={(event) => onPageSizeChange(Number(event.target.value))}
+            className="rounded-md border px-2 py-1 text-xs"
+            style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)', background: 'var(--surface)' }}
+          >
+            {pageSizeOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <ReportActionButton label="Prev" onClick={() => onPageChange(page - 1)} disabled={page <= 1} className="h-8 px-2.5" />
+        <span>Page {page} of {Math.max(totalPages, 1)}</span>
+        <ReportActionButton label="Next" onClick={() => onPageChange(page + 1)} disabled={page >= totalPages} className="h-8 px-2.5" />
+      </div>
+    </div>
+  );
+}
+
 export function MultiSelectFilter({
   label,
   selected,

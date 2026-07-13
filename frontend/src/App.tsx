@@ -18,13 +18,22 @@ import AIToolsPage from './pages/AITools';
 import LoomPage from './pages/Loom';
 import TrainingHubPage from './pages/TrainingHub';
 import MCAdminToolsPage from './pages/MCAdminTools';
-import { REPORTS } from './pages/reportsConfig';
+import { getAccessibleReports } from './pages/reportsConfig';
 import { useAuth } from './contexts/AuthContext';
 
 function RootRedirect() {
   const { isOfficeAdmin, isRegionalAdmin } = useAuth();
   if (isOfficeAdmin || isRegionalAdmin) return <Navigate to="/mc-admin-tools" replace />;
   return <Navigate to="/home" replace />;
+}
+
+function ReportsRedirect() {
+  const { isOfficeAdmin, isRegionalAdmin, isAgent } = useAuth();
+  const accessibleReports = getAccessibleReports({ isOfficeAdmin, isRegionalAdmin, isAgent });
+  if (accessibleReports.length === 0) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <Navigate to={`/reports/${accessibleReports[0].id}`} replace />;
 }
 
 function App() {
@@ -49,7 +58,7 @@ function App() {
                 <Route path="/associates" element={<AssociatesPage />} />
                 <Route path="/listing-approvals" element={<Navigate to="/notifications" replace />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
-                <Route path="/reports" element={<Navigate to={`/reports/${REPORTS[0].id}`} replace />} />
+                <Route path="/reports" element={<ReportsRedirect />} />
                 <Route path="/reports/:reportId" element={<ReportsPage />} />
                 <Route path="/ai-tools" element={<AIToolsPage />} />
                 <Route path="/cma" element={<CMAGeneratorPage />} />

@@ -10,11 +10,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { ReportState } from './reports/ReportUi';
 
 export default function ReportsPage() {
-  const { isOfficeAdmin, isRegionalAdmin } = useAuth();
+  const { isOfficeAdmin, isRegionalAdmin, isAgent } = useAuth();
   const { reportId } = useParams();
   const accessibleReports = useMemo(
-    () => getAccessibleReports({ isOfficeAdmin, isRegionalAdmin }),
-    [isOfficeAdmin, isRegionalAdmin]
+    () => getAccessibleReports({ isOfficeAdmin, isRegionalAdmin, isAgent }),
+    [isOfficeAdmin, isRegionalAdmin, isAgent]
   );
   const canAccessReports = accessibleReports.length > 0;
 

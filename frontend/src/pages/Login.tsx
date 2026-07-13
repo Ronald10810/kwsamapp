@@ -54,13 +54,21 @@ export default function LoginPage() {
   useEffect(() => {
     loadGsiScript()
       .then(() => setScriptReady(true))
-      .catch(() => setError('Could not load Google Sign-In. Please refresh and try again.'));
-  }, []);
+      .catch(() => {
+        if (!canUseLocalDevLogin) {
+          setError('Could not load Google Sign-In. Please refresh and try again.');
+        }
+      });
+  }, [canUseLocalDevLogin]);
 
   // Initialise the Google button once the script is ready
   useEffect(() => {
     if (!scriptReady || !buttonRef.current) return;
     if (!GOOGLE_CLIENT_ID) {
+      if (canUseLocalDevLogin) {
+        setError(null);
+        return;
+      }
       setError('Google Sign-In is not configured. Contact the administrator.');
       return;
     }
@@ -106,9 +114,9 @@ export default function LoginPage() {
       const envDevEmail = String(import.meta.env.VITE_DEV_LOGIN_EMAIL ?? '').trim();
       const cachedDevEmail = String(localStorage.getItem('kwsa_dev_login_email') ?? '').trim();
       const candidateEmails = [
-        cachedDevEmail,
         envDevEmail,
         'ronald.vanscheltema@kwsa.co.za',
+        cachedDevEmail,
         'dian.muller@kwsa.co.za',
         'garth.mulder@kwsa.co.za',
         '',

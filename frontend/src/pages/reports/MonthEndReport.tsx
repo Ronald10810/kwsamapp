@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { FilterPanel, MultiSelectFilter, ReportHeader, ReportIcon, ReportKpiCard, ReportState } from './ReportUi';
+import { FilterPanel, MultiSelectFilter, ReportActionButton, ReportHeader, ReportIcon, ReportKpiCard, ReportPagination, ReportState } from './ReportUi';
 
 type MCRow = {
   market_center_name: string;
@@ -329,6 +329,8 @@ export default function MonthEndReport() {
   const [, setOptionsScopeDebug] = useState<MonthEndExtendedFilterOptions['debug'] | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('total_gci');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   const selectedMarketCenterId = filters.market_center_ids[0] ?? '';
   const primaryDimensionLabel = isTeamContext ? 'Team Member' : (isAgentOnlyContext ? 'Agent' : 'Market Centre');
@@ -666,6 +668,39 @@ export default function MonthEndReport() {
     });
   }, [data, sortKey, sortDirection]);
 
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedRows.slice(start, start + pageSize);
+  }, [sortedRows, page, pageSize]);
+
+  const pagedSummaryRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return (summaryData?.rows ?? []).slice(start, start + pageSize);
+  }, [summaryData, page, pageSize]);
+
+  const pagedDetailRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return (detailData?.rows ?? []).slice(start, start + pageSize);
+  }, [detailData, page, pageSize]);
+
+  const currentTotalItems = useMemo(() => {
+    if (activeTab === 'market-center-totals') return sortedRows.length;
+    if (activeTab === 'transaction-summary') return summaryData?.rows.length ?? 0;
+    return detailData?.rows.length ?? 0;
+  }, [activeTab, sortedRows.length, summaryData, detailData]);
+
+  const totalPages = Math.max(1, Math.ceil(currentTotalItems / pageSize));
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeTab, filters.date_from, filters.date_to, filters.transaction_status, filters.sale_type, filters.market_center_ids, filters.team_id, filters.associate_id]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
   function onSort(nextKey: SortKey): void {
     if (nextKey === sortKey) {
       setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
@@ -848,7 +883,6 @@ export default function MonthEndReport() {
       <ReportHeader
         title="Month End Report"
         subtitle={reportSubtitle}
-        context={`Reporting window: ${filters.date_from} to ${filters.date_to}`}
         actions={
           <div className="grid grid-cols-3 gap-2 sm:gap-3">
             <ReportKpiCard
@@ -896,11 +930,9 @@ export default function MonthEndReport() {
           })}
         </div>
 
-        {(activeTab === 'status-change-date' || activeTab === 'transaction-date') ? (
+        {activeTab === 'status-change-date' ? (
           <div className="mb-3 rounded-md border px-3 py-2 text-xs" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
-            {activeTab === 'status-change-date'
-              ? 'Status Change Date tab filters by status_change_date.'
-              : 'Transaction Date tab filters by transaction_date.'}
+            Status Change Date tab filters by status_change_date.
           </div>
         ) : null}
 
@@ -1003,23 +1035,15 @@ export default function MonthEndReport() {
           ) : null}
 
           <div className="flex items-end justify-end">
-            <button
-              type="button"
+            <ReportActionButton
+              label="Export CSV"
               onClick={exportActiveTabCsv}
               disabled={
                 (activeTab === 'market-center-totals' && (!data || data.rows.length === 0))
                 || (activeTab === 'transaction-summary' && (!summaryData || summaryData.rows.length === 0))
                 || ((activeTab === 'status-change-date' || activeTab === 'transaction-date') && (!detailData || detailData.rows.length === 0))
               }
-              className="inline-flex h-[34px] items-center rounded-md border px-3 text-xs font-semibold transition-opacity disabled:opacity-40"
-              style={{
-                borderColor: 'var(--border-soft)',
-                color: 'var(--text-muted)',
-                background: 'var(--surface-strong)',
-              }}
-            >
-              Export CSV
-            </button>
+            />
           </div>
         </div>
       </FilterPanel>
@@ -1038,15 +1062,15 @@ export default function MonthEndReport() {
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1120px] text-sm">
               <thead>
-                <tr style={{ borderBottom: '2px solid var(--border-soft)', background: 'var(--surface-strong)' }}>
-                  <th className="whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                <tr className="sticky top-0 z-10" style={{ borderBottom: '2px solid var(--border-soft)', background: 'var(--surface-strong)' }}>
+                  <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                     {primaryDimensionLabel}
                   </th>
                   {TABLE_COLUMNS.map((column) => (
                     <th
                       key={column.key}
                       onClick={() => onSort(column.key)}
-                      className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide"
+                      className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide"
                       style={{ color: sortKey === column.key ? 'var(--brand)' : 'var(--text-muted)', cursor: 'pointer' }}
                     >
                       {column.label} {sortKey === column.key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
@@ -1056,7 +1080,7 @@ export default function MonthEndReport() {
               </thead>
 
               <tbody>
-                {sortedRows.map((row, index) => (
+                {pagedRows.map((row, index) => (
                   <tr
                     key={`${row.mc_source_id}-${row.market_center_name}`}
                     className="hover:bg-slate-50"
@@ -1065,7 +1089,7 @@ export default function MonthEndReport() {
                       background: index % 2 === 0 ? 'var(--surface)' : 'var(--surface-strong)',
                     }}
                   >
-                    <td className="px-3 py-2.5 font-medium" style={{ color: 'var(--text-primary)' }}>
+                    <td className="px-3 py-2 font-medium" style={{ color: 'var(--text-primary)' }}>
                       {row.market_center_name}
                     </td>
                     {TABLE_COLUMNS.map((column) => {
@@ -1073,7 +1097,7 @@ export default function MonthEndReport() {
                       const display = renderValue(column.kind, value);
 
                       return (
-                        <td key={column.key} className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>
+                        <td key={column.key} className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>
                           {column.kind === 'currency'
                             ? renderAlignedCurrency(value, column.key === 'total_gci')
                             : (column.key === 'total_gci' ? <span className="font-semibold" style={{ color: 'var(--brand)' }}>{display}</span> : display)}
@@ -1086,9 +1110,9 @@ export default function MonthEndReport() {
 
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border-soft)', background: 'var(--ink-dark)' }}>
-                  <td className="px-3 py-2.5 text-sm font-bold text-white">TOTAL</td>
+                  <td className="px-3 py-2 text-sm font-bold text-white">TOTAL</td>
                   {TABLE_COLUMNS.map((column) => (
-                    <td key={column.key} className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">
+                    <td key={column.key} className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">
                         {column.kind === 'currency'
                           ? renderAlignedCurrency(data.totals[column.key] as number)
                           : renderValue(column.kind, data.totals[column.key] as number)}
@@ -1104,56 +1128,56 @@ export default function MonthEndReport() {
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1400px] text-sm">
                 <thead>
-                  <tr style={{ borderBottom: '2px solid var(--border-soft)', background: 'var(--surface-strong)' }}>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{primaryDimensionLabel}</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Contracts</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Units</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Sales Price</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>MC Sales Volume</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>List Price</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Contract GCI</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>GCI</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Royalties</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Growth Share</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Associate Dollar</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Company Dollar</th>
-                    <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Team Dollar</th>
+                  <tr className="sticky top-0 z-10" style={{ borderBottom: '2px solid var(--border-soft)', background: 'var(--surface-strong)' }}>
+                    <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{primaryDimensionLabel}</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Contracts</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Units</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Sales Price</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>MC Sales Volume</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>List Price</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Contract GCI</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>GCI</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Royalties</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Growth Share</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Associate Dollar</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Company Dollar</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Team Dollar</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {summaryData.rows.map((row, index) => (
+                  {pagedSummaryRows.map((row, index) => (
                     <tr key={`${row.mc_source_id}-${row.market_center_name}`} style={{ borderBottom: '1px solid var(--border-soft)', background: index % 2 === 0 ? 'var(--surface)' : 'var(--surface-strong)' }}>
-                      <td className="px-3 py-2.5 font-medium" style={{ color: 'var(--text-primary)' }}>{row.market_center_name}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatNumber(row.contracts)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatNumber(row.units)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.sales_price)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.mc_sales_volume)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.list_price)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.contract_gci)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.gci, true)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.royalties)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.growth_share)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.associate_dollar)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.company_dollar)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.team_dollar)}</td>
+                      <td className="px-3 py-2 font-medium" style={{ color: 'var(--text-primary)' }}>{row.market_center_name}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatNumber(row.contracts)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatNumber(row.units)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.sales_price)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.mc_sales_volume)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.list_price)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.contract_gci)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.gci, true)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.royalties)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.growth_share)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.associate_dollar)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.company_dollar)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.team_dollar)}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr style={{ borderTop: '2px solid var(--border-soft)', background: 'var(--ink-dark)' }}>
-                    <td className="px-3 py-2.5 text-sm font-bold text-white">TOTAL</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{formatNumber(summaryData.totals.contracts)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{formatNumber(summaryData.totals.units)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.sales_price)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.mc_sales_volume)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.list_price)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.contract_gci)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.gci)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.royalties)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.growth_share)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.associate_dollar)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.company_dollar)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.team_dollar)}</td>
+                    <td className="px-3 py-2 text-sm font-bold text-white">TOTAL</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{formatNumber(summaryData.totals.contracts)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{formatNumber(summaryData.totals.units)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.sales_price)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.mc_sales_volume)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.list_price)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.contract_gci)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.gci)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.royalties)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.growth_share)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.associate_dollar)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.company_dollar)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(summaryData.totals.team_dollar)}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -1176,7 +1200,7 @@ export default function MonthEndReport() {
                     ].map((heading) => (
                       <th
                         key={heading}
-                        className="sticky top-0 whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-wide"
+                        className="sticky top-0 whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wide"
                         style={{ color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
                       >
                         {heading}
@@ -1185,65 +1209,65 @@ export default function MonthEndReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {detailData.rows.map((row, index) => (
+                  {pagedDetailRows.map((row, index) => (
                     <tr key={`${row.mc_source_id}-${row.source_associate_id}-${row.transaction_number}-${index}`} style={{ borderBottom: '1px solid var(--border-soft)', background: index % 2 === 0 ? 'var(--surface)' : 'var(--surface-strong)' }}>
-                      {!isRoleScopedContext && <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.market_center_name}</td>}
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.associate_name}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.team_name}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.transaction_number}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{formatDate(row.transaction_date)}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{formatDate(row.list_date)}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{formatDate(row.status_change_date)}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.kwl_number}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.transaction_type}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.sale_type}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.transaction_status}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.suburb}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.city}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.buyer}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.seller}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.list_price)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.sales_price)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatPercent(row.th_split_pct)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.agent_sales_volume)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatPercent(row.comm_pct)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.contract_gci)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.total_gci, true)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.royalties)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.growth_share)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.associate_dollar)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.company_dollar)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.team_dollar)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.cap_remaining)}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.listing_office}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.bond_originator}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.bond_attorney}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.bond_attorney_email}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.bond_attorney_phone}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.transfer_attorney}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.transfer_attorney_email}</td>
-                      <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.transfer_attorney_phone}</td>
+                      {!isRoleScopedContext && <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.market_center_name}</td>}
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.associate_name}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.team_name}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.transaction_number}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{formatDate(row.transaction_date)}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{formatDate(row.list_date)}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{formatDate(row.status_change_date)}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.kwl_number}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.transaction_type}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.sale_type}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.transaction_status}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.suburb}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.city}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.buyer}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.seller}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.list_price)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.sales_price)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatPercent(row.th_split_pct)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.agent_sales_volume)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatPercent(row.comm_pct)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.contract_gci)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.total_gci, true)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.royalties)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.growth_share)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.associate_dollar)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.company_dollar)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.team_dollar)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: 'var(--text-primary)' }}>{renderAlignedCurrency(row.cap_remaining)}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.listing_office}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.bond_originator}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.bond_attorney}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.bond_attorney_email}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.bond_attorney_phone}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.transfer_attorney}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.transfer_attorney_email}</td>
+                      <td className="px-3 py-2" style={{ color: 'var(--text-primary)' }}>{row.transfer_attorney_phone}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr style={{ borderTop: '2px solid var(--border-soft)', background: 'var(--ink-dark)' }}>
-                    <td className="px-3 py-2.5 text-sm font-bold text-white">TOTAL</td>
-                    <td className="px-3 py-2.5 text-sm font-bold text-white" colSpan={detailContractsColSpan}>Contracts {formatNumber(detailData.totals.contracts)} | Units {formatNumber(detailData.totals.units)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.list_price)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.sales_price)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">-</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.agent_sales_volume)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">-</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.contract_gci)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.total_gci)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.royalties)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.growth_share)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.associate_dollar)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.company_dollar)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.team_dollar)}</td>
-                    <td className="px-3 py-2.5 text-right text-sm font-bold tabular-nums text-white">-</td>
-                    <td className="px-3 py-2.5 text-sm font-bold text-white" colSpan={8}></td>
+                    <td className="px-3 py-2 text-sm font-bold text-white">TOTAL</td>
+                    <td className="px-3 py-2 text-sm font-bold text-white" colSpan={detailContractsColSpan}>Contracts {formatNumber(detailData.totals.contracts)} | Units {formatNumber(detailData.totals.units)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.list_price)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.sales_price)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">-</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.agent_sales_volume)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">-</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.contract_gci)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.total_gci)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.royalties)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.growth_share)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.associate_dollar)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.company_dollar)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.team_dollar)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">-</td>
+                    <td className="px-3 py-2 text-sm font-bold text-white" colSpan={8}></td>
                   </tr>
                 </tfoot>
               </table>
@@ -1251,6 +1275,21 @@ export default function MonthEndReport() {
           )
         )}
       </section>
+      {!isLoading && currentTotalItems > 0 ? (
+        <section className="surface-card overflow-hidden">
+          <ReportPagination
+            page={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            totalItems={currentTotalItems}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+          />
+        </section>
+      ) : null}
     </div>
   );
 }

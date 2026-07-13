@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { FilterPanel, MultiSelectFilter, ReportHeader, ReportIcon, ReportKpiCard, StatusChip } from './ReportUi';
+import { FilterPanel, MultiSelectFilter, ReportActionButton, ReportHeader, ReportIcon, ReportKpiCard, ReportPagination, SortableHeaderButton, StatusChip } from './ReportUi';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -148,7 +148,7 @@ function Dash() {
 
 function Num({ v }: { v: number }) {
   return (
-    <td className="px-3 py-2 text-right text-xs tabular-nums"
+    <td className="px-3 py-1.5 text-right text-xs tabular-nums"
       style={{ color: v > 0 ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
       {v}
     </td>
@@ -196,7 +196,7 @@ export default function ListingsLocationReport() {
   const [filters, setFilters] = useState<Filters>({
     list_date_from: getFirstOfMonth(),
     list_date_to: getToday(),
-    listing_status: [],
+    listing_status: ['Active'],
     province: [],
     suburb: '',
     market_center_ids: [],
@@ -216,6 +216,8 @@ export default function ListingsLocationReport() {
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('list_date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   // Track if we've already auto-scoped market centre to prevent repeated updates
   const hasAutoScopedRef = useRef(false);
@@ -263,6 +265,11 @@ export default function ListingsLocationReport() {
           mandate_types: normalizeValues(opts.mandate_types),
           agents: normalizeValues(opts.agents),
         });
+        const activeStatusOption = normalizeValues(opts.listing_statuses).find((status) => status.trim().toLowerCase() === 'active') ?? 'Active';
+        setFilters((prev) => ({
+          ...prev,
+          listing_status: prev.listing_status.length > 0 ? prev.listing_status : [activeStatusOption],
+        }));
         // Only auto-scope market centre once on first load
         if (!hasAutoScopedRef.current && !isRegionalContext && scopedMarketCenterId) {
           console.log('[Filter Effect] Auto-scoping market centre', { scopedMarketCenterId });
@@ -336,24 +343,35 @@ export default function ListingsLocationReport() {
     });
   }, [data, sortKey, sortDir]);
 
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
+
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedRows.slice(start, start + pageSize);
+  }, [sortedRows, page, pageSize]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
   function onSort(key: SortKey): void {
     if (key === sortKey) { setSortDir((d) => (d === 'asc' ? 'desc' : 'asc')); }
     else { setSortKey(key); setSortDir('desc'); }
   }
 
-  function SortIcon({ k }: { k: SortKey }) {
-    if (k !== sortKey) return <span className="ml-0.5 opacity-30">↕</span>;
-    return <span className="ml-0.5" style={{ color: 'var(--brand)' }}>{sortDir === 'asc' ? '↑' : '↓'}</span>;
-  }
-
   function Th({ label, k, right }: { label: string; k: SortKey; right?: boolean }) {
     return (
       <th
-        className={`cursor-pointer select-none whitespace-nowrap px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${right ? 'text-right' : 'text-left'}`}
+        className={`whitespace-nowrap px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${right ? 'text-right' : 'text-left'}`}
         style={{ color: 'var(--text-muted)' }}
-        onClick={() => onSort(k)}
       >
-        {label}<SortIcon k={k} />
+        <SortableHeaderButton label={label} active={sortKey === k} direction={sortDir} align={right ? 'right' : 'left'} onClick={() => onSort(k)} />
       </th>
     );
   }
@@ -532,15 +550,7 @@ export default function ListingsLocationReport() {
 
         </div>
         <div className="mt-3 flex justify-end">
-          <button
-            type="button"
-            disabled={!data || sortedRows.length === 0}
-            onClick={() => exportCsv(sortedRows, filters.list_date_from, filters.list_date_to)}
-            className="inline-flex h-[34px] items-center justify-center rounded-md border px-4 text-xs font-semibold transition-opacity disabled:opacity-40"
-            style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
-          >
-            Export CSV
-          </button>
+          <ReportActionButton label="Export CSV" onClick={() => exportCsv(sortedRows, filters.list_date_from, filters.list_date_to)} disabled={!data || sortedRows.length === 0} className="justify-center px-4" />
         </div>
       </FilterPanel>
 
@@ -555,7 +565,7 @@ export default function ListingsLocationReport() {
       <section className="surface-card overflow-hidden">
         <div className="flex items-center justify-between border-b px-4 py-2.5" style={{ borderColor: 'var(--border-soft)' }}>
           <span className="text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
-            {isLoading ? 'Loading…' : `${sortedRows.length.toLocaleString()} listing${sortedRows.length !== 1 ? 's' : ''}`}
+                  {isLoading ? 'Loading…' : `${sortedRows.length.toLocaleString()} listing${sortedRows.length !== 1 ? 's' : ''}`}
           </span>
         </div>
 
@@ -604,54 +614,54 @@ export default function ListingsLocationReport() {
                   </td>
                 </tr>
               )}
-              {!isLoading && sortedRows.map((row, idx) => (
+              {!isLoading && pagedRows.map((row, idx) => (
                 <tr
                   key={row.listing_number + idx}
                   className="border-b transition-colors hover:bg-slate-50"
                   style={{ borderColor: 'var(--border-soft)' }}
                 >
-                  <td className="whitespace-nowrap px-3 py-2 text-xs font-semibold" style={{ color: 'var(--brand)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs font-semibold" style={{ color: 'var(--brand)' }}>
                     {row.listing_number}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {formatDate(row.list_date)}
                   </td>
-                  <td className="px-3 py-2 text-right text-xs tabular-nums" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="px-3 py-1.5 text-right text-xs tabular-nums" style={{ color: 'var(--text-secondary)' }}>
                     {row.days_on_market}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-primary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-primary)' }}>
                     {getDisplayAgent(row) || <Dash />}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-primary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-primary)' }}>
                     {row.market_center_name || <Dash />}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {row.city || <Dash />}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {row.suburb || <Dash />}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {row.province || <Dash />}
                   </td>
-                  <td className="max-w-[200px] truncate px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}
+                  <td className="max-w-[200px] truncate px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}
                     title={row.full_address}>
                     {row.full_address || <Dash />}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium tabular-nums"
+                  <td className="whitespace-nowrap px-3 py-1.5 text-right text-xs font-medium tabular-nums"
                     style={{ color: 'var(--text-primary)' }}>
                     {formatMoney(row.price)}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {row.mandate_type || <Dash />}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {row.listing_type || <Dash />}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs">
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs">
                     <StatusChip value={(row.listing_status_tag || row.status_name || 'Unknown')} />
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {row.sale_or_rent || <Dash />}
                   </td>
                   <Num v={row.bedrooms} />
@@ -660,13 +670,13 @@ export default function ListingsLocationReport() {
                   <Num v={row.lounges} />
                   <Num v={row.dining_rooms} />
                   <Num v={row.pools} />
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {formatDate(row.reduced_date)}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {row.p24_ref || <Dash />}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {row.private_property_ref || <Dash />}
                   </td>
                 </tr>
@@ -674,6 +684,19 @@ export default function ListingsLocationReport() {
             </tbody>
           </table>
         </div>
+        {!isLoading && sortedRows.length > 0 ? (
+          <ReportPagination
+            page={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            totalItems={sortedRows.length}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+          />
+        ) : null}
       </section>
     </div>
   );

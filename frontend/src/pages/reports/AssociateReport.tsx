@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { FilterPanel, MultiSelectFilter, ReportHeader, ReportIcon, ReportKpiCard, ReportState, StatusChip } from './ReportUi';
+import { FilterPanel, MultiSelectFilter, ReportActionButton, ReportHeader, ReportIcon, ReportKpiCard, ReportPagination, ReportState, SortableHeaderButton, StatusChip } from './ReportUi';
 
 type AssociateReportRow = {
   market_center_name: string;
@@ -81,6 +81,11 @@ function monthName(month: string): string {
   return new Date(Date.UTC(2024, num - 1, 1)).toLocaleString('en-ZA', { month: 'long' });
 }
 
+function isActiveStatusValue(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'active' || normalized === '1';
+}
+
 function resolveScopedMarketCenterId(
   options: Array<{ id: string; name: string }>,
   rawId: string | null | undefined,
@@ -130,6 +135,8 @@ export default function AssociateReport() {
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('associate_name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   useEffect(() => {
     if (!token) return;
@@ -236,6 +243,23 @@ export default function AssociateReport() {
     });
   }, [filteredRows, sortKey, sortDirection]);
 
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
+
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedRows.slice(start, start + pageSize);
+  }, [sortedRows, page, pageSize]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters.market_center_ids, filters.team_ids, filters.statuses, filters.roles, filters.associate_query, filters.birthday_months]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
   const filteredTotals = useMemo(() => {
     const totalAssociates = filteredRows.length;
     const activeAssociates = filteredRows.filter((row) => {
@@ -256,6 +280,18 @@ export default function AssociateReport() {
     return options.teams.filter((team) => filters.market_center_ids.includes(team.market_center_id));
   }, [options.teams, filters.market_center_ids]);
 
+  const hideEndDateColumn = useMemo(() => {
+    if (filters.statuses.length !== 1) return false;
+    return isActiveStatusValue(filters.statuses[0]);
+  }, [filters.statuses]);
+
+  useEffect(() => {
+    if (hideEndDateColumn && sortKey === 'end_date') {
+      setSortKey('kw_start_date');
+      setSortDirection('asc');
+    }
+  }, [hideEndDateColumn, sortKey]);
+
   function onSort(nextKey: SortKey): void {
     if (nextKey === sortKey) {
       setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
@@ -275,7 +311,6 @@ export default function AssociateReport() {
       'Associate',
       'Status',
       'KW Start Date',
-      'End Date',
       'Anniversary Date',
       'Birthday',
       'Mobile Number',
@@ -283,19 +318,30 @@ export default function AssociateReport() {
       'Roles',
     ];
 
-    const csvRows = sortedRows.map((row) => [
-      row.market_center_name,
-      row.team_name,
-      row.associate_name,
-      row.status_name,
-      row.kw_start_date ?? '',
-      row.end_date ?? '',
-      row.anniversary_date ?? '',
-      row.birthday ?? '',
-      row.mobile_number ?? '',
-      row.associate_email ?? '',
-      row.roles,
-    ]);
+    if (!hideEndDateColumn) {
+      headers.splice(5, 0, 'End Date');
+    }
+
+    const csvRows = sortedRows.map((row) => {
+      const values = [
+        row.market_center_name,
+        row.team_name,
+        row.associate_name,
+        row.status_name,
+        row.kw_start_date ?? '',
+        row.anniversary_date ?? '',
+        row.birthday ?? '',
+        row.mobile_number ?? '',
+        row.associate_email ?? '',
+        row.roles,
+      ];
+
+      if (!hideEndDateColumn) {
+        values.splice(5, 0, row.end_date ?? '');
+      }
+
+      return values;
+    });
 
     const csvContent = [headers, ...csvRows]
       .map((row) => row.map((value) => `"${String(value).split('"').join('""')}"`).join(','))
@@ -413,19 +459,7 @@ export default function AssociateReport() {
         </div>
 
         <div className="mt-3 flex justify-end">
-          <button
-            type="button"
-            onClick={exportCsv}
-            disabled={sortedRows.length === 0}
-            className="inline-flex h-[34px] items-center rounded-md border px-3 text-xs font-semibold transition-opacity disabled:opacity-40"
-            style={{
-              borderColor: 'var(--border-soft)',
-              color: 'var(--text-muted)',
-              background: 'var(--surface-strong)',
-            }}
-          >
-            Export CSV
-          </button>
+          <ReportActionButton label="Export CSV" onClick={exportCsv} disabled={sortedRows.length === 0} />
         </div>
       </FilterPanel>
 
@@ -442,37 +476,37 @@ export default function AssociateReport() {
           <ReportState type="empty" message="No results found for the selected filters." />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1320px] text-sm">
+            <table className={`w-full text-sm ${hideEndDateColumn ? 'min-w-[1220px]' : 'min-w-[1320px]'}`}>
               <thead>
-                <tr className="border-b text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('market_center_name')}>Market Centre</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('team_name')}>Team</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('associate_name')}>Associate</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('status_name')}>Status</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('kw_start_date')}>KW Start Date</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('end_date')}>End Date</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('anniversary_date')}>Anniversary Date</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('birthday')}>Birthday</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('mobile_number')}>Mobile Number</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('associate_email')}>Associate Email</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('roles')}>Role/s</th>
+                <tr className="sticky top-0 z-10 border-b text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Market Centre" active={sortKey === 'market_center_name'} direction={sortDirection} onClick={() => onSort('market_center_name')} /></th>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Team" active={sortKey === 'team_name'} direction={sortDirection} onClick={() => onSort('team_name')} /></th>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Associate" active={sortKey === 'associate_name'} direction={sortDirection} onClick={() => onSort('associate_name')} /></th>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Status" active={sortKey === 'status_name'} direction={sortDirection} onClick={() => onSort('status_name')} /></th>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="KW Start Date" active={sortKey === 'kw_start_date'} direction={sortDirection} onClick={() => onSort('kw_start_date')} /></th>
+                  {!hideEndDateColumn ? <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="End Date" active={sortKey === 'end_date'} direction={sortDirection} onClick={() => onSort('end_date')} /></th> : null}
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Anniversary Date" active={sortKey === 'anniversary_date'} direction={sortDirection} onClick={() => onSort('anniversary_date')} /></th>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Birthday" active={sortKey === 'birthday'} direction={sortDirection} onClick={() => onSort('birthday')} /></th>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Mobile Number" active={sortKey === 'mobile_number'} direction={sortDirection} onClick={() => onSort('mobile_number')} /></th>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Associate Email" active={sortKey === 'associate_email'} direction={sortDirection} onClick={() => onSort('associate_email')} /></th>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Role/s" active={sortKey === 'roles'} direction={sortDirection} onClick={() => onSort('roles')} /></th>
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map((row) => (
+                {pagedRows.map((row) => (
                   <tr
                     key={`${row.source_associate_id}-${row.mc_source_id}-${row.team_source_id}`}
                     className="border-b hover:bg-slate-50"
                     style={{ borderColor: 'var(--border-soft)' }}
                   >
-                    <td className="px-3 py-2">{row.market_center_name}</td>
-                    <td className="px-3 py-2">{row.team_name}</td>
-                    <td className="px-3 py-2 font-medium">{row.associate_name}</td>
-                    <td className="px-3 py-2">{row.status_name ? <StatusChip value={row.status_name} /> : '—'}</td>
-                    <td className="px-3 py-2">{formatDate(row.kw_start_date)}</td>
-                    <td className="px-3 py-2">{formatDate(row.end_date)}</td>
-                    <td className="px-3 py-2">{formatDate(row.anniversary_date)}</td>
-                    <td className="px-3 py-2">
+                    <td className="px-3 py-1.5">{row.market_center_name}</td>
+                    <td className="px-3 py-1.5">{row.team_name}</td>
+                    <td className="px-3 py-1.5 font-medium">{row.associate_name}</td>
+                    <td className="px-3 py-1.5">{row.status_name ? <StatusChip value={row.status_name} /> : '—'}</td>
+                    <td className="px-3 py-1.5">{formatDate(row.kw_start_date)}</td>
+                    {!hideEndDateColumn ? <td className="px-3 py-1.5">{formatDate(row.end_date)}</td> : null}
+                    <td className="px-3 py-1.5">{formatDate(row.anniversary_date)}</td>
+                    <td className="px-3 py-1.5">
                       {row.birthday ? (
                         <span className="inline-flex items-center gap-2">
                           <span>{formatDate(row.birthday)}</span>
@@ -484,15 +518,28 @@ export default function AssociateReport() {
                         </span>
                       ) : '—'}
                     </td>
-                    <td className="px-3 py-2">{row.mobile_number ? <a href={`tel:${row.mobile_number}`} className="text-red-700 hover:underline">{row.mobile_number}</a> : '—'}</td>
-                    <td className="px-3 py-2">{row.associate_email ? <a href={`mailto:${row.associate_email}`} className="text-red-700 hover:underline">{row.associate_email}</a> : '—'}</td>
-                    <td className="px-3 py-2">{row.roles || '—'}</td>
+                    <td className="px-3 py-1.5">{row.mobile_number ? <a href={`tel:${row.mobile_number}`} className="text-red-700 hover:underline">{row.mobile_number}</a> : '—'}</td>
+                    <td className="px-3 py-1.5">{row.associate_email ? <a href={`mailto:${row.associate_email}`} className="text-red-700 hover:underline">{row.associate_email}</a> : '—'}</td>
+                    <td className="px-3 py-1.5">{row.roles || '—'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
+        {!isLoading && sortedRows.length > 0 ? (
+          <ReportPagination
+            page={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            totalItems={sortedRows.length}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+          />
+        ) : null}
       </section>
     </div>
   );

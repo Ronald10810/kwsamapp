@@ -411,6 +411,7 @@ async function main(): Promise<void> {
         id BIGSERIAL PRIMARY KEY,
         listing_id BIGINT NOT NULL UNIQUE REFERENCES migration.core_listings(id) ON DELETE CASCADE,
         status TEXT NOT NULL,
+        has_been_approved BOOLEAN NOT NULL DEFAULT false,
         submitted_by_associate_id BIGINT REFERENCES migration.core_associates(id) ON DELETE SET NULL,
         submitted_by_name TEXT,
         submitted_by_email TEXT,

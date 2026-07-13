@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { FilterPanel, MultiSelectFilter, ReportHeader, ReportIcon, ReportKpiCard, ReportState } from './ReportUi';
+import { FilterPanel, MultiSelectFilter, ReportActionButton, ReportHeader, ReportIcon, ReportKpiCard, ReportPagination, ReportState } from './ReportUi';
 
 type TopDownAgentFilterOptions = {
   market_centers: Array<{ id: string; name: string }>;
@@ -463,6 +463,8 @@ export default function TopDownAgentReport() {
 
   const [teamListingSortKey, setTeamListingSortKey] = useState<TeamListingSortKey>('total_listings');
   const [teamListingSortDirection, setTeamListingSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   const availableTabs = useMemo<Array<{ id: TabKey; label: string }>>(() => {
     const baseTabs: Array<{ id: TabKey; label: string }> = [
@@ -786,6 +788,48 @@ export default function TopDownAgentReport() {
       return teamListingSortDirection === 'asc' ? comparison : -comparison;
     });
   }, [teamListingRows, teamListingSortKey, teamListingSortDirection]);
+
+  const currentTotalItems = useMemo(() => {
+    if (tab === 'production') {
+      return viewBy === 'teams' ? sortedTeamProductionRows.length : sortedProductionRows.length;
+    }
+    if (tab === 'listings') {
+      return viewBy === 'teams' ? sortedTeamListingRows.length : sortedListingRows.length;
+    }
+    return 0;
+  }, [tab, viewBy, sortedTeamProductionRows.length, sortedProductionRows.length, sortedTeamListingRows.length, sortedListingRows.length]);
+
+  const totalPages = Math.max(1, Math.ceil(currentTotalItems / pageSize));
+
+  const pagedProductionRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedProductionRows.slice(start, start + pageSize);
+  }, [sortedProductionRows, page, pageSize]);
+
+  const pagedTeamProductionRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedTeamProductionRows.slice(start, start + pageSize);
+  }, [sortedTeamProductionRows, page, pageSize]);
+
+  const pagedListingRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedListingRows.slice(start, start + pageSize);
+  }, [sortedListingRows, page, pageSize]);
+
+  const pagedTeamListingRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedTeamListingRows.slice(start, start + pageSize);
+  }, [sortedTeamListingRows, page, pageSize]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [tab, viewBy, appliedFilters]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   const productionTotals = useMemo(() => (
     sortedProductionRows.reduce(
@@ -1126,15 +1170,106 @@ export default function TopDownAgentReport() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [options.teams, draftFilters.market_center_id]);
 
-  const selectedAssociateName = useMemo(
-    () => scopedAssociates.find((associate) => associate.id === draftFilters.associate_id)?.name ?? '',
-    [scopedAssociates, draftFilters.associate_id]
-  );
-
   const selectedTeamName = useMemo(
     () => scopedTeams.find((team) => team.id === draftFilters.team_id)?.name ?? '',
     [scopedTeams, draftFilters.team_id]
   );
+
+  const selectorControl = useMemo(() => {
+    if (viewBy === 'agents') {
+      if (isAgentOnlyContext) {
+        return (
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              Agent Scope
+            </label>
+            <div
+              className="w-full rounded-md border px-2.5 py-2 text-sm"
+              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
+            >
+              Showing your data only
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <SearchableSelector
+          label="Agent"
+          placeholder="Search agent name..."
+          options={scopedAssociates}
+          selectedId={draftFilters.associate_id}
+          onSelect={(id) => {
+            setDraftFilters((prev) => ({
+              ...prev,
+              associate_id: id,
+              associate_query: '',
+            }));
+          }}
+          allLabel={isTeamContext ? 'All agents in your team scope' : 'All agents in scope'}
+        />
+      );
+    }
+
+    if (isAgentOnlyContext) {
+      return (
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+            Team Scope
+          </label>
+          <div
+            className="w-full rounded-md border px-2.5 py-2 text-sm"
+            style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
+          >
+            Showing your data only
+          </div>
+        </div>
+      );
+    }
+
+    if (isTeamManagerContext) {
+      return (
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+            Team Scope
+          </label>
+          <div
+            className="w-full rounded-md border px-2.5 py-2 text-sm"
+            style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
+          >
+            {selectedTeamName || 'Showing your team scope only'}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <SearchableSelector
+        label="Team"
+        placeholder="Search team name..."
+        options={scopedTeams}
+        selectedId={draftFilters.team_id}
+        onSelect={(id) => {
+          setDraftFilters((prev) => ({
+            ...prev,
+            team_id: id,
+            team_query: '',
+          }));
+        }}
+        allLabel="All teams in scope"
+      />
+    );
+  }, [
+    viewBy,
+    isAgentOnlyContext,
+    isTeamContext,
+    isTeamManagerContext,
+    scopedAssociates,
+    scopedTeams,
+    draftFilters.associate_id,
+    draftFilters.team_id,
+    selectedTeamName,
+  ]);
 
   const emptyStateHint = useMemo(() => {
     const hints: string[] = [];
@@ -1173,8 +1308,7 @@ export default function TopDownAgentReport() {
     <div className="space-y-4">
       <ReportHeader
         title="Top Down Performance"
-        subtitle="Market Centre performance explorer with unified Agents and Teams views, role-scoped access, and CSV exports."
-        context={`Production: ${appliedFilters.date_from} to ${appliedFilters.date_to} | Listings: ${appliedFilters.list_date_from} to ${appliedFilters.list_date_to}`}
+        subtitle="Market Centre performance across production and listings."
         actions={
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5 sm:gap-3">
             <ReportKpiCard
@@ -1207,8 +1341,8 @@ export default function TopDownAgentReport() {
       />
 
       <FilterPanel>
-        <div className="mb-3 flex flex-wrap items-end gap-3">
-          <div className="w-full sm:w-56">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-12">
+          <div className="xl:col-span-2">
             <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>View By</label>
             <select
               value={viewBy}
@@ -1221,63 +1355,12 @@ export default function TopDownAgentReport() {
               {!isAgentOnlyContext ? <option value="teams">Teams</option> : null}
             </select>
           </div>
-          <div className="rounded-md border px-3 py-2 text-xs" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
-            {isRegionalContext
-              ? 'Regional context: market-centre and agent/team groupings are available.'
-              : (isMarketCenterContext
-                ? 'Market-centre context: default grouping is by agents/teams within your allowed market centre.'
-                : (isTeamContext
-                  ? 'Team context: team scope is locked and agent grouping is constrained to your team scope.'
-                  : 'Agent context: showing your data only.'))}
-          </div>
-        </div>
 
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-6">
-          <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Production Date From</label>
-            <input
-              type="date"
-              value={draftFilters.date_from}
-              onChange={(event) => setDraftFilters((prev) => ({ ...prev, date_from: event.target.value }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}
-            />
+          <div className="xl:col-span-5">
+            {selectorControl}
           </div>
 
-          <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Production Date To</label>
-            <input
-              type="date"
-              value={draftFilters.date_to}
-              onChange={(event) => setDraftFilters((prev) => ({ ...prev, date_to: event.target.value }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Listings Date From</label>
-            <input
-              type="date"
-              value={draftFilters.list_date_from}
-              onChange={(event) => setDraftFilters((prev) => ({ ...prev, list_date_from: event.target.value }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Listings Date To</label>
-            <input
-              type="date"
-              value={draftFilters.list_date_to}
-              onChange={(event) => setDraftFilters((prev) => ({ ...prev, list_date_to: event.target.value }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}
-            />
-          </div>
-
-          <div>
+          <div className="xl:col-span-5">
             <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Market Centre</label>
             <select
               value={draftFilters.market_center_id}
@@ -1292,160 +1375,120 @@ export default function TopDownAgentReport() {
               ))}
             </select>
           </div>
+        </div>
 
-          <MultiSelectFilter
-            label="Transaction Status"
-            selected={draftFilters.transaction_status}
-            onChange={(next) => setDraftFilters((prev) => ({ ...prev, transaction_status: next }))}
-            options={options.transaction_statuses.map((status) => ({ value: status, label: status }))}
-            allLabel="All"
-          />
-
-          <MultiSelectFilter
-            label="Sale Type"
-            selected={draftFilters.sale_type}
-            onChange={(next) => setDraftFilters((prev) => ({ ...prev, sale_type: next }))}
-            options={options.sale_types.map((value) => ({ value, label: value }))}
-            allLabel="All"
-          />
-
-          <MultiSelectFilter
-            label="Listing Status"
-            selected={draftFilters.listing_status}
-            onChange={(next) => setDraftFilters((prev) => ({ ...prev, listing_status: next }))}
-            options={options.listing_statuses.map((value) => ({ value, label: value }))}
-            allLabel="All"
-          />
-
-          <MultiSelectFilter
-            label="Sale or Rent"
-            selected={draftFilters.sale_or_rent}
-            onChange={(next) => setDraftFilters((prev) => ({ ...prev, sale_or_rent: next }))}
-            options={options.sale_or_rent_options.map((value) => ({ value, label: value }))}
-            allLabel="All"
-          />
-
-          <MultiSelectFilter
-            label="Mandate Type"
-            selected={draftFilters.mandate_type}
-            onChange={(next) => setDraftFilters((prev) => ({ ...prev, mandate_type: next }))}
-            options={options.mandate_types.map((value) => ({ value, label: value }))}
-            allLabel="All"
-          />
-
-          {viewBy === 'agents' ? (
-            isAgentOnlyContext ? (
-              <div>
-                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Agent Scope
-                </label>
-                <div
-                  className="w-full rounded-md border px-2.5 py-2 text-sm"
-                  style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
-                >
-                  Showing your data only
-                </div>
-              </div>
-            ) : (
-              <SearchableSelector
-                label="Agent"
-                placeholder="Search agent name..."
-                options={scopedAssociates}
-                selectedId={draftFilters.associate_id}
-                onSelect={(id) => {
-                  setDraftFilters((prev) => ({
-                    ...prev,
-                    associate_id: id,
-                    associate_query: '',
-                  }));
-                }}
-                allLabel={isTeamContext ? 'All agents in your team scope' : 'All agents in scope'}
-              />
-            )
-          ) : (
-            isAgentOnlyContext ? (
-              <div>
-                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Team Scope
-                </label>
-                <div
-                  className="w-full rounded-md border px-2.5 py-2 text-sm"
-                  style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
-                >
-                  Showing your data only
-                </div>
-              </div>
-            ) : isTeamManagerContext ? (
-              <div>
-                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Team Scope
-                </label>
-                <div
-                  className="w-full rounded-md border px-2.5 py-2 text-sm"
-                  style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
-                >
-                  {selectedTeamName || 'Showing your team scope only'}
-                </div>
-              </div>
-            ) : (
-              <SearchableSelector
-                label="Team"
-                placeholder="Search team name..."
-                options={scopedTeams}
-                selectedId={draftFilters.team_id}
-                onSelect={(id) => {
-                  setDraftFilters((prev) => ({
-                    ...prev,
-                    team_id: id,
-                    team_query: '',
-                  }));
-                }}
-                allLabel="All teams in scope"
-              />
-            )
-          )}
-
-          <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Selected Filter
-            </label>
-            <div
-              className="w-full rounded-md border px-2.5 py-2 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)', background: 'var(--surface-strong)' }}
-            >
-              {viewBy === 'agents'
-                ? (selectedAssociateName || (isAgentOnlyContext ? 'Showing your data only' : 'All agents'))
-                : (selectedTeamName || (isAgentOnlyContext ? 'Showing your data only' : 'All teams'))}
+        <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
+          <section
+            className="rounded-md border p-3"
+            style={{ borderColor: 'var(--border-soft)', background: 'var(--surface-strong)' }}
+          >
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              Production Filters
             </div>
-          </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Production Date From</label>
+                <input
+                  type="date"
+                  value={draftFilters.date_from}
+                  onChange={(event) => setDraftFilters((prev) => ({ ...prev, date_from: event.target.value }))}
+                  className="w-full rounded-md border px-2.5 py-1.5 text-sm"
+                  style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)', background: 'var(--surface)' }}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Production Date To</label>
+                <input
+                  type="date"
+                  value={draftFilters.date_to}
+                  onChange={(event) => setDraftFilters((prev) => ({ ...prev, date_to: event.target.value }))}
+                  className="w-full rounded-md border px-2.5 py-1.5 text-sm"
+                  style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)', background: 'var(--surface)' }}
+                />
+              </div>
+
+              <MultiSelectFilter
+                label="Transaction Status"
+                selected={draftFilters.transaction_status}
+                onChange={(next) => setDraftFilters((prev) => ({ ...prev, transaction_status: next }))}
+                options={options.transaction_statuses.map((status) => ({ value: status, label: status }))}
+                allLabel="All"
+              />
+
+              <MultiSelectFilter
+                label="Sale Type"
+                selected={draftFilters.sale_type}
+                onChange={(next) => setDraftFilters((prev) => ({ ...prev, sale_type: next }))}
+                options={options.sale_types.map((value) => ({ value, label: value }))}
+                allLabel="All"
+              />
+            </div>
+          </section>
+
+          <section
+            className="rounded-md border p-3"
+            style={{ borderColor: 'var(--border-soft)', background: 'var(--surface-strong)' }}
+          >
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              Listings Filters
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Listings Date From</label>
+                <input
+                  type="date"
+                  value={draftFilters.list_date_from}
+                  onChange={(event) => setDraftFilters((prev) => ({ ...prev, list_date_from: event.target.value }))}
+                  className="w-full rounded-md border px-2.5 py-1.5 text-sm"
+                  style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)', background: 'var(--surface)' }}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Listings Date To</label>
+                <input
+                  type="date"
+                  value={draftFilters.list_date_to}
+                  onChange={(event) => setDraftFilters((prev) => ({ ...prev, list_date_to: event.target.value }))}
+                  className="w-full rounded-md border px-2.5 py-1.5 text-sm"
+                  style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)', background: 'var(--surface)' }}
+                />
+              </div>
+
+              <MultiSelectFilter
+                label="Listing Status"
+                selected={draftFilters.listing_status}
+                onChange={(next) => setDraftFilters((prev) => ({ ...prev, listing_status: next }))}
+                options={options.listing_statuses.map((value) => ({ value, label: value }))}
+                allLabel="All"
+              />
+
+              <MultiSelectFilter
+                label="Sale or Rent"
+                selected={draftFilters.sale_or_rent}
+                onChange={(next) => setDraftFilters((prev) => ({ ...prev, sale_or_rent: next }))}
+                options={options.sale_or_rent_options.map((value) => ({ value, label: value }))}
+                allLabel="All"
+              />
+
+              <div className="md:col-span-2">
+                <MultiSelectFilter
+                  label="Mandate Type"
+                  selected={draftFilters.mandate_type}
+                  onChange={(next) => setDraftFilters((prev) => ({ ...prev, mandate_type: next }))}
+                  options={options.mandate_types.map((value) => ({ value, label: value }))}
+                  allLabel="All"
+                />
+              </div>
+            </div>
+          </section>
         </div>
 
         <div className="mt-3 flex flex-wrap justify-end gap-2">
-          <button
-            type="button"
-            onClick={resetFiltersToDefaults}
-            className="inline-flex h-[34px] items-center rounded-md border px-3 text-xs font-semibold"
-            style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
-          >
-            Clear to Defaults
-          </button>
-          <button
-            type="button"
-            onClick={() => setAppliedFilters(draftFilters)}
-            className="inline-flex h-[34px] items-center rounded-md border px-3 text-xs font-semibold"
-            style={{ borderColor: 'var(--brand-soft)', color: '#fff', background: 'var(--brand)' }}
-          >
-            Apply Filters
-          </button>
-          <button
-            type="button"
-            onClick={exportCurrentTabCsv}
-            disabled={!data}
-            className="inline-flex h-[34px] items-center rounded-md border px-3 text-xs font-semibold disabled:opacity-40"
-            style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
-          >
-            Export CSV
-          </button>
+          <ReportActionButton label="Clear to Defaults" onClick={resetFiltersToDefaults} />
+          <ReportActionButton label="Apply Filters" onClick={() => setAppliedFilters(draftFilters)} variant="primary" />
+          <ReportActionButton label="Export CSV" onClick={exportCurrentTabCsv} disabled={!data} />
         </div>
       </FilterPanel>
 
@@ -1480,7 +1523,7 @@ export default function TopDownAgentReport() {
             {viewBy === 'teams' ? (
               <table className="min-w-[1200px] w-full">
                 <thead>
-                  <tr className="border-b text-left text-[11px] uppercase tracking-wide" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+                  <tr className="sticky top-0 z-10 border-b text-left text-[11px] uppercase tracking-wide" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamProductionSort('team_name')}>Team</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamProductionSort('market_center_name')}>Market Centre</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamProductionSort('active_associates')}>Active Associates</button></th>
@@ -1492,30 +1535,30 @@ export default function TopDownAgentReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTeamProductionRows.map((row) => (
+                  {pagedTeamProductionRows.map((row) => (
                     <tr key={`${row.mc_source_id}-${row.team_name}`} className="border-b text-sm" style={{ borderColor: 'var(--border-soft)' }}>
-                      <td className="px-4 py-2">{row.team_name}</td>
-                      <td className="px-4 py-2">{row.market_center_name}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.active_associates)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.contracts)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.units)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(listingsByTeamKey.get(`${row.team_name}::${row.mc_source_id}`) ?? 0)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatMoney(row.total_gci)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatMoney(row.company_dollar)}</td>
+                      <td className="px-4 py-1.5">{row.team_name}</td>
+                      <td className="px-4 py-1.5">{row.market_center_name}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.active_associates)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.contracts)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.units)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(listingsByTeamKey.get(`${row.team_name}::${row.mc_source_id}`) ?? 0)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatMoney(row.total_gci)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatMoney(row.company_dollar)}</td>
                     </tr>
                   ))}
                 </tbody>
                 {sortedTeamProductionRows.length > 0 ? (
                   <tfoot>
                     <tr style={{ borderTop: '2px solid var(--border-soft)', background: 'var(--ink-dark)' }}>
-                      <td className="px-4 py-2 text-sm font-bold text-white">TOTAL</td>
-                      <td className="px-4 py-2 text-sm font-bold text-white"></td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamProductionTotals.active_associates)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamProductionTotals.contracts)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamProductionTotals.units)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.total_listings)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(teamProductionTotals.total_gci)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(teamProductionTotals.company_dollar)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold text-white">TOTAL</td>
+                      <td className="px-4 py-1.5 text-sm font-bold text-white"></td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(teamProductionTotals.active_associates)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(teamProductionTotals.contracts)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(teamProductionTotals.units)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.total_listings)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatMoney(teamProductionTotals.total_gci)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatMoney(teamProductionTotals.company_dollar)}</td>
                     </tr>
                   </tfoot>
                 ) : null}
@@ -1523,7 +1566,7 @@ export default function TopDownAgentReport() {
             ) : (
               <table className="min-w-[1100px] w-full">
                 <thead>
-                  <tr className="border-b text-left text-[11px] uppercase tracking-wide" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+                  <tr className="sticky top-0 z-10 border-b text-left text-[11px] uppercase tracking-wide" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleProductionSort('associate_name')}>Associate</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleProductionSort('team_name')}>Team</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleProductionSort('market_center_name')}>Market Centre</button></th>
@@ -1535,30 +1578,30 @@ export default function TopDownAgentReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedProductionRows.map((row) => (
+                  {pagedProductionRows.map((row) => (
                     <tr key={`${row.source_associate_id}-${row.mc_source_id}`} className="border-b text-sm" style={{ borderColor: 'var(--border-soft)' }}>
-                      <td className="px-4 py-2">{row.associate_name}</td>
-                      <td className="px-4 py-2">{row.team_name}</td>
-                      <td className="px-4 py-2">{row.market_center_name}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.contracts)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.units)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(listingsByAssociateKey.get(`${row.source_associate_id}::${row.mc_source_id}`) ?? 0)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatMoney(row.total_gci)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatMoney(row.company_dollar)}</td>
+                      <td className="px-4 py-1.5">{row.associate_name}</td>
+                      <td className="px-4 py-1.5">{row.team_name}</td>
+                      <td className="px-4 py-1.5">{row.market_center_name}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.contracts)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.units)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(listingsByAssociateKey.get(`${row.source_associate_id}::${row.mc_source_id}`) ?? 0)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatMoney(row.total_gci)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatMoney(row.company_dollar)}</td>
                     </tr>
                   ))}
                 </tbody>
                 {sortedProductionRows.length > 0 ? (
                   <tfoot>
                     <tr style={{ borderTop: '2px solid var(--border-soft)', background: 'var(--ink-dark)' }}>
-                      <td className="px-4 py-2 text-sm font-bold text-white">TOTAL</td>
-                      <td className="px-4 py-2 text-sm font-bold text-white"></td>
-                      <td className="px-4 py-2 text-sm font-bold text-white"></td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(productionTotals.contracts)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(productionTotals.units)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.total_listings)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(productionTotals.total_gci)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(productionTotals.company_dollar)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold text-white">TOTAL</td>
+                      <td className="px-4 py-1.5 text-sm font-bold text-white"></td>
+                      <td className="px-4 py-1.5 text-sm font-bold text-white"></td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(productionTotals.contracts)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(productionTotals.units)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.total_listings)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatMoney(productionTotals.total_gci)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatMoney(productionTotals.company_dollar)}</td>
                     </tr>
                   </tfoot>
                 ) : null}
@@ -1574,7 +1617,7 @@ export default function TopDownAgentReport() {
             {viewBy === 'teams' ? (
               <table className="min-w-[1260px] w-full">
                 <thead>
-                  <tr className="border-b text-left text-[11px] uppercase tracking-wide" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+                  <tr className="sticky top-0 z-10 border-b text-left text-[11px] uppercase tracking-wide" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamListingSort('team_name')}>Team</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamListingSort('market_center_name')}>Market Centre</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamListingSort('active_associates')}>Active Associates</button></th>
@@ -1588,34 +1631,34 @@ export default function TopDownAgentReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTeamListingRows.map((row) => (
+                  {pagedTeamListingRows.map((row) => (
                     <tr key={`${row.mc_source_id}-${row.team_name}`} className="border-b text-sm" style={{ borderColor: 'var(--border-soft)' }}>
-                      <td className="px-4 py-2">{row.team_name}</td>
-                      <td className="px-4 py-2">{row.market_center_name}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.active_associates)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.total_listings)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.active_listings)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.for_sale_listings)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.for_rent_listings)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatMoney(row.total_listing_value)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatDays(row.avg_days_on_market)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatMoney(row.avg_listing_price)}</td>
+                      <td className="px-4 py-1.5">{row.team_name}</td>
+                      <td className="px-4 py-1.5">{row.market_center_name}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.active_associates)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.total_listings)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.active_listings)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.for_sale_listings)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.for_rent_listings)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatMoney(row.total_listing_value)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatDays(row.avg_days_on_market)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatMoney(row.avg_listing_price)}</td>
                     </tr>
                   ))}
                 </tbody>
                 {sortedTeamListingRows.length > 0 ? (
                   <tfoot>
                     <tr style={{ borderTop: '2px solid var(--border-soft)', background: 'var(--ink-dark)' }}>
-                      <td className="px-4 py-2 text-sm font-bold text-white">TOTAL</td>
-                      <td className="px-4 py-2 text-sm font-bold text-white"></td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.active_associates)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.total_listings)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.active_listings)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.for_sale_listings)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.for_rent_listings)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(teamListingTotals.total_listing_value)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatDays(teamListingTotals.avg_days_on_market)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(teamListingTotals.avg_listing_price)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold text-white">TOTAL</td>
+                      <td className="px-4 py-1.5 text-sm font-bold text-white"></td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.active_associates)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.total_listings)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.active_listings)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.for_sale_listings)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.for_rent_listings)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatMoney(teamListingTotals.total_listing_value)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatDays(teamListingTotals.avg_days_on_market)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatMoney(teamListingTotals.avg_listing_price)}</td>
                     </tr>
                   </tfoot>
                 ) : null}
@@ -1623,7 +1666,7 @@ export default function TopDownAgentReport() {
             ) : (
               <table className="min-w-[1200px] w-full">
                 <thead>
-                  <tr className="border-b text-left text-[11px] uppercase tracking-wide" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+                  <tr className="sticky top-0 z-10 border-b text-left text-[11px] uppercase tracking-wide" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('associate_name')}>Associate</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('team_name')}>Team</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('market_center_name')}>Market Centre</button></th>
@@ -1637,34 +1680,34 @@ export default function TopDownAgentReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedListingRows.map((row) => (
+                  {pagedListingRows.map((row) => (
                     <tr key={`${row.source_associate_id}-${row.mc_source_id}`} className="border-b text-sm" style={{ borderColor: 'var(--border-soft)' }}>
-                      <td className="px-4 py-2">{row.associate_name}</td>
-                      <td className="px-4 py-2">{row.team_name}</td>
-                      <td className="px-4 py-2">{row.market_center_name}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.total_listings)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.active_listings)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.for_sale_listings)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatNumber(row.for_rent_listings)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatMoney(row.total_listing_value)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatDays(row.avg_days_on_market)}</td>
-                      <td className="px-4 py-2 tabular-nums">{formatMoney(row.avg_listing_price)}</td>
+                      <td className="px-4 py-1.5">{row.associate_name}</td>
+                      <td className="px-4 py-1.5">{row.team_name}</td>
+                      <td className="px-4 py-1.5">{row.market_center_name}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.total_listings)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.active_listings)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.for_sale_listings)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatNumber(row.for_rent_listings)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatMoney(row.total_listing_value)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatDays(row.avg_days_on_market)}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{formatMoney(row.avg_listing_price)}</td>
                     </tr>
                   ))}
                 </tbody>
                 {sortedListingRows.length > 0 ? (
                   <tfoot>
                     <tr style={{ borderTop: '2px solid var(--border-soft)', background: 'var(--ink-dark)' }}>
-                      <td className="px-4 py-2 text-sm font-bold text-white">TOTAL</td>
-                      <td className="px-4 py-2 text-sm font-bold text-white"></td>
-                      <td className="px-4 py-2 text-sm font-bold text-white"></td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.total_listings)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.active_listings)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.for_sale_listings)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.for_rent_listings)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(listingTotals.total_listing_value)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatDays(listingTotals.avg_days_on_market)}</td>
-                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(listingTotals.avg_listing_price)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold text-white">TOTAL</td>
+                      <td className="px-4 py-1.5 text-sm font-bold text-white"></td>
+                      <td className="px-4 py-1.5 text-sm font-bold text-white"></td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.total_listings)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.active_listings)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.for_sale_listings)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.for_rent_listings)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatMoney(listingTotals.total_listing_value)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatDays(listingTotals.avg_days_on_market)}</td>
+                      <td className="px-4 py-1.5 text-sm font-bold tabular-nums text-white">{formatMoney(listingTotals.avg_listing_price)}</td>
                     </tr>
                   </tfoot>
                 ) : null}
@@ -1722,6 +1765,19 @@ export default function TopDownAgentReport() {
             {data.listings.summary_by_market_center.length === 0 && <ReportState type="empty" message={`No listing summary data matched your filters.${emptyStateHint ? ` ${emptyStateHint}` : ''}`} />}
           </div>
         )}
+        {!isLoading && !error && data && (tab === 'production' || tab === 'listings') && currentTotalItems > 0 ? (
+          <ReportPagination
+            page={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            totalItems={currentTotalItems}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+          />
+        ) : null}
       </section>
     </div>
   );

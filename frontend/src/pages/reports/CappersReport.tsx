@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { FilterPanel, MultiSelectFilter, ReportHeader, ReportIcon, ReportKpiCard, ReportState, StatusChip } from './ReportUi';
+import { FilterPanel, MultiSelectFilter, ReportActionButton, ReportHeader, ReportIcon, ReportKpiCard, ReportPagination, ReportState, SortableHeaderButton, StatusChip } from './ReportUi';
 
 type ReportView = 'associate' | 'team';
 type CapStatus = '' | 'capped' | 'not_capped';
@@ -153,6 +153,8 @@ export default function CappersReport() {
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('cap_remaining');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const showTeamColumn = filters.view === 'team';
   const [expandedTeamIds, setExpandedTeamIds] = useState<string[]>([]);
   const visibleColumnCount = showTeamColumn ? 10 : 9;
@@ -275,6 +277,23 @@ export default function CappersReport() {
     });
   }, [data, sortKey, sortDirection]);
 
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
+
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedRows.slice(start, start + pageSize);
+  }, [sortedRows, page, pageSize]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters.view, filters.market_center_ids, filters.market_center_search, filters.associate_query, filters.team_query, filters.cap_statuses]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
   const activeSearchPlaceholder = filters.view === 'associate' ? 'Search associate...' : 'Search team...';
   const activeSearchValue = filters.view === 'associate' ? filters.associate_query : filters.team_query;
 
@@ -386,7 +405,6 @@ export default function CappersReport() {
       <ReportHeader
         title="Cappers Report"
         subtitle="Associate and Team cap progress using current transaction calculation logic."
-        context={filters.view === 'associate' ? 'Default scope: Active associates only' : 'Default scope: Active teams only'}
         actions={
           <div className="space-y-3">
             <div className="inline-flex rounded-md border p-1" style={{ borderColor: 'var(--border-soft)' }}>
@@ -424,9 +442,6 @@ export default function CappersReport() {
       />
 
       <FilterPanel>
-        <div className="mb-3 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold" style={{ background: 'var(--surface-strong)', color: 'var(--text-muted)' }}>
-          Active-only scope is applied by default.
-        </div>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
           {!isRoleScopedContext ? <div>
             <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -481,15 +496,7 @@ export default function CappersReport() {
           </div>
 
           <div className="xl:col-span-2 flex items-end justify-end">
-            <button
-              type="button"
-              onClick={exportCsv}
-              disabled={!data || data.rows.length === 0}
-              className="inline-flex h-[34px] items-center rounded-md border px-3 text-xs font-semibold transition-opacity disabled:opacity-40"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}
-            >
-              Export CSV
-            </button>
+            <ReportActionButton label="Export CSV" onClick={exportCsv} disabled={!data || data.rows.length === 0} />
           </div>
         </div>
       </FilterPanel>
@@ -509,21 +516,21 @@ export default function CappersReport() {
           <div className="overflow-x-auto">
             <table className={`w-full text-sm ${showTeamColumn ? 'min-w-[1120px]' : 'min-w-[980px]'}`}>
               <thead>
-                <tr className="border-b text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
-                  <th className="px-3 py-2.5 text-[11px] font-bold uppercase tracking-wide">{filters.view === 'associate' ? 'Associate' : 'Team'}</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('market_center_name')}>Market Centre</th>
-                  {showTeamColumn && <th className="px-3 py-2.5 text-[11px] font-bold uppercase tracking-wide">Team</th>}
-                  <th className="px-3 py-2.5 text-[11px] font-bold uppercase tracking-wide">Cap Date</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-right text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('cap_amount')}>Cap Amount</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-right text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('cap_achieved')}>Cap Achieved</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-right text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('cap_remaining')}>Cap Remaining</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-right text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('cap_percent_remaining')}>Cap % Remaining</th>
-                  <th className="px-3 py-2.5 cursor-pointer select-none text-right text-[11px] font-bold uppercase tracking-wide" onClick={() => onSort('months_to_cap_date')}>Months To Cap Date</th>
-                  <th className="px-3 py-2.5 text-[11px] font-bold uppercase tracking-wide">Cap Type</th>
+                <tr className="sticky top-0 z-10 border-b text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">{filters.view === 'associate' ? 'Associate' : 'Team'}</th>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Market Centre" active={sortKey === 'market_center_name'} direction={sortDirection} onClick={() => onSort('market_center_name')} /></th>
+                  {showTeamColumn && <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">Team</th>}
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">Cap Date</th>
+                  <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Cap Amount" active={sortKey === 'cap_amount'} direction={sortDirection} align="right" onClick={() => onSort('cap_amount')} /></th>
+                  <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Cap Achieved" active={sortKey === 'cap_achieved'} direction={sortDirection} align="right" onClick={() => onSort('cap_achieved')} /></th>
+                  <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Cap Remaining" active={sortKey === 'cap_remaining'} direction={sortDirection} align="right" onClick={() => onSort('cap_remaining')} /></th>
+                  <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Cap % Remaining" active={sortKey === 'cap_percent_remaining'} direction={sortDirection} align="right" onClick={() => onSort('cap_percent_remaining')} /></th>
+                  <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide"><SortableHeaderButton label="Months To Cap Date" active={sortKey === 'months_to_cap_date'} direction={sortDirection} align="right" onClick={() => onSort('months_to_cap_date')} /></th>
+                  <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">Cap Type</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map((row) => {
+                {pagedRows.map((row) => {
                   const isExpanded = expandedTeamIds.includes(row.source_entity_id);
                   const totalContribution = (row.team_contributions ?? []).reduce((sum, item) => sum + item.company_dollar, 0);
                   const totalRegisteredDeals = (row.registered_deals ?? []).reduce((sum, item) => sum + item.company_dollar, 0);
@@ -531,7 +538,7 @@ export default function CappersReport() {
                   return (
                     <Fragment key={`${row.source_entity_id}-${row.mc_source_id}`}>
                       <tr className="border-b hover:bg-slate-50" style={{ borderColor: 'var(--border-soft)' }}>
-                        <td className="px-3 py-2 font-medium">
+                        <td className="px-3 py-1.5 font-medium">
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
@@ -550,13 +557,13 @@ export default function CappersReport() {
                             <span>{row.entity_name}</span>
                           </div>
                         </td>
-                        <td className="px-3 py-2">{row.market_center_name}</td>
-                        {showTeamColumn && <td className="px-3 py-2">{row.team_name}</td>}
-                        <td className="px-3 py-2 tabular-nums">{formatDate(row.cap_date)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatMoney(row.cap_amount)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatMoney(row.cap_achieved)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-red-700">{formatMoney(row.cap_remaining)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">
+                        <td className="px-3 py-1.5">{row.market_center_name}</td>
+                        {showTeamColumn && <td className="px-3 py-1.5">{row.team_name}</td>}
+                        <td className="px-3 py-1.5 tabular-nums">{formatDate(row.cap_date)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{formatMoney(row.cap_amount)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{formatMoney(row.cap_achieved)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums text-red-700">{formatMoney(row.cap_remaining)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">
                           <div className="space-y-1">
                             <div>{formatPercent(row.cap_percent_remaining)}</div>
                             <div className="h-1.5 w-28 rounded-full bg-slate-200 ml-auto">
@@ -570,8 +577,8 @@ export default function CappersReport() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatMonths(row.months_to_cap_date)}</td>
-                        <td className="px-3 py-2">{row.manual_cap ? <StatusChip value="Manual Cap" /> : <StatusChip value="System Cap" />}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{formatMonths(row.months_to_cap_date)}</td>
+                        <td className="px-3 py-1.5">{row.manual_cap ? <StatusChip value="Manual Cap" /> : <StatusChip value="System Cap" />}</td>
                       </tr>
                       {showTeamColumn && isExpanded && (
                         <tr className="border-b" style={{ borderColor: 'var(--border-soft)', background: 'var(--surface-strong)' }}>
@@ -600,8 +607,8 @@ export default function CappersReport() {
                                     <tbody>
                                       {row.team_contributions.map((contribution) => (
                                         <tr key={contribution.source_associate_id} className="border-b last:border-b-0" style={{ borderColor: 'var(--border-soft)' }}>
-                                          <td className="px-3 py-2 font-medium">{contribution.associate_name}</td>
-                                          <td className="px-3 py-2 text-right tabular-nums">{formatMoney(contribution.company_dollar)}</td>
+                                          <td className="px-3 py-1.5 font-medium">{contribution.associate_name}</td>
+                                          <td className="px-3 py-1.5 text-right tabular-nums">{formatMoney(contribution.company_dollar)}</td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -646,11 +653,11 @@ export default function CappersReport() {
                                     <tbody>
                                       {row.registered_deals.map((deal) => (
                                         <tr key={deal.source_transaction_id} className="border-b last:border-b-0" style={{ borderColor: 'var(--border-soft)' }}>
-                                          <td className="px-3 py-2 font-medium">{deal.transaction_number}</td>
-                                          <td className="px-3 py-2">{deal.kwl_number || '—'}</td>
-                                          <td className="px-3 py-2">{deal.transaction_status || 'Registered'}</td>
-                                          <td className="px-3 py-2 tabular-nums">{formatDate(deal.registered_date)}</td>
-                                          <td className="px-3 py-2 text-right tabular-nums">{formatMoney(deal.company_dollar)}</td>
+                                          <td className="px-3 py-1.5 font-medium">{deal.transaction_number}</td>
+                                          <td className="px-3 py-1.5">{deal.kwl_number || '—'}</td>
+                                          <td className="px-3 py-1.5">{deal.transaction_status || 'Registered'}</td>
+                                          <td className="px-3 py-1.5 tabular-nums">{formatDate(deal.registered_date)}</td>
+                                          <td className="px-3 py-1.5 text-right tabular-nums">{formatMoney(deal.company_dollar)}</td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -672,6 +679,19 @@ export default function CappersReport() {
             </table>
           </div>
         )}
+        {!isLoading && data && sortedRows.length > 0 ? (
+          <ReportPagination
+            page={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            totalItems={sortedRows.length}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+          />
+        ) : null}
       </section>
     </div>
   );

@@ -186,6 +186,13 @@ type TransactionsSummaryResponse = {
     total_sales_value: number;
     total_gci: number;
   }>;
+  team_performance: Array<{
+    team_name: string;
+    market_center: string;
+    total_transactions: number;
+    total_sales_value: number;
+    total_gci: number;
+  }>;
   expected_closings_90_days: Array<{ bucket: string; count: number; total_gci: number }>;
   reporting_window?: {
     start_date: string;
@@ -3253,7 +3260,7 @@ export default function TransactionsPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <div className="surface-card p-4">
               <h3 className="text-sm font-semibold text-slate-900">Top 10 Market Centres This Month</h3>
               <div className="mt-3 space-y-2">
@@ -3264,7 +3271,7 @@ export default function TransactionsPage() {
                     <span className="col-span-5 text-sm font-semibold text-slate-900">GCI {toMoney(String(row.total_gci))}</span>
                   </div>
                 ))}
-                {!isSummaryLoading && (summaryData?.market_center_performance.length ?? 0) === 0 && (
+                {!isSummaryLoading && (summaryData?.market_center_performance?.length ?? 0) === 0 && (
                   <p className="text-sm text-slate-500">No market centre data in this month window.</p>
                 )}
               </div>
@@ -3276,14 +3283,31 @@ export default function TransactionsPage() {
                 {(summaryData?.associate_performance ?? []).map((row, index) => (
                   <div key={`${row.associate_name}-${index}`} className="grid grid-cols-12 items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
                     <span className="col-span-4 truncate text-sm text-slate-700"><span className="mr-1 text-slate-400">#{index + 1}</span>{row.associate_name}</span>
-                    <span className="col-span-3 truncate text-xs text-slate-600">{row.team_name || 'No Team'}</span>
-                    <span className="col-span-2 truncate text-xs text-slate-600">{row.market_center}</span>
+                    <span className="col-span-3 truncate text-xs text-slate-600">{row.market_center}</span>
+                    <span className="col-span-2 truncate text-xs text-slate-600">{row.team_name && row.team_name !== 'No Team' ? row.team_name : ''}</span>
                     <span className="col-span-1 text-xs text-slate-600">{row.total_transactions.toLocaleString()} tx</span>
                     <span className="col-span-2 text-sm font-semibold text-slate-900">{toMoney(String(row.total_gci))}</span>
                   </div>
                 ))}
-                {!isSummaryLoading && (summaryData?.associate_performance.length ?? 0) === 0 && (
+                {!isSummaryLoading && (summaryData?.associate_performance?.length ?? 0) === 0 && (
                   <p className="text-sm text-slate-500">No associate data in this month window.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="surface-card p-4">
+              <h3 className="text-sm font-semibold text-slate-900">Top 10 Teams This Month</h3>
+              <div className="mt-3 space-y-2">
+                {(summaryData?.team_performance ?? []).map((row, index) => (
+                  <div key={`${row.team_name}-${index}`} className="grid grid-cols-12 items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                    <span className="col-span-4 truncate text-sm text-slate-700"><span className="mr-1 text-slate-400">#{index + 1}</span>{row.team_name}</span>
+                    <span className="col-span-4 truncate text-xs text-slate-600">{row.market_center}</span>
+                    <span className="col-span-2 text-xs text-slate-600">{row.total_transactions.toLocaleString()} tx</span>
+                    <span className="col-span-2 text-sm font-semibold text-slate-900">{toMoney(String(row.total_gci))}</span>
+                  </div>
+                ))}
+                {!isSummaryLoading && (summaryData?.team_performance?.length ?? 0) === 0 && (
+                  <p className="text-sm text-slate-500">No team data in this month window.</p>
                 )}
               </div>
             </div>

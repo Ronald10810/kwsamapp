@@ -13,6 +13,7 @@ import { normalizeMarketingUrl, normalizeMarketingUrlRecord, normalizeMarketingU
 const router = Router();
 const pool = getOptionalPgPool();
 let rentalOptionalColumnsEnsured = false;
+let listingApprovalColumnsEnsured = false;
 let sharpModulePromise: Promise<unknown> | null = null;
 let listingAreaDecimalEnsurePromise: Promise<void> | null = null;
 
@@ -364,6 +365,17 @@ async function ensureRentalOptionalColumns(): Promise<void> {
   `);
 
   rentalOptionalColumnsEnsured = true;
+}
+
+async function ensureListingApprovalColumns(): Promise<void> {
+  if (!pool || listingApprovalColumnsEnsured) return;
+
+  await pool.query(`
+    ALTER TABLE migration.listing_approval_requests
+      ADD COLUMN IF NOT EXISTS has_been_approved BOOLEAN NOT NULL DEFAULT false
+  `);
+
+  listingApprovalColumnsEnsured = true;
 }
 
 type PortalShowWindow = { startDate: string; endDate: string };
@@ -2296,6 +2308,84 @@ router.get('/', resolvePermissions, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Listing approval queue
+// ---------------------------------------------------------------------------
+
+router.get('/approvals/queue', resolvePermissions, async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
+
+  const perms = req.permissions!;
+  if (perms.scope === 'OWN') {
+    return res.status(403).json({ error: 'Only admins may review listing approvals' });
+  }
+
+  try {
+    await ensureListingApprovalColumns();
+
+    const statusInput = String(req.query.status ?? 'PENDING').trim().toUpperCase();
+    const allowedStatuses = new Set(['PENDING', 'APPROVED', 'REJECTED']);
+    const safeStatus = allowedStatuses.has(statusInput) ? statusInput : 'PENDING';
+
+    const params: Array<string | number> = [safeStatus];
+    const whereClauses = [`UPPER(COALESCE(lar.status, '')) = $1`];
+
+    if (perms.scope === 'MARKET_CENTRE' && perms.marketCenterId) {
+      params.push(perms.marketCenterId);
+      const mcSourceParam = `$${params.length}`;
+
+      let mcDbParam: string | null = null;
+      const mcResult = await pool.query<{ id: string }>(
+        `SELECT id::text FROM migration.core_market_centers WHERE source_market_center_id = $1 LIMIT 1`,
+        [perms.marketCenterId],
+      );
+      const mcDbId = mcResult.rows[0]?.id ? Number(mcResult.rows[0].id) : null;
+      if (mcDbId !== null) {
+        params.push(mcDbId);
+        mcDbParam = `$${params.length}`;
+      }
+
+      whereClauses.push(`(
+        REGEXP_REPLACE(LOWER(TRIM(COALESCE(cl.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g')
+          = REGEXP_REPLACE(LOWER(TRIM(${mcSourceParam})), '[^a-z0-9]+', '', 'g')
+        ${mcDbParam ? `OR cl.market_center_id = ${mcDbParam}` : ''}
+      )`);
+    }
+
+    const queueResult = await pool.query(
+      `SELECT
+         lar.id::text,
+         lar.listing_id::text,
+         lar.status,
+         lar.submitted_by_name,
+         lar.submitted_by_email,
+         lar.submission_comment,
+         lar.submitted_at::text,
+         lar.review_comment,
+         lar.reviewed_at::text,
+         cl.listing_number,
+         cl.property_title,
+         cl.address_line,
+         cl.suburb,
+         cl.city,
+         cl.source_market_center_id
+       FROM migration.listing_approval_requests lar
+       JOIN migration.core_listings cl ON cl.id = lar.listing_id
+       WHERE ${whereClauses.join(' AND ')}
+       ORDER BY
+         CASE WHEN UPPER(COALESCE(lar.status, '')) = 'PENDING' THEN COALESCE(lar.submitted_at, lar.created_at) END DESC,
+         CASE WHEN UPPER(COALESCE(lar.status, '')) <> 'PENDING' THEN COALESCE(lar.reviewed_at, lar.updated_at, lar.created_at) END DESC,
+         lar.id DESC`,
+      params,
+    );
+
+    return res.json({ items: queueResult.rows });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ error: message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Get single listing with all sub-tables
 // ---------------------------------------------------------------------------
 
@@ -2307,6 +2397,7 @@ router.get('/:id', async (req, res) => {
 
   try {
     await ensureRentalOptionalColumns();
+    await ensureListingApprovalColumns();
 
     const optionalColumnsResult = await pool.query<{ column_name: string }>(
       `SELECT column_name
@@ -2361,6 +2452,12 @@ router.get('/:id', async (req, res) => {
         adsl, fibre, isdn, dialup, fixed_wimax, satellite,
         nearby_bus_service, nearby_minibus_taxi_service, nearby_train_service,
         is_draft, is_published,
+        COALESCE((
+          SELECT lar.has_been_approved
+          FROM migration.listing_approval_requests lar
+          WHERE lar.listing_id = migration.core_listings.id
+          LIMIT 1
+        ), false) AS approval_has_been_approved,
         listing_images_json, listing_payload,
         created_at::text, updated_at::text
        FROM migration.core_listings WHERE id = $1 LIMIT 1`,
@@ -2502,6 +2599,7 @@ router.post('/', resolvePermissions, async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   await ensureRentalOptionalColumns();
+  await ensureListingApprovalColumns();
 
   const perms = req.permissions!;
   const b = req.body as Record<string, unknown>;
@@ -2778,12 +2876,21 @@ router.put('/:id', resolvePermissions, async (req, res) => {
           await pool.query(
             `UPDATE migration.listing_approval_requests
                 SET status = 'APPROVED',
+                    has_been_approved = true,
                     reviewed_by_associate_id = $2,
                     reviewed_by_name = $3,
                     reviewed_at = NOW(),
                     updated_at = NOW()
               WHERE listing_id = $1`,
             [id, perms.associateDbId ?? null, reviewerName]
+          );
+        } else {
+          await pool.query(
+            `UPDATE migration.listing_approval_requests
+                SET has_been_approved = true,
+                    updated_at = NOW()
+              WHERE listing_id = $1`,
+            [id],
           );
         }
 
@@ -7176,6 +7283,8 @@ router.post('/:id/submit-for-approval', resolvePermissions, async (req, res) => 
   const { comment } = req.body as { comment?: string };
 
   try {
+    await ensureListingApprovalColumns();
+
     // Fetch listing to get market_center_id and listing_number
     const listingRes = await pool.query<{
       market_center_id: number | null;
@@ -7187,6 +7296,18 @@ router.post('/:id/submit-for-approval', resolvePermissions, async (req, res) => 
     );
     if (!listingRes.rows.length) return res.status(404).json({ error: 'Listing not found' });
     const listing = listingRes.rows[0];
+
+    const existingApprovalRes = await pool.query<{ has_been_approved: boolean }>(
+      `SELECT COALESCE(has_been_approved, false) AS has_been_approved
+         FROM migration.listing_approval_requests
+        WHERE listing_id = $1
+        LIMIT 1`,
+      [id],
+    );
+
+    if (existingApprovalRes.rows[0]?.has_been_approved) {
+      return res.json({ success: true, alreadyApproved: true });
+    }
 
     // Resolve submitter name/email
     let submitterName = 'Unknown';
@@ -7200,15 +7321,26 @@ router.post('/:id/submit-for-approval', resolvePermissions, async (req, res) => 
       submitterEmail = assocRes.rows[0]?.email ?? '';
     }
 
-    // Upsert approval request — use DELETE+INSERT to avoid needing a unique constraint
-    await pool.query(
-      `DELETE FROM migration.listing_approval_requests WHERE listing_id = $1`,
-      [id]
-    );
+    // Upsert approval request while preserving has_been_approved history.
     await pool.query(
       `INSERT INTO migration.listing_approval_requests
-         (listing_id, status, submitted_by_associate_id, submitted_by_name, submitted_by_email, submission_comment, submitted_at)
-       VALUES ($1, 'PENDING', $2, $3, $4, $5, NOW())`,
+         (listing_id, status, has_been_approved, submitted_by_associate_id, submitted_by_name, submitted_by_email, submission_comment, submitted_at,
+          reviewed_by_associate_id, reviewed_by_name, reviewed_by_email, review_comment, reviewed_at, updated_at)
+       VALUES ($1, 'PENDING', false, $2, $3, $4, $5, NOW(), NULL, NULL, NULL, NULL, NULL, NOW())
+       ON CONFLICT (listing_id)
+       DO UPDATE SET
+         status = 'PENDING',
+         submitted_by_associate_id = EXCLUDED.submitted_by_associate_id,
+         submitted_by_name = EXCLUDED.submitted_by_name,
+         submitted_by_email = EXCLUDED.submitted_by_email,
+         submission_comment = EXCLUDED.submission_comment,
+         submitted_at = NOW(),
+         reviewed_by_associate_id = NULL,
+         reviewed_by_name = NULL,
+         reviewed_by_email = NULL,
+         review_comment = NULL,
+         reviewed_at = NULL,
+         updated_at = NOW()`,
       [id, perms.associateDbId ?? null, submitterName, submitterEmail, comment ?? null]
     );
 
@@ -7235,14 +7367,26 @@ router.post('/:id/submit-for-approval', resolvePermissions, async (req, res) => 
     );
 
     // Notify all admins in this market centre (via associate_roles table)
-    if (listing.market_center_id) {
+    if (listing.source_market_center_id || listing.market_center_id) {
       const adminsRes = await pool.query<{ id: number; full_name: string | null }>(
         `SELECT DISTINCT a.id, a.full_name
          FROM migration.core_associates a
-         JOIN migration.associate_roles r ON r.associate_id = a.id
-         WHERE a.market_center_id = $1
-           AND r.role_name IN ('Office Admin', 'OfficeAdmin')`,
-        [listing.market_center_id]
+         LEFT JOIN migration.associate_roles r ON r.associate_id = a.id
+         LEFT JOIN migration.associate_admin_market_centers aamc ON aamc.associate_id = a.id
+         WHERE (
+             ($1::text IS NOT NULL AND (
+               REGEXP_REPLACE(LOWER(TRIM(COALESCE(a.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g')
+                 = REGEXP_REPLACE(LOWER(TRIM($1::text)), '[^a-z0-9]+', '', 'g')
+               OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(aamc.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g')
+                 = REGEXP_REPLACE(LOWER(TRIM($1::text)), '[^a-z0-9]+', '', 'g')
+             ))
+             OR ($2::bigint IS NOT NULL AND a.market_center_id = $2::bigint)
+           )
+           AND (
+             UPPER(REPLACE(COALESCE(r.role_name, ''), ' ', '_')) = 'OFFICE_ADMIN'
+             OR aamc.associate_id IS NOT NULL
+           )`,
+        [listing.source_market_center_id ?? null, listing.market_center_id ?? null]
       );
       for (const admin of adminsRes.rows) {
         try {
@@ -7291,6 +7435,8 @@ router.post('/:id/approve-approval', resolvePermissions, async (req, res) => {
   const { comment } = req.body as { comment?: string };
 
   try {
+    await ensureListingApprovalColumns();
+
     const approvalRes = await pool.query<{
       submitted_by_associate_id: number | null;
       submitted_by_name: string | null;
@@ -7341,7 +7487,7 @@ router.post('/:id/approve-approval', resolvePermissions, async (req, res) => {
     // Update approval record
     await pool.query(
       `UPDATE migration.listing_approval_requests SET
-         status = 'APPROVED', reviewed_by_associate_id = $2, reviewed_by_name = $3,
+         status = 'APPROVED', has_been_approved = true, reviewed_by_associate_id = $2, reviewed_by_name = $3,
          review_comment = $4, reviewed_at = NOW(), updated_at = NOW()
        WHERE listing_id = $1`,
       [id, perms.associateDbId ?? null, reviewerName, comment ?? null]
@@ -7407,14 +7553,27 @@ router.post('/:id/reject-approval', resolvePermissions, async (req, res) => {
   const { comment } = req.body as { comment?: string };
 
   try {
+    await ensureListingApprovalColumns();
+
     const approvalRes = await pool.query<{
       submitted_by_associate_id: number | null;
+      status: string | null;
+      has_been_approved: boolean;
     }>(
-      `SELECT submitted_by_associate_id FROM migration.listing_approval_requests WHERE listing_id = $1 LIMIT 1`,
+      `SELECT submitted_by_associate_id,
+              status,
+              COALESCE(has_been_approved, false) AS has_been_approved
+         FROM migration.listing_approval_requests
+        WHERE listing_id = $1
+        LIMIT 1`,
       [id]
     );
     if (!approvalRes.rows.length) return res.status(404).json({ error: 'No approval request found for this listing' });
     const approval = approvalRes.rows[0];
+
+    if (approval.has_been_approved) {
+      return res.status(409).json({ error: 'This listing has already been approved and cannot be moved back into rejection flow.' });
+    }
 
     let reviewerName = 'Admin';
     if (perms.associateDbId) {

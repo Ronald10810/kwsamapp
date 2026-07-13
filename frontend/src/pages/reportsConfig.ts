@@ -1,9 +1,17 @@
+import { canAccessOperationalReport, type ReportId } from './reports/reportAccess';
+
 export type ReportConfig = {
-  id: string;
+  id: ReportId;
   title: string;
   type: 'native' | 'powerbi';
   url?: string;
   embedUrl?: string;
+};
+
+type ReportAccessInput = {
+  isRegionalAdmin: boolean;
+  isOfficeAdmin: boolean;
+  isAgent: boolean;
 };
 
 export const REPORTS: ReportConfig[] = [
@@ -39,4 +47,11 @@ export function findReportById(reportId: string | undefined): ReportConfig {
     return REPORTS.find((report) => report.id === 'top-down-performance') ?? REPORTS[0];
   }
   return REPORTS.find((report) => report.id === reportId) ?? REPORTS[0];
+}
+
+export function getAccessibleReports(input: ReportAccessInput): ReportConfig[] {
+  return REPORTS.filter((report) => canAccessOperationalReport({
+    ...input,
+    reportId: report.id,
+  }));
 }

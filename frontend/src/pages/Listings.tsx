@@ -69,6 +69,7 @@ type ListingRow = {
   image_urls?: string[];
   thumbnail_url?: string | null;
   can_edit?: boolean;
+  approval_has_been_approved?: boolean;
   updated_at: string;
 };
 
@@ -1134,6 +1135,7 @@ export default function Listings() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('Active');
+  const [approvalEverApproved, setApprovalEverApproved] = useState(false);
   const [saleOrRentFilter, setSaleOrRentFilter] = useState('');
   const [propertyTypeFilter, setPropertyTypeFilter] = useState('');
   const [minPriceFilter, setMinPriceFilter] = useState('');
@@ -2396,6 +2398,7 @@ export default function Listings() {
     setFormError(null);
     setValidationConflict(null);
     setOriginalListingPayload({});
+    setApprovalEverApproved(false);
     setSelectedProperty24SuburbId(null);
     setP24Result(null);
     setPpResult(null);
@@ -2426,6 +2429,8 @@ export default function Listings() {
       const payload = typeof listing.listing_payload === 'object' && listing.listing_payload !== null
         ? (listing.listing_payload as Record<string, unknown>)
         : {};
+      const listingApprovalEverApproved = parseBooleanLike(listing.approval_has_been_approved)
+        || parseBooleanLike(payload.approval_ever_approved);
       const validationPayload = (payload.listing_validation && typeof payload.listing_validation === 'object')
         ? (payload.listing_validation as Record<string, unknown>)
         : {};
@@ -2609,6 +2614,7 @@ export default function Listings() {
           }));
 
   setOriginalListingPayload(payload);
+  setApprovalEverApproved(listingApprovalEverApproved);
   setSelectedProperty24SuburbId(property24SuburbId);
       setForm({
         source_listing_id: s('source_listing_id'),
@@ -2959,7 +2965,11 @@ export default function Listings() {
       const effectiveForm = publish ? form : { ...form, status_name: effectiveStatusName };
 
       const withdrawing = isWithdrawalState(effectiveStatusName, form.listing_status_tag);
-      const requiresApprovalOnPublish = publish && listingApprovalRequired && !isOfficeAdmin && !withdrawing;
+      const requiresApprovalOnPublish = publish
+        && listingApprovalRequired
+        && !approvalEverApproved
+        && !isOfficeAdmin
+        && !withdrawing;
       const shouldBePublished = publish && !requiresApprovalOnPublish && !withdrawing;
       const selectedPortalNames = getSelectedPortalNames(effectiveForm);
       const shouldValidatePortalMinimum = publish && selectedPortalNames.length > 0 && !requiresApprovalOnPublish;
@@ -5713,6 +5723,8 @@ export default function Listings() {
               <option value="Active">Active</option>
               <option value="Inactive">Inactive</option>
               <option value="Draft">Draft</option>
+              <option value="Pending Approval">Pending Approval</option>
+              <option value="Approval Declined">Approval Declined</option>
             </select>
             <input
               value={search}
