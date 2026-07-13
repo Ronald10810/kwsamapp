@@ -54,11 +54,11 @@ type Filters = {
   list_date_from: string;
   list_date_to: string;
   listing_status: string[];
-  province: string;
+  province: string[];
   suburb: string;
   market_center_ids: string[];
   agent_query: string;
-  property_type: string;
+  property_type: string[];
   sale_or_rent: string[];
   mandate_type: string[];
 };
@@ -196,13 +196,13 @@ export default function ListingsLocationReport() {
   const [filters, setFilters] = useState<Filters>({
     list_date_from: getFirstOfMonth(),
     list_date_to: getToday(),
-    listing_status: ['Active'],
-    province: '',
+    listing_status: [],
+    province: [],
     suburb: '',
     market_center_ids: [],
     agent_query: '',
-    property_type: '',
-    sale_or_rent: ['For Sale'],
+    property_type: [],
+    sale_or_rent: [],
     mandate_type: [],
   });
 
@@ -294,10 +294,10 @@ export default function ListingsLocationReport() {
         list_date_from: filters.list_date_from,
         list_date_to: filters.list_date_to,
         listing_status: filters.listing_status.join(','),
-        province: filters.province,
+        province: filters.province.join(','),
         suburb: filters.suburb,
         agent_query: filters.agent_query,
-        property_type: filters.property_type,
+        property_type: filters.property_type.join(','),
         sale_or_rent: filters.sale_or_rent.join(','),
         mandate_type: filters.mandate_type.join(','),
       });
@@ -369,7 +369,6 @@ export default function ListingsLocationReport() {
     );
   }
 
-  const selectedMcId = filters.market_center_ids[0] ?? '';
   const emptyStateHint = useMemo(() => {
     const hints: string[] = [];
 
@@ -397,6 +396,14 @@ export default function ListingsLocationReport() {
     filters.agent_query,
     filters.suburb,
   ]);
+
+  const scopedMarketCenterLabel = useMemo(() => {
+    const selectedName = options.market_centers.find((mc) => mc.id === filters.market_center_ids[0])?.name;
+    if (selectedName) return selectedName;
+    const contextName = String(activeContext?.marketCenter ?? '').trim();
+    if (contextName) return contextName;
+    return 'Scoped by your role';
+  }, [options.market_centers, filters.market_center_ids, activeContext?.marketCenter]);
 
   return (
     <div className="space-y-4">
@@ -453,14 +460,13 @@ export default function ListingsLocationReport() {
           </div>
 
           <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Listing Type</label>
-            <select value={filters.property_type}
-              onChange={(e) => setFilters((f) => ({ ...f, property_type: e.target.value }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}>
-              <option value="">All</option>
-              {options.property_types.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
+            <MultiSelectFilter
+              label="Listing Type"
+              selected={filters.property_type}
+              onChange={(next) => setFilters((f) => ({ ...f, property_type: next }))}
+              options={options.property_types.map((t) => ({ value: t, label: t }))}
+              allLabel="All"
+            />
           </div>
 
           <div>
@@ -474,14 +480,13 @@ export default function ListingsLocationReport() {
           </div>
 
           <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Province</label>
-            <select value={filters.province}
-              onChange={(e) => setFilters((f) => ({ ...f, province: e.target.value }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}>
-              <option value="">All</option>
-              {options.provinces.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
+            <MultiSelectFilter
+              label="Province"
+              selected={filters.province}
+              onChange={(next) => setFilters((f) => ({ ...f, province: next }))}
+              options={options.provinces.map((p) => ({ value: p, label: p }))}
+              allLabel="All"
+            />
           </div>
 
           <div>
@@ -507,18 +512,22 @@ export default function ListingsLocationReport() {
           </div>
 
           <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Market Centre</label>
-            <select value={selectedMcId}
-              disabled={!isRegionalAdmin}
-              onChange={(e) => {
-                const v = e.target.value;
-                setFilters((f) => ({ ...f, market_center_ids: v ? [v] : [] }));
-              }}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm disabled:opacity-80"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}>
-              {isRegionalAdmin && <option value="">All</option>}
-              {options.market_centers.map((mc) => <option key={mc.id} value={mc.id}>{mc.name}</option>)}
-            </select>
+            {isRegionalAdmin ? (
+              <MultiSelectFilter
+                label="Market Centre"
+                selected={filters.market_center_ids}
+                onChange={(next) => setFilters((f) => ({ ...f, market_center_ids: next }))}
+                options={options.market_centers.map((mc) => ({ value: mc.id, label: mc.name }))}
+                allLabel="All"
+              />
+            ) : (
+              <>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Market Centre (scoped)</label>
+                <div className="w-full rounded-md border px-2.5 py-1.5 text-sm" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}>
+                  {scopedMarketCenterLabel}
+                </div>
+              </>
+            )}
           </div>
 
         </div>

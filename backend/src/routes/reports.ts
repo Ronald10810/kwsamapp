@@ -253,6 +253,7 @@ type TopDownAgentListingRow = {
   active_listings: number;
   for_sale_listings: number;
   for_rent_listings: number;
+  total_listing_value: number;
   avg_days_on_market: number;
   avg_listing_price: number;
 };
@@ -264,6 +265,7 @@ type TopDownAgentTotals = {
   production_company_dollar: number;
   listings_total: number;
   listings_active: number;
+  listings_total_value: number;
 };
 
 function normalizeView(raw: unknown): CappersView {
@@ -296,6 +298,12 @@ async function resolveScopedTeamSourceId(req: { headers: Record<string, unknown>
   const activeContextId = String(req.headers['x-active-context'] ?? '');
   const isTeamContext = /^(lead_agent|team_admin|team_agent)(?:_.+)?$/i.test(activeContextId.trim());
   if (!isTeamContext) return null;
+  const contextRoleMatch = /^(lead_agent|team_admin|team_agent)(?:_.+)?$/i.exec(activeContextId.trim());
+  const contextRole = (contextRoleMatch?.[1] ?? '').toLowerCase();
+  if (contextRole === 'team_agent') {
+    // Team Agent contexts must remain own-data scoped.
+    return null;
+  }
   const teamToken = parseTeamContextToken(activeContextId);
 
   const allowedTeamsResult = await pool.query<{ source_team_id: string | null; team_db_id: string | null }>(
@@ -354,6 +362,11 @@ async function resolveScopedTeamSourceIds(req: { headers: Record<string, unknown
   const activeContextId = String(req.headers['x-active-context'] ?? '');
   const isTeamContext = /^(lead_agent|team_admin|team_agent)(?:_.+)?$/i.test(activeContextId.trim());
   if (!isTeamContext) return [];
+  const contextRoleMatch = /^(lead_agent|team_admin|team_agent)(?:_.+)?$/i.exec(activeContextId.trim());
+  const contextRole = (contextRoleMatch?.[1] ?? '').toLowerCase();
+  if (contextRole === 'team_agent') {
+    return [];
+  }
 
   const teamToken = parseTeamContextToken(activeContextId);
   const allowedTeamsResult = await pool.query<{ source_team_id: string | null; team_db_id: string | null }>(
@@ -965,8 +978,8 @@ router.get('/month-end', resolvePermissions, requireReportAccess(REPORT_KEYS.MON
 
     const dateFrom = String(req.query.date_from || getFirstOfMonthInAppTimeZone());
     const dateTo = String(req.query.date_to || getTodayInAppTimeZone());
-    const transactionStatus = String(req.query.transaction_status || '');
-    const saleType = String(req.query.sale_type || '');
+    const transactionStatuses = parseCsvParam(req.query.transaction_status).map((value) => value.trim()).filter(Boolean);
+    const saleTypes = parseCsvParam(req.query.sale_type).map((value) => value.trim()).filter(Boolean);
     const teamId = String(req.query.team_id || '').trim();
     const associateId = String(req.query.associate_id || '').trim();
     const marketCenterIdsParam = String(req.query.market_center_ids || '');
@@ -983,7 +996,7 @@ router.get('/month-end', resolvePermissions, requireReportAccess(REPORT_KEYS.MON
       ''
     )))`;
 
-    const params: Array<string | string[]> = [dateFrom, dateTo, transactionStatus, saleType];
+    const params: Array<string | string[] | boolean> = [dateFrom, dateTo, transactionStatuses, saleTypes];
 
     const scopeMcId = perms.scope === 'MARKET_CENTRE' ? (perms.marketCenterId ?? perms.homeMcId ?? null) : null;
     const scopedTeamSourceId = await resolveScopedTeamSourceId(req);
@@ -1109,19 +1122,27 @@ router.get('/month-end', resolvePermissions, requireReportAccess(REPORT_KEYS.MON
           AND ca.id IS NOT NULL
           AND ${salesOnlyTransactionExclusionSql}
           AND (
-            NULLIF($3, '') IS NULL
-            OR (
-              LOWER(TRIM($3)) = 'registered'
-              AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
-            )
-            OR (
-              LOWER(TRIM($3)) <> 'registered'
-              AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = LOWER(TRIM($3))
+            CARDINALITY($3::text[]) = 0
+            OR EXISTS (
+              SELECT 1
+              FROM UNNEST($3::text[]) AS selected_status
+              WHERE (
+                LOWER(TRIM(selected_status)) = 'registered'
+                AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
+              )
+              OR (
+                LOWER(TRIM(selected_status)) <> 'registered'
+                AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = LOWER(TRIM(selected_status))
+              )
             )
           )
           AND (
-            NULLIF($4, '') IS NULL
-            OR ${normalizedSaleTypeSql} = LOWER(TRIM($4))
+            CARDINALITY($4::text[]) = 0
+            OR EXISTS (
+              SELECT 1
+              FROM UNNEST($4::text[]) AS selected_sale_type
+              WHERE ${normalizedSaleTypeSql} = LOWER(TRIM(selected_sale_type))
+            )
           )
           AND (
             ${scopeMcParam}::text IS NULL
@@ -1610,8 +1631,8 @@ router.get('/month-end/transaction-summary', resolvePermissions, requireReportAc
     const perms = req.permissions!;
     const dateFrom = String(req.query.date_from || getFirstOfMonthInAppTimeZone());
     const dateTo = String(req.query.date_to || getTodayInAppTimeZone());
-    const transactionStatus = String(req.query.transaction_status || '');
-    const saleType = String(req.query.sale_type || '');
+    const transactionStatuses = parseCsvParam(req.query.transaction_status).map((value) => value.trim()).filter(Boolean);
+    const saleTypes = parseCsvParam(req.query.sale_type).map((value) => value.trim()).filter(Boolean);
     const teamId = String(req.query.team_id || '').trim();
     const associateId = String(req.query.associate_id || '').trim();
     const dateBasis = normalizeMonthEndDateBasis(req.query.date_basis);
@@ -1749,19 +1770,27 @@ router.get('/month-end/transaction-summary', resolvePermissions, requireReportAc
           AND ca.id IS NOT NULL
           AND ${salesOnlyTransactionExclusionSql}
           AND (
-            NULLIF($3::text, '') IS NULL
-            OR (
-              LOWER(TRIM($3::text)) = 'registered'
-              AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
-            )
-            OR (
-              LOWER(TRIM($3::text)) <> 'registered'
-              AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = LOWER(TRIM($3::text))
+            CARDINALITY($3::text[]) = 0
+            OR EXISTS (
+              SELECT 1
+              FROM UNNEST($3::text[]) AS selected_status
+              WHERE (
+                LOWER(TRIM(selected_status)) = 'registered'
+                AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
+              )
+              OR (
+                LOWER(TRIM(selected_status)) <> 'registered'
+                AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = LOWER(TRIM(selected_status))
+              )
             )
           )
           AND (
-            NULLIF($4::text, '') IS NULL
-            OR ${normalizedSaleTypeSql} = LOWER(TRIM($4::text))
+            CARDINALITY($4::text[]) = 0
+            OR EXISTS (
+              SELECT 1
+              FROM UNNEST($4::text[]) AS selected_sale_type
+              WHERE ${normalizedSaleTypeSql} = LOWER(TRIM(selected_sale_type))
+            )
           )
           AND (
             $5::text IS NULL
@@ -1870,8 +1899,8 @@ router.get('/month-end/transaction-summary', resolvePermissions, requireReportAc
       [
         dateFrom,
         dateTo,
-        transactionStatus,
-        saleType,
+        transactionStatuses,
+        saleTypes,
         scopeMcId,
         resolvedScopeAssociateId,
         effectiveMarketCenterIds,
@@ -1943,8 +1972,8 @@ router.get('/month-end/transactions', resolvePermissions, requireReportAccess(RE
     const perms = req.permissions!;
     const dateFrom = String(req.query.date_from || getFirstOfMonthInAppTimeZone());
     const dateTo = String(req.query.date_to || getTodayInAppTimeZone());
-    const transactionStatus = String(req.query.transaction_status || '');
-    const saleType = String(req.query.sale_type || '');
+    const transactionStatuses = parseCsvParam(req.query.transaction_status).map((value) => value.trim()).filter(Boolean);
+    const saleTypes = parseCsvParam(req.query.sale_type).map((value) => value.trim()).filter(Boolean);
     const teamId = String(req.query.team_id || '').trim();
     const associateId = String(req.query.associate_id || '').trim();
     const dateBasis = normalizeMonthEndDateBasis(req.query.date_basis);
@@ -2087,19 +2116,27 @@ router.get('/month-end/transactions', resolvePermissions, requireReportAccess(RE
         AND ca.id IS NOT NULL
         AND ${salesOnlyTransactionExclusionSql}
         AND (
-          NULLIF($3::text, '') IS NULL
-          OR (
-            LOWER(TRIM($3::text)) = 'registered'
-            AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
-          )
-          OR (
-            LOWER(TRIM($3::text)) <> 'registered'
-            AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = LOWER(TRIM($3::text))
+          CARDINALITY($3::text[]) = 0
+          OR EXISTS (
+            SELECT 1
+            FROM UNNEST($3::text[]) AS selected_status
+            WHERE (
+              LOWER(TRIM(selected_status)) = 'registered'
+              AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
+            )
+            OR (
+              LOWER(TRIM(selected_status)) <> 'registered'
+              AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = LOWER(TRIM(selected_status))
+            )
           )
         )
         AND (
-          NULLIF($4::text, '') IS NULL
-          OR ${normalizedSaleTypeSql} = LOWER(TRIM($4::text))
+          CARDINALITY($4::text[]) = 0
+          OR EXISTS (
+            SELECT 1
+            FROM UNNEST($4::text[]) AS selected_sale_type
+            WHERE ${normalizedSaleTypeSql} = LOWER(TRIM(selected_sale_type))
+          )
         )
         AND (
           $5::text IS NULL
@@ -2133,8 +2170,8 @@ router.get('/month-end/transactions', resolvePermissions, requireReportAccess(RE
       [
         dateFrom,
         dateTo,
-        transactionStatus,
-        saleType,
+        transactionStatuses,
+        saleTypes,
         scopeMcId,
         resolvedScopeAssociateId,
         effectiveMarketCenterIds,
@@ -2625,6 +2662,7 @@ router.get('/top-down-agent', resolvePermissions, requireReportAccess(REPORT_KEY
       active_listings: string;
       for_sale_listings: string;
       for_rent_listings: string;
+      total_listing_value: string;
       avg_days_on_market: string;
       avg_listing_price: string;
     }>(
@@ -2708,6 +2746,7 @@ router.get('/top-down-agent', resolvePermissions, requireReportAccess(REPORT_KEY
         COUNT(*) FILTER (WHERE LOWER(TRIM(listing_status)) = 'active')::text AS active_listings,
         COUNT(*) FILTER (WHERE LOWER(TRIM(sale_or_rent)) = 'for sale')::text AS for_sale_listings,
         COUNT(*) FILTER (WHERE LOWER(TRIM(sale_or_rent)) IN ('for rent', 'to let'))::text AS for_rent_listings,
+        ROUND(COALESCE(SUM(listing_price), 0)::numeric, 2)::text AS total_listing_value,
         ROUND(COALESCE(AVG(days_on_market), 0)::numeric, 2)::text AS avg_days_on_market,
         ROUND(COALESCE(AVG(listing_price), 0)::numeric, 2)::text AS avg_listing_price
       FROM filtered_listings
@@ -2756,6 +2795,7 @@ router.get('/top-down-agent', resolvePermissions, requireReportAccess(REPORT_KEY
       active_listings: Number(row.active_listings),
       for_sale_listings: Number(row.for_sale_listings),
       for_rent_listings: Number(row.for_rent_listings),
+      total_listing_value: Number(row.total_listing_value),
       avg_days_on_market: Number(row.avg_days_on_market),
       avg_listing_price: Number(row.avg_listing_price),
     }));
@@ -2767,6 +2807,7 @@ router.get('/top-down-agent', resolvePermissions, requireReportAccess(REPORT_KEY
       production_company_dollar: Math.round(productionRows.reduce((sum, row) => sum + row.company_dollar, 0) * 100) / 100,
       listings_total: listingRows.reduce((sum, row) => sum + row.total_listings, 0),
       listings_active: listingRows.reduce((sum, row) => sum + row.active_listings, 0),
+      listings_total_value: Math.round(listingRows.reduce((sum, row) => sum + row.total_listing_value, 0) * 100) / 100,
     };
 
     return res.json({
@@ -2810,14 +2851,16 @@ router.get('/top-down-agent', resolvePermissions, requireReportAccess(REPORT_KEY
               active_listings: 0,
               for_sale_listings: 0,
               for_rent_listings: 0,
+              total_listing_value: 0,
             };
             existing.total_listings += row.total_listings;
             existing.active_listings += row.active_listings;
             existing.for_sale_listings += row.for_sale_listings;
             existing.for_rent_listings += row.for_rent_listings;
+            existing.total_listing_value += row.total_listing_value;
             map.set(key, existing);
             return map;
-          }, new Map<string, { market_center_name: string; mc_source_id: string; total_listings: number; active_listings: number; for_sale_listings: number; for_rent_listings: number }>()).values()
+          }, new Map<string, { market_center_name: string; mc_source_id: string; total_listings: number; active_listings: number; for_sale_listings: number; for_rent_listings: number; total_listing_value: number }>()).values()
         ).sort((a, b) => b.total_listings - a.total_listings),
       },
       totals,
@@ -2834,8 +2877,11 @@ router.get('/associate/filter-options', resolvePermissions, requireReportAccess(
   try {
     const perms = req.permissions!;
     const scopeMcId = perms.scope === 'MARKET_CENTRE' ? (perms.marketCenterId ?? perms.homeMcId ?? null) : null;
+    const scopedTeamSourceId = await resolveScopedTeamSourceId(req);
     const scopeAssociateId = perms.scope === 'OWN' ? Number(perms.associateDbId ?? 0) : null;
-    const resolvedScopeAssociateId = Number.isFinite(scopeAssociateId) && scopeAssociateId ? scopeAssociateId : null;
+    const resolvedScopeAssociateId = scopedTeamSourceId
+      ? null
+      : (Number.isFinite(scopeAssociateId) && scopeAssociateId ? scopeAssociateId : null);
 
     const result = await pool.query<{
       mc_source_id: string;
@@ -2862,8 +2908,12 @@ router.get('/associate/filter-options', resolvePermissions, requireReportAccess(
         OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(mc.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($1::text)), '[^a-z0-9]+', '', 'g')
       )
         AND ($2::bigint IS NULL OR ca.id = $2::bigint)
+        AND (
+          $3::text IS NULL
+          OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(NULLIF(t.source_team_id, ''), NULLIF(ca.source_team_id, ''), t.id::text, ca.team_id::text, t.name, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($3::text)), '[^a-z0-9]+', '', 'g')
+        )
       `,
-      [scopeMcId, resolvedScopeAssociateId]
+      [scopeMcId, resolvedScopeAssociateId, scopedTeamSourceId]
     );
 
     const marketCenterMap = new Map<string, string>();
@@ -2920,8 +2970,11 @@ router.get('/associate', resolvePermissions, requireReportAccess(REPORT_KEYS.ASS
     const associateQuery = String(req.query.associate_query ?? '').trim();
 
     const scopeMcId = perms.scope === 'MARKET_CENTRE' ? (perms.marketCenterId ?? perms.homeMcId ?? null) : null;
+    const scopedTeamSourceId = await resolveScopedTeamSourceId(req);
     const scopeAssociateId = perms.scope === 'OWN' ? Number(perms.associateDbId ?? 0) : null;
-    const resolvedScopeAssociateId = Number.isFinite(scopeAssociateId) && scopeAssociateId ? scopeAssociateId : null;
+    const resolvedScopeAssociateId = scopedTeamSourceId
+      ? null
+      : (Number.isFinite(scopeAssociateId) && scopeAssociateId ? scopeAssociateId : null);
 
     const params: Array<string | string[] | number | null> = [];
     const whereClauses: string[] = [];
@@ -2934,6 +2987,12 @@ router.get('/associate', resolvePermissions, requireReportAccess(REPORT_KEYS.ASS
 
     params.push(resolvedScopeAssociateId);
     whereClauses.push(`($${params.length}::bigint IS NULL OR ca.id = $${params.length}::bigint)`);
+
+    params.push(scopedTeamSourceId);
+    whereClauses.push(`(
+      $${params.length}::text IS NULL
+      OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(NULLIF(t.source_team_id, ''), NULLIF(ca.source_team_id, ''), t.id::text, ca.team_id::text, t.name, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($${params.length}::text)), '[^a-z0-9]+', '', 'g')
+    )`);
 
     if (marketCenterIds.length > 0) {
       params.push(marketCenterIds);
@@ -3913,7 +3972,11 @@ router.get('/listings-location/filter-options', resolvePermissions, requireRepor
   try {
     const perms = req.permissions!;
     const scopeMcSourceId = perms.scope === 'GLOBAL' ? null : (perms.marketCenterId ?? perms.homeMcId ?? null);
+    const scopedTeamSourceId = await resolveScopedTeamSourceId(req);
     const scopeAssociateId = perms.scope === 'OWN' ? Number(perms.associateDbId ?? 0) : null;
+    const resolvedScopeAssociateId = scopedTeamSourceId
+      ? null
+      : (scopeAssociateId && scopeAssociateId > 0 ? scopeAssociateId : null);
 
     const result = await pool.query<{
       province: string | null;
@@ -3927,7 +3990,15 @@ router.get('/listings-location/filter-options', resolvePermissions, requireRepor
       agent_name: string | null;
     }>(
       `
-      WITH public_mc AS (
+      WITH scoped_mc_name_keys AS (
+        SELECT DISTINCT
+          REGEXP_REPLACE(LOWER(TRIM(COALESCE(mcs.name, ''))), '[^a-z0-9]+', '', 'g') AS mc_name_key
+        FROM migration.core_market_centers mcs
+        WHERE $1::text IS NOT NULL
+          AND REGEXP_REPLACE(LOWER(TRIM(COALESCE(mcs.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($1::text)), '[^a-z0-9]+', '', 'g')
+          AND TRIM(COALESCE(mcs.name, '')) <> ''
+      ),
+      public_mc AS (
         SELECT
           l."listingNumber" AS listing_number,
           l."marketCenterId"::text AS market_center_db_id,
@@ -3959,12 +4030,13 @@ router.get('/listings-location/filter-options', resolvePermissions, requireRepor
       LEFT JOIN public_mc pmc ON pmc.listing_number = cl.listing_number
       LEFT JOIN LATERAL (
         SELECT
-          mc_lateral.id::text AS market_center_db_id,
-          NULLIF(TRIM(mc_lateral.name), '') AS market_center_name,
-          NULLIF(TRIM(mc_lateral.source_market_center_id), '') AS source_market_center_id
+          COALESCE(mc_lateral.id::text, mc_assoc_lateral.id::text) AS market_center_db_id,
+          COALESCE(NULLIF(TRIM(mc_lateral.name), ''), NULLIF(TRIM(mc_assoc_lateral.name), '')) AS market_center_name,
+          COALESCE(NULLIF(TRIM(mc_lateral.source_market_center_id), ''), NULLIF(TRIM(mc_assoc_lateral.source_market_center_id), ''), NULLIF(TRIM(a_lateral.source_market_center_id), '')) AS source_market_center_id
         FROM migration.listing_agents la_lateral
         LEFT JOIN migration.core_associates a_lateral ON a_lateral.id = la_lateral.associate_id
         LEFT JOIN migration.core_market_centers mc_lateral ON mc_lateral.id = COALESCE(a_lateral.market_center_id, la_lateral.market_center_id)
+        LEFT JOIN migration.core_market_centers mc_assoc_lateral ON mc_assoc_lateral.source_market_center_id = a_lateral.source_market_center_id
         WHERE la_lateral.listing_id = cl.id
         ORDER BY COALESCE(la_lateral.is_primary, false) DESC, la_lateral.sort_order NULLS LAST, la_lateral.id ASC
         LIMIT 1
@@ -3979,13 +4051,30 @@ router.get('/listings-location/filter-options', resolvePermissions, requireRepor
             '',
             'g'
           ) = REGEXP_REPLACE(LOWER(TRIM($1::text)), '[^a-z0-9]+', '', 'g')
+          OR REGEXP_REPLACE(
+            LOWER(TRIM(COALESCE(mc.name, mc_source.name, lamc.market_center_name, pmc.market_center_name, ''))),
+            '[^a-z0-9]+',
+            '',
+            'g'
+          ) IN (SELECT mc_name_key FROM scoped_mc_name_keys)
         )
         AND ($2::bigint IS NULL OR EXISTS (
           SELECT 1 FROM migration.listing_agents la2
           WHERE la2.listing_id = cl.id AND la2.associate_id = $2::bigint
         ))
+        AND (
+          $3::text IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM migration.listing_agents la_team
+            INNER JOIN migration.core_associates ca_team ON ca_team.id = la_team.associate_id
+            LEFT JOIN migration.core_teams t_team ON t_team.id = ca_team.team_id
+            WHERE la_team.listing_id = cl.id
+              AND REGEXP_REPLACE(LOWER(TRIM(COALESCE(NULLIF(t_team.source_team_id, ''), NULLIF(ca_team.source_team_id, ''), t_team.id::text, ca_team.team_id::text, t_team.name, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($3::text)), '[^a-z0-9]+', '', 'g')
+          )
+        )
       `,
-      [scopeMcSourceId, scopeAssociateId && scopeAssociateId > 0 ? scopeAssociateId : null]
+      [scopeMcSourceId, resolvedScopeAssociateId, scopedTeamSourceId]
     );
 
     const provinces = Array.from(new Set(result.rows.map((r) => r.province).filter(Boolean))).sort() as string[];
@@ -4052,20 +4141,24 @@ router.get('/listings-location', resolvePermissions, requireReportAccess(REPORT_
     const appTimeZone = getAppTimeZone();
     const appToday = getTodayInAppTimeZone();
     const listingStatuses = parseCsvParam(req.query.listing_status);
-    const province = String(req.query.province ?? '');
+    const provinces = parseCsvParam(req.query.province);
     const suburb = String(req.query.suburb ?? '');
     const marketCenterIds = parseCsvParam(req.query.market_center_ids);
     const agentQuery = String(req.query.agent_query ?? '').trim();
-    const propertyType = String(req.query.property_type ?? '');
+    const propertyTypes = parseCsvParam(req.query.property_type);
     const saleOrRents = parseCsvParam(req.query.sale_or_rent);
     const mandateTypes = parseCsvParam(req.query.mandate_type);
 
     const scopeMcSourceId = perms.scope === 'GLOBAL' ? null : (perms.marketCenterId ?? perms.homeMcId ?? null);
+    const scopedTeamSourceId = await resolveScopedTeamSourceId(req);
     const scopeAssociateId = perms.scope === 'OWN' ? Number(perms.associateDbId ?? 0) : null;
+    const resolvedScopeAssociateId = scopedTeamSourceId
+      ? null
+      : (scopeAssociateId && scopeAssociateId > 0 ? scopeAssociateId : null);
 
-    const mcIdsFilter = marketCenterIds.length > 0
-      ? marketCenterIds.map(Number).filter(Number.isFinite)
-      : null;
+    const parsedMcIds = marketCenterIds.map(Number).filter(Number.isFinite);
+    const mcIdsFilter = parsedMcIds.length > 0 ? parsedMcIds : null;
+    const mcFilterTokens = marketCenterIds;
 
     const result = await pool.query<{
       listing_number: string;
@@ -4095,7 +4188,15 @@ router.get('/listings-location', resolvePermissions, requireReportAccess(REPORT_
       private_property_ref: string | null;
     }>(
       `
-      WITH selected_mc_name_keys AS (
+      WITH scoped_mc_name_keys AS (
+        SELECT DISTINCT
+          REGEXP_REPLACE(LOWER(TRIM(COALESCE(mcs.name, ''))), '[^a-z0-9]+', '', 'g') AS mc_name_key
+        FROM migration.core_market_centers mcs
+        WHERE $11::text IS NOT NULL
+          AND REGEXP_REPLACE(LOWER(TRIM(COALESCE(mcs.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($11::text)), '[^a-z0-9]+', '', 'g')
+          AND TRIM(COALESCE(mcs.name, '')) <> ''
+      ),
+      selected_mc_name_keys AS (
         SELECT DISTINCT
           REGEXP_REPLACE(
             LOWER(TRIM(COALESCE(mcm.name, mcp.name, ''))),
@@ -4175,8 +4276,8 @@ router.get('/listings-location', resolvePermissions, requireReportAccess(REPORT_
       )
       SELECT
         cl.listing_number,
-        timezone($13::text, cl.on_market_since_date)::date::text AS list_date,
-        GREATEST(($14::date - timezone($13::text, cl.on_market_since_date)::date), 0)::int AS days_on_market,
+        timezone($14::text, cl.on_market_since_date)::date::text AS list_date,
+        GREATEST(($15::date - timezone($14::text, cl.on_market_since_date)::date), 0)::int AS days_on_market,
         COALESCE(aa.primary_agent, pf.primary_agent, '') AS primary_agent,
         COALESCE(aa.agent_names, pf.agent_names, '') AS agent_names,
         COALESCE(mc.name, mc_source.name, mc_agent.name, pf.market_center_name, '') AS market_center_name,
@@ -4218,10 +4319,14 @@ router.get('/listings-location', resolvePermissions, requireReportAccess(REPORT_
         LIMIT 1
       ) mc_source ON TRUE
       LEFT JOIN LATERAL (
-        SELECT mc_lateral.id, mc_lateral.name, mc_lateral.source_market_center_id
+        SELECT
+          COALESCE(mc_lateral.id, mc_assoc_lateral.id) AS id,
+          COALESCE(mc_lateral.name, mc_assoc_lateral.name) AS name,
+          COALESCE(mc_lateral.source_market_center_id, mc_assoc_lateral.source_market_center_id, a_lateral.source_market_center_id) AS source_market_center_id
         FROM migration.listing_agents la_lateral
         LEFT JOIN migration.core_associates a_lateral ON a_lateral.id = la_lateral.associate_id
         LEFT JOIN migration.core_market_centers mc_lateral ON mc_lateral.id = COALESCE(a_lateral.market_center_id, la_lateral.market_center_id)
+        LEFT JOIN migration.core_market_centers mc_assoc_lateral ON mc_assoc_lateral.source_market_center_id = a_lateral.source_market_center_id
         WHERE la_lateral.listing_id = cl.id
         ORDER BY COALESCE(la_lateral.is_primary, false) DESC, la_lateral.sort_order NULLS LAST, la_lateral.id ASC
         LIMIT 1
@@ -4230,8 +4335,8 @@ router.get('/listings-location', resolvePermissions, requireReportAccess(REPORT_
       LEFT JOIN public_fallback pf ON pf.listing_number = cl.listing_number
       LEFT JOIN room_agg ra ON ra.listing_id = cl.id
       WHERE cl.listing_number LIKE 'KWL%'
-        AND timezone($13::text, cl.on_market_since_date)::date >= $1::date
-        AND timezone($13::text, cl.on_market_since_date)::date <= $2::date
+        AND timezone($14::text, cl.on_market_since_date)::date >= $1::date
+        AND timezone($14::text, cl.on_market_since_date)::date <= $2::date
         AND (
           CARDINALITY($3::text[]) = 0
           OR EXISTS (
@@ -4240,23 +4345,50 @@ router.get('/listings-location', resolvePermissions, requireReportAccess(REPORT_
             WHERE LOWER(TRIM(COALESCE(cl.status_name, cl.listing_status_tag, ''))) = LOWER(TRIM(selected_listing_status))
           )
         )
-        AND (NULLIF($4, '') IS NULL OR TRIM(COALESCE(cl.province, '')) = TRIM($4))
+        AND (
+          CARDINALITY($4::text[]) = 0
+          OR EXISTS (
+            SELECT 1
+            FROM UNNEST($4::text[]) AS selected_province
+            WHERE LOWER(TRIM(COALESCE(cl.province, ''))) = LOWER(TRIM(selected_province))
+          )
+        )
         AND (NULLIF($5, '') IS NULL OR TRIM(COALESCE(cl.suburb, '')) ILIKE '%' || TRIM($5) || '%')
         AND (
-          $6::bigint[] IS NULL
-          OR cl.market_center_id = ANY($6::bigint[])
-          OR mc_source.id = ANY($6::bigint[])
-          OR mc_agent.id = ANY($6::bigint[])
-          OR pf.market_center_id = ANY($6::bigint[])
+          (
+            $6::bigint[] IS NULL
+            AND CARDINALITY($16::text[]) = 0
+          )
+          OR cl.market_center_id = ANY(COALESCE($6::bigint[], ARRAY[]::bigint[]))
+          OR mc_source.id = ANY(COALESCE($6::bigint[], ARRAY[]::bigint[]))
+          OR mc_agent.id = ANY(COALESCE($6::bigint[], ARRAY[]::bigint[]))
+          OR pf.market_center_id = ANY(COALESCE($6::bigint[], ARRAY[]::bigint[]))
           OR REGEXP_REPLACE(
             LOWER(TRIM(COALESCE(mc.name, mc_source.name, mc_agent.name, pf.market_center_name, ''))),
             '[^a-z0-9]+',
             '',
             'g'
           ) IN (SELECT mc_name_key FROM selected_mc_name_keys)
+          OR EXISTS (
+            SELECT 1
+            FROM UNNEST(COALESCE($16::text[], ARRAY[]::text[])) AS selected_mc_token
+            WHERE REGEXP_REPLACE(
+              LOWER(TRIM(COALESCE(mc.source_market_center_id, mc_source.source_market_center_id, mc_agent.source_market_center_id, cl.source_market_center_id, ''))),
+              '[^a-z0-9]+',
+              '',
+              'g'
+            ) = REGEXP_REPLACE(LOWER(TRIM(selected_mc_token)), '[^a-z0-9]+', '', 'g')
+          )
         )
         AND (NULLIF($7, '') IS NULL OR COALESCE(aa.agent_names, pf.agent_names, '') ILIKE '%' || $7 || '%')
-        AND (NULLIF($8, '') IS NULL OR cl.property_type = $8)
+        AND (
+          CARDINALITY($8::text[]) = 0
+          OR EXISTS (
+            SELECT 1
+            FROM UNNEST($8::text[]) AS selected_property_type
+            WHERE LOWER(TRIM(COALESCE(cl.property_type, ''))) = LOWER(TRIM(selected_property_type))
+          )
+        )
         AND (
           CARDINALITY($9::text[]) = 0
           OR EXISTS (
@@ -4281,28 +4413,47 @@ router.get('/listings-location', resolvePermissions, requireReportAccess(REPORT_
             '',
             'g'
           ) = REGEXP_REPLACE(LOWER(TRIM($11::text)), '[^a-z0-9]+', '', 'g')
+          OR REGEXP_REPLACE(
+            LOWER(TRIM(COALESCE(mc.name, mc_source.name, mc_agent.name, pf.market_center_name, ''))),
+            '[^a-z0-9]+',
+            '',
+            'g'
+          ) IN (SELECT mc_name_key FROM scoped_mc_name_keys)
         )
         AND ($12::bigint IS NULL OR EXISTS (
           SELECT 1 FROM migration.listing_agents la2
           WHERE la2.listing_id = cl.id AND la2.associate_id = $12::bigint
         ))
-      ORDER BY timezone($13::text, cl.on_market_since_date)::date DESC, cl.listing_number
+        AND (
+          $13::text IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM migration.listing_agents la_team
+            INNER JOIN migration.core_associates ca_team ON ca_team.id = la_team.associate_id
+            LEFT JOIN migration.core_teams t_team ON t_team.id = ca_team.team_id
+            WHERE la_team.listing_id = cl.id
+              AND REGEXP_REPLACE(LOWER(TRIM(COALESCE(NULLIF(t_team.source_team_id, ''), NULLIF(ca_team.source_team_id, ''), t_team.id::text, ca_team.team_id::text, t_team.name, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($13::text)), '[^a-z0-9]+', '', 'g')
+          )
+        )
+      ORDER BY timezone($14::text, cl.on_market_since_date)::date DESC, cl.listing_number
       `,
       [
         listDateFrom,
         listDateTo,
         listingStatuses,
-        province,
+        provinces,
         suburb,
         mcIdsFilter,
         agentQuery,
-        propertyType,
+        propertyTypes,
         saleOrRents,
         mandateTypes,
         scopeMcSourceId,
-        scopeAssociateId && scopeAssociateId > 0 ? scopeAssociateId : null,
+        resolvedScopeAssociateId,
+        scopedTeamSourceId,
         appTimeZone,
         appToday,
+        mcFilterTokens,
       ]
     );
 

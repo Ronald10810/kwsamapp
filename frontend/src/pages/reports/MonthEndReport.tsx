@@ -239,6 +239,10 @@ function normalizedSaleTypeDefault(values: string[]): string {
   return forSale ?? 'For Sale';
 }
 
+function normalizedStatusDefault(values: string[], target: string, fallback: string): string {
+  return values.find((value) => value.trim().toLowerCase() === target) ?? fallback;
+}
+
 function toCsv(headers: string[], rows: Array<Array<string | number>>): string {
   return [headers, ...rows]
     .map((row) => row.map((value) => `"${String(value).split('"').join('""')}"`).join(','))
@@ -340,6 +344,12 @@ export default function MonthEndReport() {
       ?? filterOptions.statuses.find((status) => status.trim().toLowerCase() === 'registered')
       ?? 'Registered';
   }, [extendedFilterOptions.statuses, filterOptions.statuses]);
+  const startStatusDefault = useMemo(() => {
+    return normalizedStatusDefault(extendedFilterOptions.statuses, 'start', normalizedStatusDefault(filterOptions.statuses, 'start', 'Start'));
+  }, [extendedFilterOptions.statuses, filterOptions.statuses]);
+  const saleTypeDefault = useMemo(() => {
+    return normalizedSaleTypeDefault(extendedFilterOptions.sale_types.length > 0 ? extendedFilterOptions.sale_types : filterOptions.sale_types);
+  }, [extendedFilterOptions.sale_types, filterOptions.sale_types]);
 
   const scopedTeams = useMemo(() => {
     const source = selectedMarketCenterId
@@ -498,19 +508,14 @@ export default function MonthEndReport() {
   }, [token, isRegionalContext, isRoleScopedContext, activeContext, authHeaders, isAgentOnlyContext, isTeamAgentContext, isTeamManagerContext, showScopeDebug]);
 
   useEffect(() => {
-    const nextDefaultStatus = activeTab === 'transaction-date' ? [] : [registeredStatusDefault];
-    const currentStatus = filters.transaction_status.map((status) => status.trim().toLowerCase());
-    const targetStatus = nextDefaultStatus.map((status) => status.trim().toLowerCase());
-    const isSame = currentStatus.length === targetStatus.length
-      && currentStatus.every((status, index) => status === targetStatus[index]);
-
-    if (isSame) return;
-
-    setFilters((prev) => ({
-      ...prev,
-      transaction_status: nextDefaultStatus,
-    }));
-  }, [activeTab, registeredStatusDefault, filters.transaction_status]);
+    setFilters((prev) => {
+      return {
+        ...prev,
+        transaction_status: [activeTab === 'transaction-date' ? startStatusDefault : registeredStatusDefault],
+        sale_type: [saleTypeDefault],
+      };
+    });
+  }, [activeTab, registeredStatusDefault, saleTypeDefault, startStatusDefault]);
 
   const fetchReport = useCallback(async () => {
     if (!token) return;

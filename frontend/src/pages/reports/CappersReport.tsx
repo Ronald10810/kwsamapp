@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { FilterPanel, ReportHeader, ReportIcon, ReportKpiCard, ReportState, StatusChip } from './ReportUi';
+import { FilterPanel, MultiSelectFilter, ReportHeader, ReportIcon, ReportKpiCard, ReportState, StatusChip } from './ReportUi';
 
 type ReportView = 'associate' | 'team';
 type CapStatus = '' | 'capped' | 'not_capped';
@@ -62,7 +62,7 @@ type Filters = {
   market_center_search: string;
   associate_query: string;
   team_query: string;
-  cap_status: CapStatus;
+  cap_statuses: CapStatus[];
 };
 
 type SortKey = 'entity_name' | 'market_center_name' | 'cap_amount' | 'cap_achieved' | 'cap_remaining' | 'cap_percent_remaining' | 'months_to_cap_date';
@@ -145,7 +145,7 @@ export default function CappersReport() {
     market_center_search: '',
     associate_query: '',
     team_query: '',
-    cap_status: '',
+    cap_statuses: [],
   });
   const [options, setOptions] = useState<FilterOptions>({ market_centers: [], associates: [], teams: [] });
   const [data, setData] = useState<CappersData | null>(null);
@@ -220,9 +220,10 @@ export default function CappersReport() {
     setError(null);
 
     try {
+      const capStatus = filters.cap_statuses.length === 1 ? filters.cap_statuses[0] : '';
       const params = new URLSearchParams({
         view: filters.view,
-        cap_status: filters.cap_status,
+        cap_status: capStatus,
       });
 
       if (filters.market_center_ids.length > 0) {
@@ -279,9 +280,9 @@ export default function CappersReport() {
 
   const emptyStateHint = useMemo(() => {
     const hints: string[] = [];
-    if (filters.cap_status === 'capped') {
+    if (filters.cap_statuses.length === 1 && filters.cap_statuses[0] === 'capped') {
       hints.push('Only capped entities are included.');
-    } else if (filters.cap_status === 'not_capped') {
+    } else if (filters.cap_statuses.length === 1 && filters.cap_statuses[0] === 'not_capped') {
       hints.push('Only not-capped entities are included.');
     }
 
@@ -302,7 +303,7 @@ export default function CappersReport() {
 
     return hints.join(' ');
   }, [
-    filters.cap_status,
+    filters.cap_statuses,
     filters.view,
     filters.associate_query,
     filters.team_query,
@@ -467,19 +468,16 @@ export default function CappersReport() {
           </div>
 
           <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Cap Status
-            </label>
-            <select
-              value={filters.cap_status}
-              onChange={(event) => setFilters((prev) => ({ ...prev, cap_status: event.target.value as CapStatus }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}
-            >
-              <option value="">All</option>
-              <option value="capped">Capped</option>
-              <option value="not_capped">Not Capped</option>
-            </select>
+            <MultiSelectFilter
+              label="Cap Status"
+              selected={filters.cap_statuses}
+              onChange={(next) => setFilters((prev) => ({ ...prev, cap_statuses: next.filter((value): value is CapStatus => value === 'capped' || value === 'not_capped') }))}
+              options={[
+                { value: 'capped', label: 'Capped' },
+                { value: 'not_capped', label: 'Not Capped' },
+              ]}
+              allLabel="All"
+            />
           </div>
 
           <div className="xl:col-span-2 flex items-end justify-end">

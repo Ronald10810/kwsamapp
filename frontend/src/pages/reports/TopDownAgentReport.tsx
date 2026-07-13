@@ -35,11 +35,11 @@ type TopDownAgentListingRow = {
   team_name: string;
   market_center_name: string;
   mc_source_id: string;
-  listing_numbers: string;
   total_listings: number;
   active_listings: number;
   for_sale_listings: number;
   for_rent_listings: number;
+  total_listing_value: number;
   avg_days_on_market: number;
   avg_listing_price: number;
 };
@@ -60,6 +60,7 @@ type ListingSummaryRow = {
   active_listings: number;
   for_sale_listings: number;
   for_rent_listings: number;
+  total_listing_value: number;
 };
 
 type TopDownAgentResponse = {
@@ -78,6 +79,7 @@ type TopDownAgentResponse = {
     production_company_dollar: number;
     listings_total: number;
     listings_active: number;
+    listings_total_value: number;
   };
 };
 
@@ -125,6 +127,7 @@ type ListingSortKey =
   | 'active_listings'
   | 'for_sale_listings'
   | 'for_rent_listings'
+  | 'total_listing_value'
   | 'avg_days_on_market'
   | 'avg_listing_price';
 
@@ -152,6 +155,7 @@ type TeamListingRow = {
   active_listings: number;
   for_sale_listings: number;
   for_rent_listings: number;
+  total_listing_value: number;
   avg_days_on_market: number;
   avg_listing_price: number;
 };
@@ -173,6 +177,7 @@ type TeamListingSortKey =
   | 'active_listings'
   | 'for_sale_listings'
   | 'for_rent_listings'
+  | 'total_listing_value'
   | 'avg_days_on_market'
   | 'avg_listing_price';
 
@@ -740,6 +745,7 @@ export default function TopDownAgentReport() {
         active_listings: 0,
         for_sale_listings: 0,
         for_rent_listings: 0,
+        total_listing_value: 0,
         avg_days_on_market: 0,
         avg_listing_price: 0,
       };
@@ -748,6 +754,7 @@ export default function TopDownAgentReport() {
       existing.active_listings += row.active_listings;
       existing.for_sale_listings += row.for_sale_listings;
       existing.for_rent_listings += row.for_rent_listings;
+      existing.total_listing_value += row.total_listing_value;
       grouped.set(key, existing);
 
       weightedDays.set(key, (weightedDays.get(key) ?? 0) + (row.avg_days_on_market * row.total_listings));
@@ -812,6 +819,7 @@ export default function TopDownAgentReport() {
         active_listings: acc.active_listings + row.active_listings,
         for_sale_listings: acc.for_sale_listings + row.for_sale_listings,
         for_rent_listings: acc.for_rent_listings + row.for_rent_listings,
+        total_listing_value: acc.total_listing_value + row.total_listing_value,
         weighted_days_sum: acc.weighted_days_sum + (row.avg_days_on_market * row.total_listings),
         weighted_price_sum: acc.weighted_price_sum + (row.avg_listing_price * row.total_listings),
       }),
@@ -820,6 +828,7 @@ export default function TopDownAgentReport() {
         active_listings: 0,
         for_sale_listings: 0,
         for_rent_listings: 0,
+        total_listing_value: 0,
         weighted_days_sum: 0,
         weighted_price_sum: 0,
       }
@@ -831,6 +840,7 @@ export default function TopDownAgentReport() {
       active_listings: totals.active_listings,
       for_sale_listings: totals.for_sale_listings,
       for_rent_listings: totals.for_rent_listings,
+      total_listing_value: totals.total_listing_value,
       avg_days_on_market: totals.weighted_days_sum / divisor,
       avg_listing_price: totals.weighted_price_sum / divisor,
     };
@@ -844,6 +854,7 @@ export default function TopDownAgentReport() {
         active_listings: acc.active_listings + row.active_listings,
         for_sale_listings: acc.for_sale_listings + row.for_sale_listings,
         for_rent_listings: acc.for_rent_listings + row.for_rent_listings,
+        total_listing_value: acc.total_listing_value + row.total_listing_value,
         weighted_days_sum: acc.weighted_days_sum + (row.avg_days_on_market * row.total_listings),
         weighted_price_sum: acc.weighted_price_sum + (row.avg_listing_price * row.total_listings),
       }),
@@ -853,6 +864,7 @@ export default function TopDownAgentReport() {
         active_listings: 0,
         for_sale_listings: 0,
         for_rent_listings: 0,
+        total_listing_value: 0,
         weighted_days_sum: 0,
         weighted_price_sum: 0,
       }
@@ -865,6 +877,7 @@ export default function TopDownAgentReport() {
       active_listings: totals.active_listings,
       for_sale_listings: totals.for_sale_listings,
       for_rent_listings: totals.for_rent_listings,
+      total_listing_value: totals.total_listing_value,
       avg_days_on_market: totals.weighted_days_sum / divisor,
       avg_listing_price: totals.weighted_price_sum / divisor,
     };
@@ -992,7 +1005,7 @@ export default function TopDownAgentReport() {
     if (tab === 'listings') {
       if (viewBy === 'teams') {
         const csv = toCsv(
-          ['Team', 'Market Centre', 'Active Associates', 'Total Listings', 'Active Listings', 'For Sale', 'For Rent', 'Avg Days On Market', 'Avg Listing Price'],
+          ['Team', 'Market Centre', 'Active Associates', 'Total Listings', 'Active Listings', 'For Sale', 'For Rent', 'Total Listing Volume', 'Avg Days On Market', 'Avg Listing Price'],
           sortedTeamListingRows.map((row) => [
             row.team_name,
             row.market_center_name,
@@ -1001,6 +1014,7 @@ export default function TopDownAgentReport() {
             row.active_listings,
             row.for_sale_listings,
             row.for_rent_listings,
+            row.total_listing_value,
             row.avg_days_on_market,
             row.avg_listing_price,
           ])
@@ -1010,16 +1024,16 @@ export default function TopDownAgentReport() {
       }
 
       const csv = toCsv(
-        ['Associate', 'Team', 'Market Centre', 'Listing Numbers', 'Total Listings', 'Active Listings', 'For Sale', 'For Rent', 'Avg Days On Market', 'Avg Listing Price'],
+        ['Associate', 'Team', 'Market Centre', 'Total Listings', 'Active Listings', 'For Sale', 'For Rent', 'Total Listing Volume', 'Avg Days On Market', 'Avg Listing Price'],
         sortedListingRows.map((row) => [
           row.associate_name,
           row.team_name,
           row.market_center_name,
-          row.listing_numbers,
           row.total_listings,
           row.active_listings,
           row.for_sale_listings,
           row.for_rent_listings,
+          row.total_listing_value,
           row.avg_days_on_market,
           row.avg_listing_price,
         ])
@@ -1044,13 +1058,14 @@ export default function TopDownAgentReport() {
     }
 
     const csv = toCsv(
-      ['Market Centre', 'Total Listings', 'Active Listings', 'For Sale', 'For Rent'],
+      ['Market Centre', 'Total Listings', 'Active Listings', 'For Sale', 'For Rent', 'Total Listing Volume'],
       data.listings.summary_by_market_center.map((row) => [
         row.market_center_name,
         row.total_listings,
         row.active_listings,
         row.for_sale_listings,
         row.for_rent_listings,
+        row.total_listing_value,
       ])
     );
     downloadCsv(`${filePrefix}-listing-summary.csv`, csv);
@@ -1161,7 +1176,7 @@ export default function TopDownAgentReport() {
         subtitle="Market Centre performance explorer with unified Agents and Teams views, role-scoped access, and CSV exports."
         context={`Production: ${appliedFilters.date_from} to ${appliedFilters.date_to} | Listings: ${appliedFilters.list_date_from} to ${appliedFilters.list_date_to}`}
         actions={
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5 sm:gap-3">
             <ReportKpiCard
               label="Production GCI"
               icon={<ReportIcon kind="wallet" className="h-3.5 w-3.5" />}
@@ -1181,6 +1196,11 @@ export default function TopDownAgentReport() {
               label="Active Listings"
               icon={<ReportIcon kind="check-circle" className="h-3.5 w-3.5" />}
               value={formatNumber(data?.totals.listings_active ?? 0)}
+            />
+            <ReportKpiCard
+              label="Listing Volume"
+              icon={<ReportIcon kind="wallet" className="h-3.5 w-3.5" />}
+              value={formatMoney(data?.totals.listings_total_value ?? 0)}
             />
           </div>
         }
@@ -1562,6 +1582,7 @@ export default function TopDownAgentReport() {
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamListingSort('active_listings')}>Active</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamListingSort('for_sale_listings')}>For Sale</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamListingSort('for_rent_listings')}>For Rent</button></th>
+                    <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamListingSort('total_listing_value')}>Listing Volume</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamListingSort('avg_days_on_market')}>Avg DOM</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleTeamListingSort('avg_listing_price')}>Avg Price</button></th>
                   </tr>
@@ -1576,6 +1597,7 @@ export default function TopDownAgentReport() {
                       <td className="px-4 py-2 tabular-nums">{formatNumber(row.active_listings)}</td>
                       <td className="px-4 py-2 tabular-nums">{formatNumber(row.for_sale_listings)}</td>
                       <td className="px-4 py-2 tabular-nums">{formatNumber(row.for_rent_listings)}</td>
+                      <td className="px-4 py-2 tabular-nums">{formatMoney(row.total_listing_value)}</td>
                       <td className="px-4 py-2 tabular-nums">{formatDays(row.avg_days_on_market)}</td>
                       <td className="px-4 py-2 tabular-nums">{formatMoney(row.avg_listing_price)}</td>
                     </tr>
@@ -1591,6 +1613,7 @@ export default function TopDownAgentReport() {
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.active_listings)}</td>
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.for_sale_listings)}</td>
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(teamListingTotals.for_rent_listings)}</td>
+                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(teamListingTotals.total_listing_value)}</td>
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatDays(teamListingTotals.avg_days_on_market)}</td>
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(teamListingTotals.avg_listing_price)}</td>
                     </tr>
@@ -1604,11 +1627,11 @@ export default function TopDownAgentReport() {
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('associate_name')}>Associate</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('team_name')}>Team</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('market_center_name')}>Market Centre</button></th>
-                    <th className="px-4 py-2">Listing Numbers</th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('total_listings')}>Total</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('active_listings')}>Active</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('for_sale_listings')}>For Sale</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('for_rent_listings')}>For Rent</button></th>
+                    <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('total_listing_value')}>Listing Volume</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('avg_days_on_market')}>Avg DOM</button></th>
                     <th className="px-4 py-2"><button type="button" onClick={() => toggleListingSort('avg_listing_price')}>Avg Price</button></th>
                   </tr>
@@ -1619,11 +1642,11 @@ export default function TopDownAgentReport() {
                       <td className="px-4 py-2">{row.associate_name}</td>
                       <td className="px-4 py-2">{row.team_name}</td>
                       <td className="px-4 py-2">{row.market_center_name}</td>
-                      <td className="px-4 py-2">{row.listing_numbers || '—'}</td>
                       <td className="px-4 py-2 tabular-nums">{formatNumber(row.total_listings)}</td>
                       <td className="px-4 py-2 tabular-nums">{formatNumber(row.active_listings)}</td>
                       <td className="px-4 py-2 tabular-nums">{formatNumber(row.for_sale_listings)}</td>
                       <td className="px-4 py-2 tabular-nums">{formatNumber(row.for_rent_listings)}</td>
+                      <td className="px-4 py-2 tabular-nums">{formatMoney(row.total_listing_value)}</td>
                       <td className="px-4 py-2 tabular-nums">{formatDays(row.avg_days_on_market)}</td>
                       <td className="px-4 py-2 tabular-nums">{formatMoney(row.avg_listing_price)}</td>
                     </tr>
@@ -1635,11 +1658,11 @@ export default function TopDownAgentReport() {
                       <td className="px-4 py-2 text-sm font-bold text-white">TOTAL</td>
                       <td className="px-4 py-2 text-sm font-bold text-white"></td>
                       <td className="px-4 py-2 text-sm font-bold text-white"></td>
-                      <td className="px-4 py-2 text-sm font-bold text-white"></td>
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.total_listings)}</td>
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.active_listings)}</td>
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.for_sale_listings)}</td>
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatNumber(listingTotals.for_rent_listings)}</td>
+                      <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(listingTotals.total_listing_value)}</td>
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatDays(listingTotals.avg_days_on_market)}</td>
                       <td className="px-4 py-2 text-sm font-bold tabular-nums text-white">{formatMoney(listingTotals.avg_listing_price)}</td>
                     </tr>

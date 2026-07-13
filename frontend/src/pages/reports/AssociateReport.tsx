@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { FilterPanel, ReportHeader, ReportIcon, ReportKpiCard, ReportState, StatusChip } from './ReportUi';
+import { FilterPanel, MultiSelectFilter, ReportHeader, ReportIcon, ReportKpiCard, ReportState, StatusChip } from './ReportUi';
 
 type AssociateReportRow = {
   market_center_name: string;
@@ -37,12 +37,12 @@ type AssociateReportFilterOptions = {
 };
 
 type Filters = {
-  market_center_id: string;
-  team_id: string;
-  status: string;
-  role: string;
+  market_center_ids: string[];
+  team_ids: string[];
+  statuses: string[];
+  roles: string[];
   associate_query: string;
-  birthday_month: string;
+  birthday_months: string[];
 };
 
 type SortKey =
@@ -112,12 +112,12 @@ export default function AssociateReport() {
   }), [token, activeContext?.id]);
 
   const [filters, setFilters] = useState<Filters>({
-    market_center_id: '',
-    team_id: '',
-    status: 'Active',
-    role: '',
+    market_center_ids: [],
+    team_ids: [],
+    statuses: ['Active'],
+    roles: [],
     associate_query: '',
-    birthday_month: '',
+    birthday_months: [],
   });
   const [options, setOptions] = useState<AssociateReportFilterOptions>({
     market_centers: [],
@@ -157,7 +157,7 @@ export default function AssociateReport() {
 
         setFilters((prev) => ({
           ...prev,
-          status: prev.status ? prev.status : activeStatusOption,
+          statuses: prev.statuses.length > 0 ? prev.statuses : [activeStatusOption],
         }));
 
         const scopedMarketCenterId = !isRegionalAdmin
@@ -167,7 +167,7 @@ export default function AssociateReport() {
         if (scopedMarketCenterId) {
           setFilters((prev) => ({
             ...prev,
-            market_center_id: scopedMarketCenterId,
+            market_center_ids: [scopedMarketCenterId],
           }));
         }
       } catch (err) {
@@ -192,10 +192,10 @@ export default function AssociateReport() {
 
     try {
       const params = new URLSearchParams();
-      if (filters.market_center_id) params.set('market_center_ids', filters.market_center_id);
-      if (filters.team_id) params.set('team_ids', filters.team_id);
-      if (filters.status) params.set('statuses', filters.status);
-      if (filters.role) params.set('roles', filters.role);
+      if (filters.market_center_ids.length > 0) params.set('market_center_ids', filters.market_center_ids.join(','));
+      if (filters.team_ids.length > 0) params.set('team_ids', filters.team_ids.join(','));
+      if (filters.statuses.length > 0) params.set('statuses', filters.statuses.join(','));
+      if (filters.roles.length > 0) params.set('roles', filters.roles.join(','));
       if (filters.associate_query.trim()) params.set('associate_query', filters.associate_query.trim());
 
       const response = await fetch(`/api/reports/associate?${params.toString()}`, {
@@ -214,7 +214,7 @@ export default function AssociateReport() {
     } finally {
       setIsLoading(false);
     }
-  }, [token, filters.market_center_id, filters.team_id, filters.status, filters.role, filters.associate_query, authHeaders]);
+  }, [token, filters.market_center_ids, filters.team_ids, filters.statuses, filters.roles, filters.associate_query, authHeaders]);
 
   useEffect(() => {
     void fetchReport();
@@ -222,10 +222,10 @@ export default function AssociateReport() {
 
   const filteredRows = useMemo(() => {
     if (!data) return [];
-    if (!filters.birthday_month) return data.rows;
+    if (filters.birthday_months.length === 0) return data.rows;
 
-    return data.rows.filter((row) => getMonthFromIsoDate(row.birthday) === filters.birthday_month);
-  }, [data, filters.birthday_month]);
+    return data.rows.filter((row) => filters.birthday_months.includes(getMonthFromIsoDate(row.birthday)));
+  }, [data, filters.birthday_months]);
 
   const sortedRows = useMemo(() => {
     return [...filteredRows].sort((left, right) => {
@@ -252,9 +252,9 @@ export default function AssociateReport() {
   }, [filteredRows]);
 
   const teamsForCurrentMarketCenter = useMemo(() => {
-    if (!filters.market_center_id) return options.teams;
-    return options.teams.filter((team) => team.market_center_id === filters.market_center_id);
-  }, [options.teams, filters.market_center_id]);
+    if (filters.market_center_ids.length === 0) return options.teams;
+    return options.teams.filter((team) => filters.market_center_ids.includes(team.market_center_id));
+  }, [options.teams, filters.market_center_ids]);
 
   function onSort(nextKey: SortKey): void {
     if (nextKey === sortKey) {
@@ -339,86 +339,64 @@ export default function AssociateReport() {
       <FilterPanel>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-6">
           <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Market Centre</label>
-            <select
-              value={filters.market_center_id}
-              disabled={!isRegionalAdmin}
-              onChange={(event) => {
-                const value = event.target.value;
-                setFilters((prev) => ({
-                  ...prev,
-                  market_center_id: value,
-                  team_id: '',
-                }));
-              }}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm disabled:opacity-80"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}
-            >
-              {isRegionalAdmin && <option value="">All</option>}
-              {options.market_centers.map((marketCenter) => (
-                <option key={marketCenter.id} value={marketCenter.id}>{marketCenter.name}</option>
-              ))}
-            </select>
+            {isRegionalAdmin ? (
+              <MultiSelectFilter
+                label="Market Centre"
+                selected={filters.market_center_ids}
+                onChange={(next) => setFilters((prev) => ({ ...prev, market_center_ids: next, team_ids: [] }))}
+                options={options.market_centers.map((marketCenter) => ({ value: marketCenter.id, label: marketCenter.name }))}
+                allLabel="All"
+              />
+            ) : (
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Market Centre (scoped)
+              </label>
+            )}
+            {!isRegionalAdmin ? (
+              <div className="w-full rounded-md border px-2.5 py-1.5 text-sm" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}>
+                {options.market_centers.find((mc) => mc.id === filters.market_center_ids[0])?.name ?? 'Scoped by your role'}
+              </div>
+            ) : null}
           </div>
 
           <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Team</label>
-            <select
-              value={filters.team_id}
-              onChange={(event) => setFilters((prev) => ({ ...prev, team_id: event.target.value }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}
-            >
-              <option value="">All</option>
-              {teamsForCurrentMarketCenter.map((team) => (
-                <option key={team.id} value={team.id}>{team.name}</option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              label="Team"
+              selected={filters.team_ids}
+              onChange={(next) => setFilters((prev) => ({ ...prev, team_ids: next }))}
+              options={teamsForCurrentMarketCenter.map((team) => ({ value: team.id, label: team.name }))}
+              allLabel="All"
+            />
           </div>
 
           <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Status</label>
-            <select
-              value={filters.status}
-              onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}
-            >
-              <option value="">All</option>
-              {options.statuses.map((status) => (
-                <option key={status} value={status}>{status}</option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              label="Status"
+              selected={filters.statuses}
+              onChange={(next) => setFilters((prev) => ({ ...prev, statuses: next }))}
+              options={options.statuses.map((status) => ({ value: status, label: status }))}
+              allLabel="All"
+            />
           </div>
 
           <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Role</label>
-            <select
-              value={filters.role}
-              onChange={(event) => setFilters((prev) => ({ ...prev, role: event.target.value }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}
-            >
-              <option value="">All</option>
-              {options.roles.map((role) => (
-                <option key={role} value={role}>{role}</option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              label="Role"
+              selected={filters.roles}
+              onChange={(next) => setFilters((prev) => ({ ...prev, roles: next }))}
+              options={options.roles.map((role) => ({ value: role, label: role }))}
+              allLabel="All"
+            />
           </div>
 
           <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Birthday Month</label>
-            <select
-              value={filters.birthday_month}
-              onChange={(event) => setFilters((prev) => ({ ...prev, birthday_month: event.target.value }))}
-              className="w-full rounded-md border px-2.5 py-1.5 text-sm"
-              style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}
-            >
-              <option value="">All</option>
-              {Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, '0')).map((month) => (
-                <option key={month} value={month}>{monthName(month)}</option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              label="Birthday Month"
+              selected={filters.birthday_months}
+              onChange={(next) => setFilters((prev) => ({ ...prev, birthday_months: next }))}
+              options={Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, '0')).map((month) => ({ value: month, label: monthName(month) }))}
+              allLabel="All"
+            />
           </div>
 
           <div>
