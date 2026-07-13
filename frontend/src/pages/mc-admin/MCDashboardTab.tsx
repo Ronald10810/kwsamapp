@@ -571,7 +571,7 @@ export default function MCDashboardTab({
                 <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-red-600" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.7"/><path d="M16.5 16.5 21 21" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/><path d="M11 8v3h3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></svg>
                 <span className="text-xs font-semibold text-red-800">LOOM</span>
               </a>
-              <a href="https://drive.google.com" target="_blank" rel="noreferrer" className="group flex flex-col items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3.5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-blue-100 hover:shadow">
+              <a href="https://drive.google.com/drive/u/0/folders/0B9C-kz9m3NxYdEgyQ2gxSjZXRzg?resourcekey=0-OBzDvl1lm8aPsNOFafz5QQ" target="_blank" rel="noreferrer" className="group flex flex-col items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3.5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-blue-100 hover:shadow">
                 {/* Google Drive — folder/cloud icon */}
                 <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-blue-600" aria-hidden="true"><path d="M3 17l3.5-7 3.5 7H3ZM10.5 17L14 10l3.5 7H10.5ZM8.25 13.5h7.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/><path d="M14 10 10.5 4 7 10" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></svg>
                 <span className="text-xs font-semibold text-blue-800">Google Drive</span>

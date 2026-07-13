@@ -727,7 +727,7 @@ export default function HomePage() {
                 },
                 {
                   label: 'Google Drive',
-                  href: 'https://drive.google.com',
+                  href: 'https://drive.google.com/drive/u/0/folders/10ED1fS9UX7D7qDsPKAZsJT2pLh7UMJ0j',
                   favicon: 'https://www.google.com/s2/favicons?domain=drive.google.com&sz=64',
                   accent: 'bg-blue-50 border-blue-200 hover:bg-blue-100',
                   textColor: 'text-blue-800',
