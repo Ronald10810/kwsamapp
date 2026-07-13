@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getOptionalPgPool } from '../config/db.js';
 import { resolvePermissions } from '../middleware/permissions.js';
+import { getReportAccessSnapshot, REPORT_KEYS, requireReportAccess } from '../services/reportAccess.js';
 import { salesOnlyTransactionExclusionSql, transactionAgentCalculationDedupCte } from './reportingSql.js';
 import { getAppTimeZone, getFirstOfMonthInAppTimeZone, getTodayInAppTimeZone } from '../utils/timeZone.js';
 
@@ -96,6 +97,15 @@ type CappersTeamContribution = {
   company_dollar: number;
 };
 
+type CappersRegisteredDeal = {
+  source_transaction_id: string;
+  transaction_number: string;
+  transaction_status: string;
+  kwl_number: string;
+  registered_date: string | null;
+  company_dollar: number;
+};
+
 type CappersRow = {
   view: CappersView;
   entity_name: string;
@@ -111,6 +121,7 @@ type CappersRow = {
   months_to_cap_date: number | null;
   manual_cap: boolean;
   team_contributions?: CappersTeamContribution[];
+  registered_deals?: CappersRegisteredDeal[];
 };
 
 type CappersFilterOptions = {
@@ -831,9 +842,14 @@ async function computeMcDashboardData(mcSourceId: string, dateFrom: string, date
   };
 }
 
+router.get('/access', resolvePermissions, (req, res) => {
+  const perms = req.permissions!;
+  return res.json({ reports: getReportAccessSnapshot(perms) });
+});
+
 // GET /api/reports/month-end/filter-options
 // Returns available filter values for the report slicers
-router.get('/month-end/filter-options', resolvePermissions, async (req, res) => {
+router.get('/month-end/filter-options', resolvePermissions, requireReportAccess(REPORT_KEYS.MONTH_END), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -941,7 +957,7 @@ router.get('/month-end/filter-options', resolvePermissions, async (req, res) => 
 
 // GET /api/reports/month-end
 // Returns Market Centre Totals aggregated from transaction_agent_calculations
-router.get('/month-end', resolvePermissions, async (req, res) => {
+router.get('/month-end', resolvePermissions, requireReportAccess(REPORT_KEYS.MONTH_END), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -1456,7 +1472,7 @@ router.get('/month-end', resolvePermissions, async (req, res) => {
   }
 });
 
-router.get('/month-end/extended-filter-options', resolvePermissions, async (req, res) => {
+router.get('/month-end/extended-filter-options', resolvePermissions, requireReportAccess(REPORT_KEYS.MONTH_END), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -1587,7 +1603,7 @@ router.get('/month-end/extended-filter-options', resolvePermissions, async (req,
   }
 });
 
-router.get('/month-end/transaction-summary', resolvePermissions, async (req, res) => {
+router.get('/month-end/transaction-summary', resolvePermissions, requireReportAccess(REPORT_KEYS.MONTH_END), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -1920,7 +1936,7 @@ router.get('/month-end/transaction-summary', resolvePermissions, async (req, res
   }
 });
 
-router.get('/month-end/transactions', resolvePermissions, async (req, res) => {
+router.get('/month-end/transactions', resolvePermissions, requireReportAccess(REPORT_KEYS.MONTH_END), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -2224,7 +2240,7 @@ router.get('/month-end/transactions', resolvePermissions, async (req, res) => {
   }
 });
 
-router.get('/top-down-agent/filter-options', resolvePermissions, async (req, res) => {
+router.get('/top-down-agent/filter-options', resolvePermissions, requireReportAccess(REPORT_KEYS.TOP_DOWN_PERFORMANCE), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -2418,7 +2434,7 @@ router.get('/top-down-agent/filter-options', resolvePermissions, async (req, res
   }
 });
 
-router.get('/top-down-agent', resolvePermissions, async (req, res) => {
+router.get('/top-down-agent', resolvePermissions, requireReportAccess(REPORT_KEYS.TOP_DOWN_PERFORMANCE), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -2812,7 +2828,7 @@ router.get('/top-down-agent', resolvePermissions, async (req, res) => {
   }
 });
 
-router.get('/associate/filter-options', resolvePermissions, async (req, res) => {
+router.get('/associate/filter-options', resolvePermissions, requireReportAccess(REPORT_KEYS.ASSOCIATE_REPORT), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -2892,7 +2908,7 @@ router.get('/associate/filter-options', resolvePermissions, async (req, res) => 
   }
 });
 
-router.get('/associate', resolvePermissions, async (req, res) => {
+router.get('/associate', resolvePermissions, requireReportAccess(REPORT_KEYS.ASSOCIATE_REPORT), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -3262,7 +3278,7 @@ router.get('/mc-dashboard', resolvePermissions, async (req, res) => {
   }
 });
 
-router.get('/cappers/filter-options', resolvePermissions, async (req, res) => {
+router.get('/cappers/filter-options', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPERS_REPORT), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -3375,7 +3391,7 @@ router.get('/cappers/filter-options', resolvePermissions, async (req, res) => {
   }
 });
 
-router.get('/cappers', resolvePermissions, async (req, res) => {
+router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPERS_REPORT), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -3778,6 +3794,80 @@ router.get('/cappers', resolvePermissions, async (req, res) => {
       }
     }
 
+    if (view === 'associate' && rows.length > 0) {
+      const registeredDealsResult = await pool.query<{
+        source_associate_id: string;
+        source_transaction_id: string;
+        transaction_number: string;
+        transaction_status: string;
+        kwl_number: string;
+        registered_date: string | null;
+        company_dollar: string;
+      }>(
+        `
+        WITH ${transactionAgentCalculationDedupCte},
+        selected_associates AS (
+          SELECT
+            ca.id AS associate_id,
+            input_rows.source_associate_id,
+            input_rows.cap_date
+          FROM UNNEST($1::text[], $2::date[]) AS input_rows(source_associate_id, cap_date)
+          INNER JOIN migration.core_associates ca
+            ON COALESCE(NULLIF(TRIM(ca.source_associate_id), ''), ca.id::text) = input_rows.source_associate_id
+        )
+        SELECT
+          sa.source_associate_id,
+          COALESCE(NULLIF(TRIM(ct.source_transaction_id), ''), tac.transaction_id::text) AS source_transaction_id,
+          COALESCE(NULLIF(TRIM(ct.transaction_number), ''), tac.transaction_id::text) AS transaction_number,
+          COALESCE(NULLIF(TRIM(ct.transaction_status), ''), CASE WHEN tac.is_registered = true THEN 'Registered' ELSE '' END) AS transaction_status,
+          COALESCE(NULLIF(TRIM(ct.listing_number), ''), '') AS kwl_number,
+          MAX(COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date))::text AS registered_date,
+          ROUND(COALESCE(SUM(tac.market_center_dollar), 0)::numeric, 2)::text AS company_dollar
+        FROM selected_associates sa
+        INNER JOIN tac_dedup tac ON tac.associate_id = sa.associate_id
+        INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
+        WHERE tac.is_registered = true
+          AND (
+            sa.cap_date IS NULL
+            OR (
+              tac.effective_reporting_date::date >= (sa.cap_date - INTERVAL '1 year')::date
+              AND tac.effective_reporting_date::date < sa.cap_date
+            )
+          )
+        GROUP BY
+          sa.source_associate_id,
+          COALESCE(NULLIF(TRIM(ct.source_transaction_id), ''), tac.transaction_id::text),
+          COALESCE(NULLIF(TRIM(ct.transaction_number), ''), tac.transaction_id::text),
+          COALESCE(NULLIF(TRIM(ct.transaction_status), ''), CASE WHEN tac.is_registered = true THEN 'Registered' ELSE '' END),
+          COALESCE(NULLIF(TRIM(ct.listing_number), ''), '')
+        ORDER BY sa.source_associate_id ASC, MAX(COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date)) DESC NULLS LAST, transaction_number ASC
+        `,
+        [
+          rows.map((row) => row.source_entity_id),
+          rows.map((row) => (row.cap_date ? row.cap_date : null)),
+        ]
+      );
+
+      const dealsByAssociate = new Map<string, CappersRegisteredDeal[]>();
+
+      for (const deal of registeredDealsResult.rows) {
+        const existing = dealsByAssociate.get(deal.source_associate_id) ?? [];
+        existing.push({
+          source_transaction_id: deal.source_transaction_id,
+          transaction_number: deal.transaction_number,
+          transaction_status: deal.transaction_status,
+          kwl_number: deal.kwl_number,
+          registered_date: deal.registered_date,
+          company_dollar: Number(deal.company_dollar),
+        });
+        dealsByAssociate.set(deal.source_associate_id, existing);
+      }
+
+      for (const row of rows) {
+        row.registered_deals = dealsByAssociate.get(row.source_entity_id) ?? [];
+      }
+    }
+
     const totals = rows.reduce(
       (acc, row) => {
         acc.cap_amount += row.cap_amount;
@@ -3817,7 +3907,7 @@ router.get('/cappers', resolvePermissions, async (req, res) => {
 // ---------------------------------------------------------------------------
 
 // GET /api/reports/listings-location/filter-options
-router.get('/listings-location/filter-options', resolvePermissions, async (req, res) => {
+router.get('/listings-location/filter-options', resolvePermissions, requireReportAccess(REPORT_KEYS.LISTINGS_LOCATION_REPORT), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {
@@ -3951,7 +4041,7 @@ router.get('/listings-location/filter-options', resolvePermissions, async (req, 
 });
 
 // GET /api/reports/listings-location
-router.get('/listings-location', resolvePermissions, async (req, res) => {
+router.get('/listings-location', resolvePermissions, requireReportAccess(REPORT_KEYS.LISTINGS_LOCATION_REPORT), async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
 
   try {

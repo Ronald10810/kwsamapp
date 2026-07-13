@@ -11,6 +11,15 @@ type CappersTeamContribution = {
   company_dollar: number;
 };
 
+type CappersRegisteredDeal = {
+  source_transaction_id: string;
+  transaction_number: string;
+  transaction_status: string;
+  kwl_number: string;
+  registered_date: string | null;
+  company_dollar: number;
+};
+
 type CappersRow = {
   view: ReportView;
   entity_name: string;
@@ -26,6 +35,7 @@ type CappersRow = {
   months_to_cap_date: number | null;
   manual_cap: boolean;
   team_contributions?: CappersTeamContribution[];
+  registered_deals?: CappersRegisteredDeal[];
 };
 
 type CappersData = {
@@ -518,30 +528,29 @@ export default function CappersReport() {
                 {sortedRows.map((row) => {
                   const isExpanded = expandedTeamIds.includes(row.source_entity_id);
                   const totalContribution = (row.team_contributions ?? []).reduce((sum, item) => sum + item.company_dollar, 0);
+                  const totalRegisteredDeals = (row.registered_deals ?? []).reduce((sum, item) => sum + item.company_dollar, 0);
 
                   return (
                     <Fragment key={`${row.source_entity_id}-${row.mc_source_id}`}>
                       <tr className="border-b hover:bg-slate-50" style={{ borderColor: 'var(--border-soft)' }}>
                         <td className="px-3 py-2 font-medium">
-                          {showTeamColumn ? (
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => toggleTeamExpansion(row.source_entity_id)}
-                                aria-expanded={isExpanded}
-                                aria-label={isExpanded ? `Hide ${row.entity_name} contributions` : `Show ${row.entity_name} contributions`}
-                                className="inline-flex h-6 w-6 items-center justify-center rounded-full border text-sm font-bold transition-colors"
-                                style={{
-                                  borderColor: 'var(--border-soft)',
-                                  background: isExpanded ? 'var(--brand)' : 'var(--surface-strong)',
-                                  color: isExpanded ? '#fff' : 'var(--brand)',
-                                }}
-                              >
-                                {isExpanded ? '−' : '+'}
-                              </button>
-                              <span>{row.entity_name}</span>
-                            </div>
-                          ) : row.entity_name}
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => toggleTeamExpansion(row.source_entity_id)}
+                              aria-expanded={isExpanded}
+                              aria-label={isExpanded ? `Hide ${row.entity_name} details` : `Show ${row.entity_name} details`}
+                              className="inline-flex h-6 w-6 items-center justify-center rounded-full border text-sm font-bold transition-colors"
+                              style={{
+                                borderColor: 'var(--border-soft)',
+                                background: isExpanded ? 'var(--brand)' : 'var(--surface-strong)',
+                                color: isExpanded ? '#fff' : 'var(--brand)',
+                              }}
+                            >
+                              {isExpanded ? '−' : '+'}
+                            </button>
+                            <span>{row.entity_name}</span>
+                          </div>
                         </td>
                         <td className="px-3 py-2">{row.market_center_name}</td>
                         {showTeamColumn && <td className="px-3 py-2">{row.team_name}</td>}
@@ -603,6 +612,55 @@ export default function CappersReport() {
                               ) : (
                                 <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
                                   No registered Company Dollar contributions were found for this team in the current cap cycle.
+                                </p>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      {!showTeamColumn && isExpanded && (
+                        <tr className="border-b" style={{ borderColor: 'var(--border-soft)', background: 'var(--surface-strong)' }}>
+                          <td colSpan={visibleColumnCount} className="px-4 py-4">
+                            <div className="rounded-xl border px-4 py-3" style={{ borderColor: 'var(--border-soft)', background: '#fff' }}>
+                              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Registered Deals</h3>
+                                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                    Registered transactions included in this associate&apos;s cap cycle window.
+                                  </p>
+                                </div>
+                                <div className="rounded-full px-3 py-1 text-xs font-semibold" style={{ background: 'var(--surface-strong)', color: 'var(--brand)' }}>
+                                  Total Company Dollar {formatMoney(totalRegisteredDeals)}
+                                </div>
+                              </div>
+                              {row.registered_deals && row.registered_deals.length > 0 ? (
+                                <div className="overflow-x-auto">
+                                  <table className="w-full min-w-[620px] text-sm">
+                                    <thead>
+                                      <tr className="border-b text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+                                        <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">Deal #</th>
+                                        <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">KWL #</th>
+                                        <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">Status</th>
+                                        <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">Registered Date</th>
+                                        <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide">Company Dollar</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {row.registered_deals.map((deal) => (
+                                        <tr key={deal.source_transaction_id} className="border-b last:border-b-0" style={{ borderColor: 'var(--border-soft)' }}>
+                                          <td className="px-3 py-2 font-medium">{deal.transaction_number}</td>
+                                          <td className="px-3 py-2">{deal.kwl_number || '—'}</td>
+                                          <td className="px-3 py-2">{deal.transaction_status || 'Registered'}</td>
+                                          <td className="px-3 py-2 tabular-nums">{formatDate(deal.registered_date)}</td>
+                                          <td className="px-3 py-2 text-right tabular-nums">{formatMoney(deal.company_dollar)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              ) : (
+                                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                                  No registered deals were found for this associate in the current cap cycle.
                                 </p>
                               )}
                             </div>
