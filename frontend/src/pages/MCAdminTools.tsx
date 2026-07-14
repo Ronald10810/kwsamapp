@@ -3176,7 +3176,7 @@ function LoginActivityTab() {
 
 type SubTab = 'mc-dashboard' | 'rentals' | 'listing-transfer' | 'agent-deregistration' | 'agent-reactivation' | 'mc-document-hub' | 'support-tickets' | 'login-activity' | 'portal-recovery';
 
-const COMMUNICATIONS_CONSOLE_ENABLED = false;
+const COMMUNICATIONS_CONSOLE_ENABLED = String(import.meta.env.VITE_COMMUNICATIONS_CONSOLE_ENABLED ?? 'false').toLowerCase() === 'true';
 const PORTAL_RECOVERY_ENABLED = String(import.meta.env.VITE_PORTAL_RECOVERY_ENABLED ?? 'false').toLowerCase() === 'true';
 
 type CommunicationsStatus = {

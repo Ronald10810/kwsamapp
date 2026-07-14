@@ -220,9 +220,9 @@ export const env = {
   },
   support: {
     enabled: parseBoolean(process.env.SUPPORT_EMAIL_ENABLED, false),
-    smtpHost: normalizeString(process.env.SUPPORT_SMTP_HOST),
-    smtpPort: parseInteger(process.env.SUPPORT_SMTP_PORT, 587),
-    smtpSecure: parseBoolean(process.env.SUPPORT_SMTP_SECURE, false),
+    smtpHost: normalizeString(process.env.SUPPORT_SMTP_HOST) ?? 'smtp.gmail.com',
+    smtpPort: parseInteger(process.env.SUPPORT_SMTP_PORT, 465),
+    smtpSecure: parseBoolean(process.env.SUPPORT_SMTP_SECURE, true),
     smtpUser: normalizeString(process.env.SUPPORT_SMTP_USER),
     smtpPass: normalizeString(process.env.SUPPORT_SMTP_PASS),
     fromEmail: normalizeString(process.env.SUPPORT_FROM_EMAIL),

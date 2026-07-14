@@ -5,7 +5,6 @@ import path from 'path';
 import crypto from 'crypto';
 import { mkdir, unlink, writeFile } from 'fs/promises';
 import { scheduleTransactionAgentRecompute } from '../services/transactionRecomputeQueue.js';
-import { recomputeScopedTransactionAgentCalculations } from '../services/transactionCalculations.js';
 import {
   applyCapRefresh,
   canApplyCapRefresh,
@@ -785,7 +784,6 @@ router.get('/summary', resolvePermissions, async (req, res) => {
         by_type: [],
         market_center_performance: [],
         associate_performance: [],
-        team_performance: [],
         expected_closings_90_days: [],
         reporting_window: null,
         performance_basis: 'registered',
@@ -866,7 +864,6 @@ router.get('/summary', resolvePermissions, async (req, res) => {
         by_type: [],
         market_center_performance: [],
         associate_performance: [],
-        team_performance: [],
         expected_closings_90_days: [],
         reporting_window: null,
         performance_basis: 'registered',
@@ -975,12 +972,9 @@ router.get('/summary', resolvePermissions, async (req, res) => {
     const associateParams: Array<string | number | number[]> = scopedIds
       ? [...reportingWindowParams, scopedIds]
       : [...reportingWindowParams];
-    const teamParams: Array<string | number | number[]> = scopedIds
-      ? [...reportingWindowParams, scopedIds]
-      : [...reportingWindowParams];
     const closingsParams: Array<string | number | number[]> = scopedIds ? [scopedIds] : [];
 
-    const [totalsResult, mtdResult, statusResult, typeResult, marketCenterResult, associateResult, teamResult, closingsResult] = await Promise.all([
+    const [totalsResult, mtdResult, statusResult, typeResult, marketCenterResult, associateResult, closingsResult] = await Promise.all([
       pool.query<{
         total_transactions: string;
         total_sales_value: string;
@@ -1237,9 +1231,7 @@ router.get('/summary', resolvePermissions, async (req, res) => {
             COALESCE(
               NULLIF(TRIM(t.name), ''),
               NULLIF(TRIM(t_source.name), ''),
-              NULLIF(TRIM(t_admin.name), ''),
               NULLIF(TRIM(t_source.source_team_id), ''),
-              NULLIF(TRIM(t_admin.source_team_id), ''),
               NULLIF(TRIM(ca.source_team_id), ''),
               'No Team'
             ) AS team_name,
@@ -1266,14 +1258,6 @@ router.get('/summary', resolvePermissions, async (req, res) => {
             ORDER BY t_src.id DESC
             LIMIT 1
           ) t_source ON true
-          LEFT JOIN LATERAL (
-            SELECT t_adm.name, t_adm.source_team_id
-            FROM migration.associate_admin_teams aat
-            JOIN migration.core_teams t_adm ON NULLIF(TRIM(COALESCE(t_adm.source_team_id, '')), '') = NULLIF(TRIM(COALESCE(aat.source_team_id, '')), '')
-            WHERE aat.associate_id = ca.id
-            ORDER BY aat.id DESC, t_adm.id DESC
-            LIMIT 1
-          ) t_admin ON true
           LEFT JOIN migration.core_market_centers mc_office ON LOWER(TRIM(COALESCE(mc_office.name, ''))) = LOWER(TRIM(COALESCE(tac.office_name, '')))
           LEFT JOIN migration.core_market_centers mc_tx ON mc_tx.id = ct.market_center_id
           LEFT JOIN migration.core_market_centers mc_tx_primary ON mc_tx_primary.id = ct.primary_market_center_id
@@ -1282,23 +1266,6 @@ router.get('/summary', resolvePermissions, async (req, res) => {
             AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date) >= $1::date
             AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date) < $2::date
             AND ca.id IS NOT NULL
-            AND ca.team_id IS NULL
-            AND NULLIF(TRIM(COALESCE(ca.source_team_id, '')), '') IS NULL
-            AND NULLIF(TRIM(COALESCE(t_source.source_team_id, '')), '') IS NULL
-            AND NULLIF(TRIM(COALESCE(t_admin.source_team_id, '')), '') IS NULL
-            AND NULLIF(TRIM(COALESCE(ct.current_source_team_id, '')), '') IS NULL
-            AND NULLIF(TRIM(COALESCE(ct.source_team_id, '')), '') IS NULL
-            AND NOT EXISTS (
-              SELECT 1
-              FROM migration.associate_admin_teams aat
-              WHERE aat.associate_id = ca.id
-            )
-            AND NOT EXISTS (
-              SELECT 1
-              FROM migration.associate_job_titles ajt
-              WHERE ajt.associate_id = ca.id
-                AND LOWER(TRIM(COALESCE(ajt.job_title, ''))) IN ('lead agent', 'team agent', 'team admin')
-            )
             AND ${summaryCategoryFilterSql}
             AND ${summarySaleTypeFilterSql}
             ${scopedIds ? 'AND tac.transaction_id = ANY($4::int[])' : ''}
@@ -1359,7 +1326,7 @@ router.get('/summary', resolvePermissions, async (req, res) => {
         )
         SELECT
           at.associate_name,
-          COALESCE(NULLIF(TRIM(tr.team_name), ''), '') AS team_name,
+          COALESCE(tr.team_name, 'No Team') AS team_name,
           COALESCE(mr.market_center, 'Unassigned / Unknown') AS market_center,
           at.total_transactions::text AS total_transactions,
           at.total_sales_value::text AS total_sales_value,
@@ -1371,119 +1338,6 @@ router.get('/summary', resolvePermissions, async (req, res) => {
         LIMIT 10
         `,
         associateParams
-      ),
-      pool.query<{ team_name: string; market_center: string; total_transactions: string; total_sales_value: string; total_gci: string }>(
-        `
-        WITH ${transactionAgentCalculationDedupCte},
-        mtd AS (
-          SELECT
-            COALESCE(
-              NULLIF(TRIM(t.name), ''),
-              NULLIF(TRIM(t_source.name), ''),
-              NULLIF(TRIM(t_admin.name), ''),
-              NULLIF(TRIM(t_source.source_team_id), ''),
-              NULLIF(TRIM(t_admin.source_team_id), ''),
-              NULLIF(TRIM(ca.source_team_id), ''),
-              'No Team'
-            ) AS team_name,
-            COALESCE(
-              NULLIF(TRIM(mc_tx_primary.name), ''),
-              NULLIF(TRIM(mc_tx.name), ''),
-              NULLIF(TRIM(mc_office.name), ''),
-              NULLIF(TRIM(mc.name), ''),
-              NULLIF(TRIM(tac.office_name), ''),
-              'Unassigned / Unknown'
-            ) AS market_center,
-            tac.transaction_id,
-            COALESCE(tac.transaction_gci_before_fees, tac.gci_after_fees_excl_vat, 0) AS total_gci,
-            ct.sales_price
-          FROM tac_dedup tac
-          LEFT JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
-          LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
-          LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
-          LEFT JOIN migration.core_teams t ON t.id = ca.team_id
-          LEFT JOIN LATERAL (
-            SELECT t_src.name, t_src.source_team_id
-            FROM migration.core_teams t_src
-            WHERE NULLIF(TRIM(COALESCE(t_src.source_team_id, '')), '') = NULLIF(TRIM(COALESCE(ca.source_team_id, '')), '')
-            ORDER BY t_src.id DESC
-            LIMIT 1
-          ) t_source ON true
-          LEFT JOIN LATERAL (
-            SELECT t_adm.name, t_adm.source_team_id
-            FROM migration.associate_admin_teams aat
-            JOIN migration.core_teams t_adm ON NULLIF(TRIM(COALESCE(t_adm.source_team_id, '')), '') = NULLIF(TRIM(COALESCE(aat.source_team_id, '')), '')
-            WHERE aat.associate_id = ca.id
-            ORDER BY aat.id DESC, t_adm.id DESC
-            LIMIT 1
-          ) t_admin ON true
-          LEFT JOIN migration.core_market_centers mc_office ON LOWER(TRIM(COALESCE(mc_office.name, ''))) = LOWER(TRIM(COALESCE(tac.office_name, '')))
-          LEFT JOIN migration.core_market_centers mc_tx ON mc_tx.id = ct.market_center_id
-          LEFT JOIN migration.core_market_centers mc_tx_primary ON mc_tx_primary.id = ct.primary_market_center_id
-          WHERE ($3::text = 'allStatuses' OR tac.is_registered = true)
-            AND tac.is_outside_agent = false
-            AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date) >= $1::date
-            AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date) < $2::date
-            AND ca.id IS NOT NULL
-            AND (
-              NULLIF(TRIM(COALESCE(ct.current_source_team_id, '')), '') IS NOT NULL
-              OR NULLIF(TRIM(COALESCE(ct.source_team_id, '')), '') IS NOT NULL
-              OR ca.team_id IS NOT NULL
-              OR NULLIF(TRIM(COALESCE(ca.source_team_id, '')), '') IS NOT NULL
-              OR EXISTS (
-                SELECT 1
-                FROM migration.associate_admin_teams aat
-                WHERE aat.associate_id = ca.id
-              )
-            )
-            AND ${summaryCategoryFilterSql}
-            AND ${summarySaleTypeFilterSql}
-            ${scopedIds ? 'AND tac.transaction_id = ANY($4::int[])' : ''}
-        ),
-        per_transaction AS (
-          SELECT
-            team_name,
-            market_center,
-            transaction_id,
-            MAX(sales_price) AS sales_price,
-            COALESCE(SUM(total_gci), 0) AS total_gci
-          FROM mtd
-          GROUP BY team_name, market_center, transaction_id
-        ),
-        team_totals AS (
-          SELECT
-            team_name,
-            COUNT(*)::int AS total_transactions,
-            COALESCE(SUM(sales_price), 0) AS total_sales_value,
-            COALESCE(SUM(total_gci), 0) AS total_gci
-          FROM per_transaction
-          WHERE team_name <> 'No Team'
-          GROUP BY team_name
-        ),
-        market_ranked AS (
-          SELECT
-            team_name,
-            market_center,
-            ROW_NUMBER() OVER (
-              PARTITION BY team_name
-              ORDER BY COALESCE(SUM(total_gci), 0) DESC, market_center ASC
-            ) AS rn
-          FROM per_transaction
-          WHERE team_name <> 'No Team'
-          GROUP BY team_name, market_center
-        )
-        SELECT
-          tt.team_name,
-          COALESCE(mr.market_center, 'Unassigned / Unknown') AS market_center,
-          tt.total_transactions::text AS total_transactions,
-          tt.total_sales_value::text AS total_sales_value,
-          tt.total_gci::text AS total_gci
-        FROM team_totals tt
-        LEFT JOIN market_ranked mr ON mr.team_name = tt.team_name AND mr.rn = 1
-        ORDER BY tt.total_gci DESC, tt.total_transactions DESC
-        LIMIT 10
-        `,
-        teamParams
       ),
       pool.query<{ bucket: string; count: string; total_gci: string }>(
         `
@@ -1560,13 +1414,6 @@ router.get('/summary', resolvePermissions, async (req, res) => {
       })),
       associate_performance: associateResult.rows.map((row) => ({
         associate_name: row.associate_name,
-        team_name: row.team_name,
-        market_center: row.market_center,
-        total_transactions: Number(row.total_transactions),
-        total_sales_value: Number(row.total_sales_value),
-        total_gci: Number(row.total_gci),
-      })),
-      team_performance: teamResult.rows.map((row) => ({
         team_name: row.team_name,
         market_center: row.market_center,
         total_transactions: Number(row.total_transactions),
@@ -2740,9 +2587,8 @@ router.put('/:id', resolvePermissions, async (req, res) => {
       sale_type: string | null;
       listing_number: string | null;
       source_listing_id: string | null;
-      transaction_number: string | null;
     }>(
-      `SELECT transaction_status, transaction_type, sale_type, listing_number, source_listing_id, transaction_number
+      `SELECT transaction_status, transaction_type, sale_type, listing_number, source_listing_id
        FROM migration.core_transactions
        WHERE id = $1
        LIMIT 1`,
@@ -2774,7 +2620,7 @@ router.put('/:id', resolvePermissions, async (req, res) => {
       transactionStatus,
     });
 
-    const update = await pool.query<{ id: string; transaction_number: string | null }>(
+    const update = await pool.query<{ id: string }>(
       `
       UPDATE migration.core_transactions
       SET
@@ -2836,7 +2682,7 @@ router.put('/:id', resolvePermissions, async (req, res) => {
         expected_date = $56::timestamptz,
         updated_at = NOW()
       WHERE id = $57
-      RETURNING id::text, transaction_number
+      RETURNING id::text
       `,
       [
         transactionNumber,
@@ -2988,14 +2834,7 @@ router.put('/:id', resolvePermissions, async (req, res) => {
       );
     }
 
-    const strictTransactionNumber = (update.rows[0]?.transaction_number ?? existing.rows[0]?.transaction_number ?? '').trim();
-    if (!strictTransactionNumber) {
-      return res.status(500).json({ error: 'Saved transaction but could not determine transaction number for recalculation.' });
-    }
-
-    await recomputeScopedTransactionAgentCalculations(pool, [strictTransactionNumber]);
-
-    const recomputeWarning = statusChanged ? null : scheduleTransactionAgentRecompute('transactions-update');
+    const recomputeWarning = scheduleTransactionAgentRecompute('transactions-update');
 
     // Force next MC Dashboard request to recompute today's snapshot after transaction edits.
     const snapshotExists = await pool.query<{ exists: string | null }>(
@@ -3009,42 +2848,6 @@ router.put('/:id', resolvePermissions, async (req, res) => {
     }
 
     return res.json({ id: update.rows[0].id, warning: recomputeWarning });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return res.status(500).json({ error: message });
-  }
-});
-
-router.post('/:id/recalculate', resolvePermissions, async (req, res) => {
-  if (!pool) {
-    return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
-  }
-
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) {
-    return res.status(400).json({ error: 'Invalid transaction id.' });
-  }
-
-  try {
-    await ensureTransactionAuxTables(pool);
-    const perms = req.permissions!;
-    const hasAccess = await canAccessTransactionByScope(pool, id, perms);
-    if (!hasAccess) {
-      return res.status(403).json({ error: 'Permission denied: you cannot recalculate this transaction' });
-    }
-
-    const tx = await pool.query<{ transaction_number: string | null }>(
-      `SELECT transaction_number FROM migration.core_transactions WHERE id = $1 LIMIT 1`,
-      [id]
-    );
-
-    const transactionNumber = (tx.rows[0]?.transaction_number ?? '').trim();
-    if (!transactionNumber) {
-      return res.status(400).json({ error: 'Transaction number is required before recalculation can run.' });
-    }
-
-    await recomputeScopedTransactionAgentCalculations(pool, [transactionNumber]);
-    return res.json({ ok: true, queued: false, transaction_number: transactionNumber });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return res.status(500).json({ error: message });
@@ -3596,6 +3399,16 @@ router.delete('/:id/documents/:documentId', resolvePermissions, async (req, res)
   }
 });
 
+type QuickSummaryCapLookupRow = {
+  transaction_agent_id: string | null;
+  associate_id: string | null;
+  associate_team_id: string | null;
+  associate_source_team_id: string | null;
+  transaction_source_team_id: string | null;
+  transaction_current_source_team_id: string | null;
+  cap_remaining: string | null;
+};
+
 type TeamCapLookup = {
   cap_amount: number;
   cap_remaining: number;
@@ -3888,6 +3701,108 @@ async function fetchTeamCurrentCapRemainingByIds(db: Pool, teamIds: number[]): P
   return lookup;
 }
 
+async function resolveTeamIdsBySourceTeamIds(db: Pool, sourceTeamIds: string[]): Promise<Map<string, number>> {
+  if (sourceTeamIds.length === 0) return new Map<string, number>();
+
+  const normalizedTokens = Array.from(new Set(sourceTeamIds.map((value) => normalizeKey(value)).filter(Boolean)));
+  if (normalizedTokens.length === 0) return new Map<string, number>();
+
+  const result = await db.query<{ team_id: string; source_team_id: string | null; team_name: string | null }>(
+    `
+    SELECT
+      t.id::text AS team_id,
+      t.source_team_id,
+      t.name AS team_name
+    FROM migration.core_teams t
+    WHERE LOWER(TRIM(COALESCE(t.status_name, ''))) IN ('active', '1')
+    `
+  );
+
+  const lookup = new Map<string, number>();
+  for (const row of result.rows) {
+    const teamId = Number(row.team_id);
+    if (!Number.isFinite(teamId) || teamId <= 0) continue;
+
+    const candidateTokens = [
+      normalizeKey(row.source_team_id),
+      normalizeKey(row.team_id),
+      normalizeKey(row.team_name),
+    ].filter((value): value is string => value.length > 0);
+
+    for (const token of candidateTokens) {
+      if (!normalizedTokens.includes(token)) continue;
+      if (!lookup.has(token)) lookup.set(token, teamId);
+    }
+  }
+
+  return lookup;
+}
+
+async function buildQuickSummaryDisplayCapRemainingLookup(db: Pool, rows: QuickSummaryCapLookupRow[]): Promise<Map<number, number>> {
+  const sourceTeamIds = Array.from(new Set(
+    rows
+      .flatMap((row) => [
+        row.transaction_current_source_team_id,
+        row.transaction_source_team_id,
+        row.associate_source_team_id,
+      ])
+      .map((value) => (value ?? '').trim())
+      .filter((value) => value.length > 0)
+  ));
+
+  const sourceTeamLookup = await resolveTeamIdsBySourceTeamIds(db, sourceTeamIds);
+
+  const associateIds = Array.from(new Set(
+    rows
+      .map((row) => Number(row.associate_id))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  ));
+  const teamIds = Array.from(new Set(
+    rows.flatMap((row) => {
+      const explicitTeamId = Number(row.associate_team_id);
+      const resolvedByCurrentSource = sourceTeamLookup.get(normalizeKey(row.transaction_current_source_team_id));
+      const resolvedByTransactionSource = sourceTeamLookup.get(normalizeKey(row.transaction_source_team_id));
+      const resolvedByAssociateSource = sourceTeamLookup.get(normalizeKey(row.associate_source_team_id));
+      return [explicitTeamId, resolvedByCurrentSource, resolvedByTransactionSource, resolvedByAssociateSource]
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
+    })
+  ));
+
+  const [associateLookup, teamLookup] = await Promise.all([
+    fetchAssociateCurrentCapRemainingByIds(db, associateIds),
+    fetchTeamCurrentCapRemainingByIds(db, teamIds),
+  ]);
+
+  const displayLookup = new Map<number, number>();
+  for (const row of rows) {
+    const transactionAgentId = Number(row.transaction_agent_id);
+    if (!Number.isFinite(transactionAgentId)) continue;
+
+    const explicitTeamId = Number(row.associate_team_id);
+    const resolvedTeamId = Number.isFinite(explicitTeamId) && explicitTeamId > 0
+      ? explicitTeamId
+      : sourceTeamLookup.get(normalizeKey(row.transaction_current_source_team_id))
+        ?? sourceTeamLookup.get(normalizeKey(row.transaction_source_team_id))
+        ?? sourceTeamLookup.get(normalizeKey(row.associate_source_team_id))
+        ?? null;
+    const associateId = Number(row.associate_id);
+    const teamCap = resolvedTeamId != null ? teamLookup.get(resolvedTeamId) ?? null : null;
+    const hasApplicableTeamCap = teamCap != null && teamCap.cap_amount > 0;
+    const associateCapRemaining = Number.isFinite(associateId) && associateId > 0
+      ? associateLookup.get(associateId)?.cap_remaining ?? null
+      : null;
+    const fallbackCapRemaining = toNumber(row.cap_remaining) ?? 0;
+    displayLookup.set(
+      transactionAgentId,
+      hasApplicableTeamCap
+        ? teamCap.cap_remaining
+        : (associateCapRemaining ?? fallbackCapRemaining)
+    );
+  }
+
+  return displayLookup;
+}
+
 router.post('/preview-cap-remaining', resolvePermissions, async (req, res) => {
   if (!pool) {
     return res.status(503).json({ error: 'DATABASE_URL is not configured.' });
@@ -4015,7 +3930,7 @@ router.get('/:id/calculated-summary', resolvePermissions, async (req, res) => {
         tac.is_outside_agent,
         tac.agent_name,
         tac.office_name,
-        tac.transaction_side,
+        COALESCE(NULLIF(TRIM(ta.agent_role), ''), NULLIF(TRIM(tac.transaction_side), ''), NULLIF(TRIM(ct.transaction_type), ''), 'Other') AS transaction_side,
         tac.split_percentage::text,
         tac.variance_sale_list_pct::text,
         COALESCE(ct.sales_price, 0)::text AS sales_value_component,
@@ -4030,7 +3945,7 @@ router.get('/:id/calculated-summary', resolvePermissions, async (req, res) => {
         tac.associate_dollar::text,
         COALESCE(team_cap.team_cap_amount, tac.cap_amount)::text AS cap_amount,
         tac.cap_contribution::text,
-        tac.cap_remaining::text AS cap_remaining,
+        COALESCE(team_cap.team_cap_remaining, tac.cap_remaining)::text AS cap_remaining,
         tac.team_dollar::text,
         tac.market_center_dollar::text,
         tac.cap_cycle_start_date::text,
@@ -4040,6 +3955,7 @@ router.get('/:id/calculated-summary', resolvePermissions, async (req, res) => {
       FROM migration.transaction_agent_calculations tac
       LEFT JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
       LEFT JOIN migration.core_associates ca ON ca.id = tac.associate_id
+      LEFT JOIN migration.transaction_agents ta ON ta.id = tac.transaction_agent_id
       LEFT JOIN LATERAL (
         SELECT t.id AS team_id
         FROM migration.core_teams t
@@ -4314,9 +4230,20 @@ router.get('/:id/calculated-summary', resolvePermissions, async (req, res) => {
 
       const toMoneyText = (value: number): string => value.toFixed(2);
 
+      const displayCapRemainingLookup = await buildQuickSummaryDisplayCapRemainingLookup(
+        pool,
+        result.rows as QuickSummaryCapLookupRow[]
+      );
+
       const items = result.rows.map((row) => {
+        const transactionAgentId = Number(row.transaction_agent_id);
         const transactionCapRemaining = row.cap_remaining;
-        const displayCapRemaining = transactionCapRemaining ?? '0.00';
+        const displayCapRemainingValue = Number.isFinite(transactionAgentId)
+          ? displayCapRemainingLookup.get(transactionAgentId)
+          : null;
+        const displayCapRemaining = displayCapRemainingValue == null
+          ? transactionCapRemaining
+          : displayCapRemainingValue.toFixed(2);
 
         const baseAssociateDollar = toNumber(row.associate_dollar) ?? 0;
         const baseTeamDollar = toNumber(row.team_dollar) ?? 0;
@@ -4327,7 +4254,7 @@ router.get('/:id/calculated-summary', resolvePermissions, async (req, res) => {
           row.transaction_source_team_id,
           row.transaction_current_source_team_id,
         ].some((value) => toText(value) != null);
-        const applicableCapRemaining = toNumber(transactionCapRemaining) ?? 0;
+        const applicableCapRemaining = displayCapRemainingValue ?? (toNumber(transactionCapRemaining) ?? 0);
 
         let adjustedAssociateDollar = baseAssociateDollar;
         let adjustedTeamDollar = baseTeamDollar;

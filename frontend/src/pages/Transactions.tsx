@@ -6,7 +6,8 @@ import TransactionDetailView from '../components/TransactionDetailView';
 
 const HOUR_MS = 60 * 60 * 1000;
 const API_FETCH_TIMEOUT_MS = 15000;
-const SUMMARY_FETCH_TIMEOUT_MS = 30000;
+const SUMMARY_FETCH_TIMEOUT_MS = 12000;
+const SUMMARY_STALE_MS = 5 * 60 * 1000;
 
 async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs = API_FETCH_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
@@ -63,6 +64,52 @@ type TransactionAgent = {
     is_outside_agent: boolean;
   };
 };
+
+type MonthEndParityRow = {
+  market_center_name: string;
+  contracts: number;
+  total_gci: number;
+};
+
+type MonthEndParityResponse = {
+  rows: MonthEndParityRow[];
+  totals: {
+    contracts: number;
+    total_gci: number;
+  };
+};
+
+type TeamOption = {
+  source_team_id: string;
+  name: string;
+  market_center_name: string | null;
+};
+
+type TeamOptionsResponse = {
+  items: TeamOption[];
+};
+
+type OpsSummaryRankingResponse = {
+  associatePerformance: Array<{
+    associateName: string;
+    marketCenter: string;
+    totalTransactions: number;
+    totalGci: number;
+  }>;
+  teamPerformance: Array<{
+    teamName: string;
+    marketCenter: string;
+    totalTransactions: number;
+    totalGci: number;
+  }>;
+};
+
+function formatIsoDate(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 type TransactionRow = {
   id: string;
@@ -180,13 +227,6 @@ type TransactionsSummaryResponse = {
   }>;
   associate_performance: Array<{
     associate_name: string;
-    team_name: string;
-    market_center: string;
-    total_transactions: number;
-    total_sales_value: number;
-    total_gci: number;
-  }>;
-  team_performance: Array<{
     team_name: string;
     market_center: string;
     total_transactions: number;
@@ -747,7 +787,7 @@ function buildSnapshotCalculatedRows(transaction: TransactionRow | null | undefi
       is_outside_agent: Boolean(agent.summary?.is_outside_agent),
       agent_name: getTransactionAgentDisplayName(agent),
       office_name: agent.summary?.office_name ?? transaction.market_center_name,
-      transaction_side: agent.summary?.transaction_type ?? null,
+      transaction_side: agent.agent_role ?? agent.summary?.transaction_type ?? null,
       split_percentage: agent.summary?.split_percentage ?? '0',
       variance_sale_list_pct: agent.summary?.variance_sale_list_pct ?? '0',
       transaction_gci_before_fees: agent.summary?.transaction_gci_before_fees ?? '0',
@@ -762,6 +802,26 @@ function buildSnapshotCalculatedRows(transaction: TransactionRow | null | undefi
       team_dollar: agent.summary?.team_dollar ?? '0',
       market_center_dollar: agent.summary?.market_center_dollar ?? '0',
     }));
+}
+
+function buildFinancialSignature(rows: CalculatedSummaryItem[]): string {
+  const totals = rows.reduce((acc, row) => {
+    acc.gciAfterFees += toNumberOrZero(row.gci_after_fees_excl_vat);
+    acc.associate += toNumberOrZero(row.associate_dollar);
+    acc.mc += toNumberOrZero(row.market_center_dollar);
+    acc.team += toNumberOrZero(row.team_dollar);
+    acc.capRemaining += toNumberOrZero(row.display_cap_remaining ?? row.current_cap_remaining ?? row.cap_remaining);
+    return acc;
+  }, { gciAfterFees: 0, associate: 0, mc: 0, team: 0, capRemaining: 0 });
+
+  return [
+    rows.length,
+    roundMoney(totals.gciAfterFees).toFixed(2),
+    roundMoney(totals.associate).toFixed(2),
+    roundMoney(totals.mc).toFixed(2),
+    roundMoney(totals.team).toFixed(2),
+    roundMoney(totals.capRemaining).toFixed(2),
+  ].join('|');
 }
 
 function UiIcon({
@@ -1047,6 +1107,7 @@ export default function TransactionsPage() {
   const [editTab, setEditTab] = useState<TransactionEditTab>('details');
   const [quickSummaryRow, setQuickSummaryRow] = useState<TransactionRow | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRecalculatingSummary, setIsRecalculatingSummary] = useState(false);
   const [forceSummaryPreview, setForceSummaryPreview] = useState(false);
   const [summaryPreviewNotice, setSummaryPreviewNotice] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -1188,7 +1249,11 @@ export default function TransactionsPage() {
   }
 
   async function refreshTransactionViews(): Promise<void> {
-    await Promise.allSettled([refetch(), refetchSummary()]);
+    if (view === 'summary' && !isRentalsCategory) {
+      await Promise.allSettled([refetch(), refetchSummary()]);
+      return;
+    }
+    await refetch();
   }
 
   useEffect(() => {
@@ -1208,11 +1273,12 @@ export default function TransactionsPage() {
       return response.json() as Promise<TransactionsSummaryResponse>;
     },
     placeholderData: (prev) => prev,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    refetchInterval: () => msUntilNextHour(),
+    enabled: view === 'summary' && categoryView !== 'rentals',
+    staleTime: SUMMARY_STALE_MS,
+    refetchOnMount: false,
+    refetchInterval: false,
     refetchOnWindowFocus: false,
-    retry: 2,
+    retry: 0,
   });
 
   useEffect(() => {
@@ -1222,6 +1288,132 @@ export default function TransactionsPage() {
   }, [querySummaryData]);
 
   const summaryData = querySummaryData ?? lastGoodSummaryData;
+
+  const monthEndParityWindow = useMemo(() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return {
+      dateFrom: formatIsoDate(start),
+      dateTo: formatIsoDate(now),
+    };
+  }, []);
+
+  const { data: monthEndParityData } = useQuery({
+    queryKey: ['transactions-month-end-parity', activeContextId, monthEndParityWindow.dateFrom, monthEndParityWindow.dateTo],
+    queryFn: async ({ signal }) => {
+      const params = new URLSearchParams({
+        date_from: monthEndParityWindow.dateFrom,
+        date_to: monthEndParityWindow.dateTo,
+        transaction_status: 'Registered',
+        sale_type: 'For Sale',
+      });
+      const response = await fetchWithTimeout(`/api/reports/month-end?${params.toString()}`, {
+        headers: authHeaders,
+        signal,
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error('Unable to load month-end parity summary');
+      return response.json() as Promise<MonthEndParityResponse>;
+    },
+    enabled: view === 'summary' && categoryView !== 'rentals',
+    staleTime: SUMMARY_STALE_MS,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    retry: 0,
+  });
+
+  const { data: teamOptionsData } = useQuery({
+    queryKey: ['transactions-team-options', activeContextId],
+    queryFn: async ({ signal }) => {
+      const response = await fetchWithTimeout('/api/teams/options', {
+        headers: authHeaders,
+        signal,
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error('Unable to load team options');
+      return response.json() as Promise<TeamOptionsResponse>;
+    },
+    enabled: view === 'summary' && categoryView !== 'rentals',
+    staleTime: SUMMARY_STALE_MS,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    retry: 0,
+  });
+
+  const { data: opsSummaryRankingData } = useQuery({
+    queryKey: ['transactions-ops-rankings', activeContextId],
+    queryFn: async ({ signal }) => {
+      const response = await fetchWithTimeout('/api/ops/summary', {
+        headers: authHeaders,
+        signal,
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error('Unable to load transactions ranking data');
+      return response.json() as Promise<OpsSummaryRankingResponse>;
+    },
+    enabled: view === 'summary' && categoryView !== 'rentals',
+    staleTime: SUMMARY_STALE_MS,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    retry: 0,
+  });
+
+  const topTeamsThisMonth = useMemo(() => {
+    const officialMcByTeam = new Map<string, string>();
+    for (const team of teamOptionsData?.items ?? []) {
+      const key = (team.name ?? '').trim().toLowerCase();
+      const mc = (team.market_center_name ?? '').trim();
+      if (!key || !mc || officialMcByTeam.has(key)) continue;
+      officialMcByTeam.set(key, mc);
+    }
+
+    return (opsSummaryRankingData?.teamPerformance ?? [])
+      .filter((row) => {
+        const name = (row.teamName ?? '').trim().toLowerCase();
+        return Boolean(name) && name !== 'no team';
+      })
+      .map((row) => {
+        const key = (row.teamName ?? '').trim().toLowerCase();
+        return {
+          team_name: row.teamName,
+          total_transactions: Number(row.totalTransactions ?? 0),
+          total_gci: Number(row.totalGci ?? 0),
+          market_center: officialMcByTeam.get(key) ?? row.marketCenter,
+        };
+      })
+      .slice(0, 10);
+  }, [opsSummaryRankingData?.teamPerformance, teamOptionsData?.items]);
+
+  const topIndividualAssociatesThisMonth = useMemo(() => {
+    const associateTeamByName = new Map<string, string>();
+    for (const row of summaryData?.associate_performance ?? []) {
+      const key = (row.associate_name ?? '').trim().toLowerCase();
+      const teamName = (row.team_name ?? '').trim();
+      if (!key || !teamName) continue;
+      if (!associateTeamByName.has(key)) {
+        associateTeamByName.set(key, teamName);
+      }
+    }
+
+    return (opsSummaryRankingData?.associatePerformance ?? [])
+      .filter((row) => {
+        const name = (row.associateName ?? '').trim().toLowerCase();
+        if (!name) return false;
+        return !name.startsWith('team ') && !name.includes('& team');
+      })
+      .map((row) => ({
+        associate_name: row.associateName,
+        team_name: associateTeamByName.get((row.associateName ?? '').trim().toLowerCase()) ?? 'No Team',
+        market_center: row.marketCenter,
+        total_transactions: Number(row.totalTransactions ?? 0),
+        total_gci: Number(row.totalGci ?? 0),
+      }))
+      .slice(0, 10);
+  }, [opsSummaryRankingData?.associatePerformance, summaryData?.associate_performance]);
+
+  const parityTopMarketCenters = (monthEndParityData?.rows ?? []).slice(0, 10);
+  const parityContracts = monthEndParityData?.totals?.contracts;
+  const parityTotalGci = monthEndParityData?.totals?.total_gci;
 
   const { data: agentOptionsData } = useQuery({
     queryKey: ['agent-options', activeContextId],
@@ -1291,7 +1483,6 @@ export default function TransactionsPage() {
   const {
     data: quickSummaryData,
     isLoading: isQuickSummaryLoading,
-    error: quickSummaryError,
   } = useQuery({
     queryKey: ['transaction-quick-summary', activeContextId, quickSummaryRow?.id],
     queryFn: async ({ signal }) => {
@@ -1627,6 +1818,7 @@ export default function TransactionsPage() {
     transactionId: string,
     successNotice: string,
     options?: {
+      showBusy?: boolean;
       timeoutMs?: number;
       failSilently?: boolean;
     }
@@ -1640,7 +1832,11 @@ export default function TransactionsPage() {
       }
     };
 
+    const showBusy = options?.showBusy !== false;
     const timeoutMs = options?.timeoutMs ?? 90000;
+    if (showBusy) {
+      setIsRecalculatingSummary(true);
+    }
     try {
       const response = await fetchWithTimeout(
         `/api/transactions/${transactionId}/recalculate?mode=queued`,
@@ -1676,6 +1872,10 @@ export default function TransactionsPage() {
         return false;
       }
       throw error;
+    } finally {
+      if (showBusy) {
+        setIsRecalculatingSummary(false);
+      }
     }
   }
 
@@ -1816,7 +2016,7 @@ export default function TransactionsPage() {
         void recalculateSavedTransactionSummary(
           savedTransactionId,
           'Saved and recalculated using backend rules. This summary now reflects persisted values.',
-          { timeoutMs: 12000, failSilently: true }
+          { showBusy: false, timeoutMs: 12000, failSilently: true }
         );
       }
     } catch (error) {
@@ -1828,7 +2028,7 @@ export default function TransactionsPage() {
           void recalculateSavedTransactionSummary(
             editingId,
             'Saved and recalculated using backend rules. This summary now reflects persisted values.',
-            { timeoutMs: 12000, failSilently: true }
+            { showBusy: false, timeoutMs: 12000, failSilently: true }
           );
           return;
         }
@@ -2167,8 +2367,14 @@ export default function TransactionsPage() {
   const calculatedSummaryRows = shouldUseLivePreviewRows
     ? livePreviewRows
     : savedCalculatedSummaryRows;
-  const quickSummaryCalculatedRows = quickSummaryData?.items ?? [];
-  const quickSummaryFetchFailed = Boolean(quickSummaryError) && !isQuickSummaryLoading && quickSummaryCalculatedRows.length === 0;
+  const previewWouldChangeNumbers = useMemo(
+    () => buildFinancialSignature(livePreviewRows) !== buildFinancialSignature(savedCalculatedSummaryRows),
+    [livePreviewRows, savedCalculatedSummaryRows]
+  );
+  const snapshotQuickCalculatedRows = useMemo(() => buildSnapshotCalculatedRows(quickSummaryRow), [quickSummaryRow]);
+  const quickSummaryCalculatedRows = (quickSummaryData?.items?.length ?? 0) > 0
+    ? (quickSummaryData?.items ?? [])
+    : snapshotQuickCalculatedRows;
   const isShowingPreviewForEdit = Boolean(editingId) && shouldUseLivePreviewRows;
 
   const editSummaryHeaderMeta = useMemo(() => {
@@ -2659,12 +2865,12 @@ export default function TransactionsPage() {
                           </label>
                         )}
                         <label className="flex flex-col gap-1">
-                          <span className="text-xs font-medium text-slate-600">{isEditingRentalTransaction ? 'Gross Commission' : 'Total GCI'}</span>
-                          <input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder={isEditingRentalTransaction ? 'Gross commission' : 'Total GCI'} value={form.total_gci} onChange={(e) => setForm((p) => ({ ...p, total_gci: e.target.value }))} />
+                          <span className="text-xs font-medium text-slate-600">{isEditingRentalTransaction ? 'Gross Commission' : 'Total GCI excl Vat'}</span>
+                          <input className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder={isEditingRentalTransaction ? 'Gross commission' : 'Total GCI excl Vat'} value={form.total_gci} onChange={(e) => setForm((p) => ({ ...p, total_gci: e.target.value }))} />
                         </label>
                         {!isEditingRentalTransaction && (
                           <label className="flex flex-col gap-1">
-                            <span className="text-xs font-medium text-slate-600">GCI After Fees Excl VAT (Auto)</span>
+                            <span className="text-xs font-medium text-slate-600">GCI less PR and GS</span>
                             <input
                               className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700"
                               value={toDecimalText(Math.max(toNumberOrZero(form.total_gci), 0) * 0.92)}
@@ -3065,7 +3271,49 @@ export default function TransactionsPage() {
                   <div className="space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h3 className="text-lg font-semibold text-slate-900">{isEditingRentalTransaction ? 'Rental Transaction Summary' : 'Transaction Summary'}</h3>
-                      {editingId && !isEditingRentalTransaction && <div className="flex items-center gap-2" />}
+                      {editingId && !isEditingRentalTransaction && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!editingId) {
+                                return;
+                              }
+
+                              if (!hasSummaryRelevantUnsavedChanges) {
+                                void (async () => {
+                                  setForceSummaryPreview(false);
+                                  const statusLabel = (form.transaction_status || currentEditingRow?.transaction_status || '').trim() || 'Unknown';
+                                  const isRegistered = statusLabel.toLowerCase() === 'registered';
+                                  setSummaryPreviewNotice('Recalculating saved summary using backend rules...');
+                                  try {
+                                    await recalculateSavedTransactionSummary(
+                                      editingId,
+                                      isRegistered
+                                        ? 'Saved summary recalculated using backend rules.'
+                                        : `Recalculation complete. Current status is ${statusLabel}; Market Centre allocation and cap progression only apply once status is Registered.`
+                                    );
+                                  } catch (error) {
+                                    setSummaryPreviewNotice(error instanceof Error ? error.message : 'Failed to recalculate saved summary');
+                                  }
+                                })();
+                                return;
+                              }
+                              setForceSummaryPreview(true);
+                              setSummaryPreviewNotice(
+                                previewWouldChangeNumbers
+                                  ? 'Preview mode active: these values are not saved yet. Click Save to apply them.'
+                                  : 'Preview completed: no financial difference was detected from the currently saved summary for these edits.'
+                              );
+                            }}
+                            disabled={isRecalculatingSummary}
+                            className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100"
+                            title="Recalculate unsaved preview values, or if there are no unsaved changes, recompute the saved backend summary."
+                          >
+                            {isRecalculatingSummary ? 'Recalculating...' : 'Recalculate Preview'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                       <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
@@ -3133,10 +3381,12 @@ export default function TransactionsPage() {
                         </div>
                       )}
                       <div className="max-h-[56vh] overflow-auto">
-                      <table className="min-w-[1450px] w-full divide-y divide-slate-200 text-sm">
+                      <table className="min-w-[1650px] w-full divide-y divide-slate-200 text-sm">
                         <thead className="sticky top-0 z-10 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                           <tr>
-                            <th className="px-4 py-3 font-semibold">Associate</th>
+                            <th className="px-4 py-3 font-semibold">Agent Name</th>
+                            <th className="px-4 py-3 font-semibold">Office Name</th>
+                            <th className="px-4 py-3 font-semibold">Transaction Type</th>
                             <th className="px-4 py-3 font-semibold">Split %</th>
                             <th className="px-4 py-3 font-semibold">{isEditingRentalTransaction ? 'Variance % (N/A)' : 'Variance %'}</th>
                             <th className="px-4 py-3 font-semibold">GCI Before Fees</th>
@@ -3155,7 +3405,9 @@ export default function TransactionsPage() {
                         <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
                           {calculatedSummaryRows.map((item) => (
                             <tr key={item.id} className="odd:bg-white even:bg-slate-50/30 hover:bg-blue-50/40">
-                              <td className="px-4 py-3 font-medium text-slate-900">{item.agent_name || 'Unassigned'} <span className="text-xs font-normal text-slate-500">({item.is_outside_agent ? 'Outside Agent' : normalizeSummarySide(item.transaction_side, '-')})</span></td>
+                              <td className="px-4 py-3 font-medium text-slate-900">{item.agent_name || 'Unassigned'}</td>
+                              <td className="px-4 py-3">{item.office_name || '-'}</td>
+                              <td className="px-4 py-3">{item.is_outside_agent ? 'Outside Agent' : normalizeSummarySide(item.transaction_side, '-')}</td>
                               <td className="px-4 py-3">{toPercent(Number(item.split_percentage ?? 0))}</td>
                               <td className="px-4 py-3">{isEditingRentalTransaction ? '-' : toPercent(Number(item.variance_sale_list_pct ?? 0))}</td>
                               <td className="px-4 py-3">{toMoney(item.transaction_gci_before_fees ?? '0')}</td>
@@ -3173,14 +3425,14 @@ export default function TransactionsPage() {
                           ))}
                           {isEditSummaryLoading && (
                             <tr>
-                              <td className="px-4 py-4 text-slate-500" colSpan={14}>
+                              <td className="px-4 py-4 text-slate-500" colSpan={16}>
                                 Loading latest calculated summary...
                               </td>
                             </tr>
                           )}
                           {!isEditSummaryLoading && calculatedSummaryRows.length === 0 && (
                             <tr>
-                              <td className="px-4 py-4 text-slate-500" colSpan={14}>
+                              <td className="px-4 py-4 text-slate-500" colSpan={16}>
                                 No summary rows are available yet. Enter the required values to see a live preview, or save to load backend-calculated rows.
                               </td>
                             </tr>
@@ -3195,7 +3447,7 @@ export default function TransactionsPage() {
                         : currentEditingRow
                           ? (isEditingRentalTransaction
                             ? 'These values are calculated from rental payment details and participant splits.'
-                            : 'These values are calculated and saved by the backend. Save changes to apply updated summary values.')
+                            : 'These values are calculated and saved by the backend. Click Recalculate Preview to see how unsaved edits will affect this summary.')
                           : 'Complete price, role, and split fields to preview projected values before saving.')}
                     </div>
                   </div>
@@ -3236,7 +3488,7 @@ export default function TransactionsPage() {
               <div className="rounded-lg border border-slate-200 p-3">
                 <p className="inline-flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500"><UiIcon kind="tx" className="h-3.5 w-3.5" />Total Transactions</p>
                 <p className="mt-2 text-2xl font-semibold text-slate-900">
-                  {isSummaryLoading ? '...' : (summaryData?.mtd_registered_active.total_transactions ?? 0).toLocaleString()}
+                  {isSummaryLoading ? '...' : (parityContracts ?? summaryData?.mtd_registered_active.total_transactions ?? 0).toLocaleString()}
                 </p>
               </div>
               <div className="rounded-lg border border-slate-200 p-3">
@@ -3248,7 +3500,7 @@ export default function TransactionsPage() {
               <div className="rounded-lg border border-slate-200 p-3">
                 <p className="inline-flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500"><UiIcon kind="gci" className="h-3.5 w-3.5" />Total GCI</p>
                 <p className="mt-2 text-2xl font-semibold text-slate-900">
-                  {isSummaryLoading ? '...' : toMoney(String(summaryData?.mtd_registered_active.total_net_commission ?? 0))}
+                  {isSummaryLoading ? '...' : toMoney(String(parityTotalGci ?? summaryData?.mtd_registered_active.total_net_commission ?? 0))}
                 </p>
               </div>
               <div className="rounded-lg border border-slate-200 p-3">
@@ -3260,18 +3512,18 @@ export default function TransactionsPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
             <div className="surface-card p-4">
               <h3 className="text-sm font-semibold text-slate-900">Top 10 Market Centres This Month</h3>
               <div className="mt-3 space-y-2">
-                {(summaryData?.market_center_performance ?? []).map((row, index) => (
-                  <div key={`${row.market_center}-${index}`} className="grid grid-cols-12 items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
-                    <span className="col-span-5 truncate text-sm text-slate-700"><span className="mr-1 text-slate-400">#{index + 1}</span>{row.market_center}</span>
-                    <span className="col-span-2 text-xs text-slate-600">{row.total_transactions.toLocaleString()} tx</span>
-                    <span className="col-span-5 text-sm font-semibold text-slate-900">GCI {toMoney(String(row.total_gci))}</span>
+                {parityTopMarketCenters.map((row, index) => (
+                  <div key={`${row.market_center_name}-${index}`} className="grid grid-cols-12 items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                    <span className="col-span-5 truncate text-sm text-slate-700"><span className="mr-1 text-slate-400">#{index + 1}</span>{row.market_center_name}</span>
+                    <span className="col-span-2 text-xs text-slate-600">{Number(row.contracts ?? 0).toLocaleString()} tx</span>
+                    <span className="col-span-5 text-sm font-semibold text-slate-900">GCI {toMoney(String(row.total_gci ?? 0))}</span>
                   </div>
                 ))}
-                {!isSummaryLoading && (summaryData?.market_center_performance?.length ?? 0) === 0 && (
+                {!isSummaryLoading && parityTopMarketCenters.length === 0 && (
                   <p className="text-sm text-slate-500">No market centre data in this month window.</p>
                 )}
               </div>
@@ -3280,16 +3532,16 @@ export default function TransactionsPage() {
             <div className="surface-card p-4">
               <h3 className="text-sm font-semibold text-slate-900">Top 10 Associates This Month</h3>
               <div className="mt-3 space-y-2">
-                {(summaryData?.associate_performance ?? []).map((row, index) => (
+                {topIndividualAssociatesThisMonth.map((row, index) => (
                   <div key={`${row.associate_name}-${index}`} className="grid grid-cols-12 items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
                     <span className="col-span-4 truncate text-sm text-slate-700"><span className="mr-1 text-slate-400">#{index + 1}</span>{row.associate_name}</span>
-                    <span className="col-span-3 truncate text-xs text-slate-600">{row.market_center}</span>
-                    <span className="col-span-2 truncate text-xs text-slate-600">{row.team_name && row.team_name !== 'No Team' ? row.team_name : ''}</span>
+                    <span className="col-span-3 truncate text-xs text-slate-600">{row.team_name || 'No Team'}</span>
+                    <span className="col-span-2 truncate text-xs text-slate-600">{row.market_center}</span>
                     <span className="col-span-1 text-xs text-slate-600">{row.total_transactions.toLocaleString()} tx</span>
                     <span className="col-span-2 text-sm font-semibold text-slate-900">{toMoney(String(row.total_gci))}</span>
                   </div>
                 ))}
-                {!isSummaryLoading && (summaryData?.associate_performance?.length ?? 0) === 0 && (
+                {!isSummaryLoading && topIndividualAssociatesThisMonth.length === 0 && (
                   <p className="text-sm text-slate-500">No associate data in this month window.</p>
                 )}
               </div>
@@ -3298,15 +3550,15 @@ export default function TransactionsPage() {
             <div className="surface-card p-4">
               <h3 className="text-sm font-semibold text-slate-900">Top 10 Teams This Month</h3>
               <div className="mt-3 space-y-2">
-                {(summaryData?.team_performance ?? []).map((row, index) => (
+                {topTeamsThisMonth.map((row, index) => (
                   <div key={`${row.team_name}-${index}`} className="grid grid-cols-12 items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
                     <span className="col-span-4 truncate text-sm text-slate-700"><span className="mr-1 text-slate-400">#{index + 1}</span>{row.team_name}</span>
                     <span className="col-span-4 truncate text-xs text-slate-600">{row.market_center}</span>
-                    <span className="col-span-2 text-xs text-slate-600">{row.total_transactions.toLocaleString()} tx</span>
-                    <span className="col-span-2 text-sm font-semibold text-slate-900">{toMoney(String(row.total_gci))}</span>
+                    <span className="col-span-1 text-xs text-slate-600">{row.total_transactions.toLocaleString()} tx</span>
+                    <span className="col-span-3 text-sm font-semibold text-slate-900">{toMoney(String(row.total_gci))}</span>
                   </div>
                 ))}
-                {!isSummaryLoading && (summaryData?.team_performance?.length ?? 0) === 0 && (
+                {!isSummaryLoading && topTeamsThisMonth.length === 0 && (
                   <p className="text-sm text-slate-500">No team data in this month window.</p>
                 )}
               </div>
@@ -3329,7 +3581,7 @@ export default function TransactionsPage() {
             <div className="surface-card p-4">
               <p className="inline-flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500"><UiIcon kind="net" className="h-3.5 w-3.5" />Total GCI</p>
               <p className="mt-2 text-2xl font-semibold text-slate-900">
-                {isSummaryLoading ? '...' : toMoney(String(summaryData?.totals.total_net_commission ?? 0))}
+                {isSummaryLoading ? '...' : toMoney(String(parityTotalGci ?? summaryData?.totals.total_net_commission ?? 0))}
               </p>
             </div>
             <div className="surface-card p-4">
@@ -3724,17 +3976,17 @@ export default function TransactionsPage() {
                 </th>
                 <th className="px-3 py-2">
                   <button type="button" className="inline-flex items-center gap-1 hover:text-slate-900" onClick={() => toggleRegisterSort('associate')}>
-                    Associate <span>{sortIndicator('associate')}</span>
+                    Agent Name <span>{sortIndicator('associate')}</span>
                   </button>
                 </th>
                 <th className="px-3 py-2">
                   <button type="button" className="inline-flex items-center gap-1 hover:text-slate-900" onClick={() => toggleRegisterSort('market_center')}>
-                    Market Center <span>{sortIndicator('market_center')}</span>
+                    Office Name <span>{sortIndicator('market_center')}</span>
                   </button>
                 </th>
                 <th className="px-3 py-2">
                   <button type="button" className="inline-flex items-center gap-1 hover:text-slate-900" onClick={() => toggleRegisterSort('type')}>
-                    Type <span>{sortIndicator('type')}</span>
+                    Transaction Type <span>{sortIndicator('type')}</span>
                   </button>
                 </th>
                 <th className="px-3 py-2">
@@ -3933,11 +4185,6 @@ export default function TransactionsPage() {
                 </div>
               </div>
               <p className="px-1 pb-2 pt-1 text-xs text-slate-500">Totals above aggregate all summary rows for this transaction.</p>
-              {quickSummaryFetchFailed && (
-                <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  Unable to load the live calculated summary for this transaction. The modal is not using a stale snapshot fallback.
-                </div>
-              )}
               {quickSummaryCalculatedRows.length > 1 && (
                 <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Per-Agent Payout Snapshot</div>
@@ -3968,10 +4215,12 @@ export default function TransactionsPage() {
                 </div>
               )}
               <div className="overflow-auto rounded-xl border border-slate-200">
-              <table className="min-w-[1450px] w-full divide-y divide-slate-200 text-sm">
+              <table className="min-w-[1650px] w-full divide-y divide-slate-200 text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-3 py-2 whitespace-nowrap">Associate</th>
+                    <th className="px-3 py-2 whitespace-nowrap">Agent Name</th>
+                    <th className="px-3 py-2 whitespace-nowrap">Office Name</th>
+                    <th className="px-3 py-2 whitespace-nowrap">Transaction Type</th>
                     <th className="px-3 py-2 whitespace-nowrap">Split</th>
                     <th className="px-3 py-2 whitespace-nowrap">Variance %</th>
                     <th className="px-3 py-2 whitespace-nowrap">GCI Before Fees</th>
@@ -3990,7 +4239,9 @@ export default function TransactionsPage() {
                 <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
                   {quickSummaryCalculatedRows.map((item) => (
                     <tr key={item.id} className="odd:bg-white even:bg-slate-50/30 hover:bg-blue-50/40">
-                      <td className="px-3 py-2 whitespace-nowrap font-medium text-slate-900">{item.agent_name || 'Unassigned'} <span className="text-xs font-normal text-slate-500">({item.is_outside_agent ? 'Outside Agent' : normalizeSummarySide(item.transaction_side, '-')})</span></td>
+                      <td className="px-3 py-2 whitespace-nowrap font-medium text-slate-900">{item.agent_name || 'Unassigned'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.office_name || '-'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{item.is_outside_agent ? 'Outside Agent' : normalizeSummarySide(item.transaction_side, '-')}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{toPercent(Number(item.split_percentage ?? 0))}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{toPercent(Number(item.variance_sale_list_pct ?? 0))}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{toMoney(item.transaction_gci_before_fees ?? '0')}</td>
@@ -4008,12 +4259,12 @@ export default function TransactionsPage() {
                   ))}
                   {isQuickSummaryLoading && (
                     <tr>
-                      <td className="px-3 py-4 text-slate-500" colSpan={14}>Loading latest summary...</td>
+                      <td className="px-3 py-4 text-slate-500" colSpan={16}>Loading latest summary...</td>
                     </tr>
                   )}
                   {!isQuickSummaryLoading && quickSummaryCalculatedRows.length === 0 && (
                     <tr>
-                      <td className="px-3 py-4 text-slate-500" colSpan={14}>No calculated rows found for this transaction yet.</td>
+                      <td className="px-3 py-4 text-slate-500" colSpan={16}>No calculated rows found for this transaction yet.</td>
                     </tr>
                   )}
                 </tbody>

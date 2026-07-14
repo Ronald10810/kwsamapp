@@ -16,7 +16,7 @@ type CappersRegisteredDeal = {
   transaction_number: string;
   transaction_status: string;
   kwl_number: string;
-  registered_date: string | null;
+  reporting_date: string | null;
   company_dollar: number;
 };
 
@@ -629,9 +629,9 @@ export default function CappersReport() {
                             <div className="rounded-xl border px-4 py-3" style={{ borderColor: 'var(--border-soft)', background: '#fff' }}>
                               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                                 <div>
-                                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Registered Deals</h3>
+                                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Cap Cycle Deals</h3>
                                   <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                                    Registered transactions included in this associate&apos;s cap cycle window.
+                                    Transactions included in this associate&apos;s cap cycle window using the same progression basis as the capped status.
                                   </p>
                                 </div>
                                 <div className="rounded-full px-3 py-1 text-xs font-semibold" style={{ background: 'var(--surface-strong)', color: 'var(--brand)' }}>
@@ -646,7 +646,7 @@ export default function CappersReport() {
                                         <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">Deal #</th>
                                         <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">KWL #</th>
                                         <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">Status</th>
-                                        <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">Registered Date</th>
+                                        <th className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide">Reporting Date</th>
                                         <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide">Company Dollar</th>
                                       </tr>
                                     </thead>
@@ -656,7 +656,7 @@ export default function CappersReport() {
                                           <td className="px-3 py-1.5 font-medium">{deal.transaction_number}</td>
                                           <td className="px-3 py-1.5">{deal.kwl_number || '—'}</td>
                                           <td className="px-3 py-1.5">{deal.transaction_status || 'Registered'}</td>
-                                          <td className="px-3 py-1.5 tabular-nums">{formatDate(deal.registered_date)}</td>
+                                          <td className="px-3 py-1.5 tabular-nums">{formatDate(deal.reporting_date)}</td>
                                           <td className="px-3 py-1.5 text-right tabular-nums">{formatMoney(deal.company_dollar)}</td>
                                         </tr>
                                       ))}
@@ -665,7 +665,7 @@ export default function CappersReport() {
                                 </div>
                               ) : (
                                 <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                                  No registered deals were found for this associate in the current cap cycle.
+                                  No cap-cycle deals were found for this associate in the current cap cycle.
                                 </p>
                               )}
                             </div>

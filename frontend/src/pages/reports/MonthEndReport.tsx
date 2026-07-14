@@ -78,6 +78,7 @@ type SummaryData = {
   rows: SummaryRow[];
   totals: SummaryRow;
   date_basis: 'status_change' | 'transaction';
+  cap_snapshot?: CapCycleSnapshot | null;
 };
 
 type DetailRow = {
@@ -138,10 +139,21 @@ type DetailTotals = {
   cap_remaining: number;
 };
 
+type CapCycleSnapshot = {
+  associate_name: string;
+  source_associate_id: string;
+  cap_date: string | null;
+  cap_amount: number;
+  company_dollar: number;
+  cap_remaining: number;
+  manual_cap: boolean;
+};
+
 type DetailData = {
   rows: DetailRow[];
   totals: DetailTotals;
   date_basis: 'status_change' | 'transaction';
+  cap_snapshot?: CapCycleSnapshot | null;
 };
 
 type FilterOptions = {
@@ -243,6 +255,43 @@ function normalizedStatusDefault(values: string[], target: string, fallback: str
   return values.find((value) => value.trim().toLowerCase() === target) ?? fallback;
 }
 
+function createEmptyDetailTotals(): DetailTotals {
+  return {
+    contracts: 0,
+    units: 0,
+    list_price: 0,
+    sales_price: 0,
+    agent_sales_volume: 0,
+    contract_gci: 0,
+    total_gci: 0,
+    royalties: 0,
+    growth_share: 0,
+    associate_dollar: 0,
+    company_dollar: 0,
+    team_dollar: 0,
+    cap_remaining: 0,
+  };
+}
+
+function sumDetailTotals(rows: DetailRow[]): DetailTotals {
+  return rows.reduce((acc, row) => {
+    acc.contracts += 1;
+    acc.units += 1;
+    acc.list_price += row.list_price;
+    acc.sales_price += row.sales_price;
+    acc.agent_sales_volume += row.agent_sales_volume;
+    acc.contract_gci += row.contract_gci;
+    acc.total_gci += row.total_gci;
+    acc.royalties += row.royalties;
+    acc.growth_share += row.growth_share;
+    acc.associate_dollar += row.associate_dollar;
+    acc.company_dollar += row.company_dollar;
+    acc.team_dollar += row.team_dollar;
+    acc.cap_remaining += row.cap_remaining;
+    return acc;
+  }, createEmptyDetailTotals());
+}
+
 function toCsv(headers: string[], rows: Array<Array<string | number>>): string {
   return [headers, ...rows]
     .map((row) => row.map((value) => `"${String(value).split('"').join('""')}"`).join(','))
@@ -333,6 +382,10 @@ export default function MonthEndReport() {
   const [pageSize, setPageSize] = useState(25);
 
   const selectedMarketCenterId = filters.market_center_ids[0] ?? '';
+  const isRegisteredDetailFilter = useMemo(() => {
+    const normalizedStatuses = filters.transaction_status.map((status) => status.trim().toLowerCase()).filter(Boolean);
+    return normalizedStatuses.length > 0 && normalizedStatuses.every((status) => status === 'registered');
+  }, [filters.transaction_status]);
   const primaryDimensionLabel = isTeamContext ? 'Team Member' : (isAgentOnlyContext ? 'Agent' : 'Market Centre');
   const totalsTabLabel = isTeamContext ? 'Team Totals' : (isAgentOnlyContext ? 'Agent Totals' : 'Market Centre Totals');
   const detailContractsColSpan = isRoleScopedContext ? 13 : 14;
@@ -678,16 +731,24 @@ export default function MonthEndReport() {
     return (summaryData?.rows ?? []).slice(start, start + pageSize);
   }, [summaryData, page, pageSize]);
 
+  const visibleDetailRows = useMemo(() => {
+    if (!detailData) return [];
+    if (!isRegisteredDetailFilter) return detailData.rows;
+    return detailData.rows.filter((row) => normalizeForMatch(row.transaction_status) === 'registered');
+  }, [detailData, isRegisteredDetailFilter]);
+
+  const visibleDetailTotals = useMemo(() => sumDetailTotals(visibleDetailRows), [visibleDetailRows]);
+
   const pagedDetailRows = useMemo(() => {
     const start = (page - 1) * pageSize;
-    return (detailData?.rows ?? []).slice(start, start + pageSize);
-  }, [detailData, page, pageSize]);
+    return visibleDetailRows.slice(start, start + pageSize);
+  }, [visibleDetailRows, page, pageSize]);
 
   const currentTotalItems = useMemo(() => {
     if (activeTab === 'market-center-totals') return sortedRows.length;
     if (activeTab === 'transaction-summary') return summaryData?.rows.length ?? 0;
-    return detailData?.rows.length ?? 0;
-  }, [activeTab, sortedRows.length, summaryData, detailData]);
+    return visibleDetailRows.length;
+  }, [activeTab, sortedRows.length, summaryData, visibleDetailRows]);
 
   const totalPages = Math.max(1, Math.ceil(currentTotalItems / pageSize));
 
@@ -812,7 +873,7 @@ export default function MonthEndReport() {
   }
 
   function exportDetailCsv(): void {
-    if (!detailData || detailData.rows.length === 0) return;
+    if (!detailData || visibleDetailRows.length === 0) return;
 
     const headers = [
       ...(isRoleScopedContext ? [] : ['Market Centre']),
@@ -824,7 +885,7 @@ export default function MonthEndReport() {
       'Transfer Attorney', 'Transfer Attorney Email', 'Transfer Attorney Phone',
     ];
 
-    const rows = detailData.rows.map((row) => [
+    const rows = visibleDetailRows.map((row) => [
       ...(isRoleScopedContext ? [] : [row.market_center_name]),
       row.associate_name,
       row.team_name,
@@ -1048,6 +1109,44 @@ export default function MonthEndReport() {
         </div>
       </FilterPanel>
 
+      {(activeTab === 'status-change-date' || activeTab === 'transaction-date') && detailData?.cap_snapshot ? (
+        <section className="surface-card overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-soft)' }}>
+            <div>
+              <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Filtered Cap Summary</h2>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Registered-deal view for {detailData.cap_snapshot.associate_name} using the selected status and date filters.
+              </p>
+            </div>
+            <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+              {detailData.cap_snapshot.manual_cap ? 'Manual Cap' : 'System Cap'}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-3">
+            <ReportKpiCard
+              label="Cap Amount"
+              icon={<ReportIcon kind="wallet" className="h-3.5 w-3.5" />}
+              value={formatMoney(detailData.cap_snapshot.cap_amount)}
+            />
+            <ReportKpiCard
+              label="Company Dollar"
+              icon={<ReportIcon kind="trending-up" className="h-3.5 w-3.5" />}
+              value={formatMoney(visibleDetailTotals.company_dollar)}
+            />
+            <ReportKpiCard
+              label="Cap Remaining"
+              icon={<ReportIcon kind="target" className="h-3.5 w-3.5" />}
+              value={formatMoney(Math.max((detailData.cap_snapshot.cap_amount ?? 0) - (visibleDetailTotals.company_dollar ?? 0), 0))}
+            />
+          </div>
+          {Math.abs((detailData.cap_snapshot.company_dollar ?? 0) - (visibleDetailTotals.company_dollar ?? 0)) > 0.009 ? (
+            <div className="border-t px-4 py-3 text-xs" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)', background: 'var(--surface-strong)' }}>
+              The figures above follow the selected status/date filters. The cap-cycle snapshot is still available for reference below the filter controls, but the KPI cards now reflect only the filtered rows.
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       <section className="surface-card overflow-hidden">
         {error && (
           <div className="border-b px-4 py-3 text-sm text-red-700" style={{ borderColor: 'var(--border-soft)', background: '#fef2f2' }}>
@@ -1253,19 +1352,19 @@ export default function MonthEndReport() {
                 <tfoot>
                   <tr style={{ borderTop: '2px solid var(--border-soft)', background: 'var(--ink-dark)' }}>
                     <td className="px-3 py-2 text-sm font-bold text-white">TOTAL</td>
-                    <td className="px-3 py-2 text-sm font-bold text-white" colSpan={detailContractsColSpan}>Contracts {formatNumber(detailData.totals.contracts)} | Units {formatNumber(detailData.totals.units)}</td>
-                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.list_price)}</td>
-                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.sales_price)}</td>
+                    <td className="px-3 py-2 text-sm font-bold text-white" colSpan={detailContractsColSpan}>Contracts {formatNumber(visibleDetailTotals.contracts)} | Units {formatNumber(visibleDetailTotals.units)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(visibleDetailTotals.list_price)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(visibleDetailTotals.sales_price)}</td>
                     <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">-</td>
-                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.agent_sales_volume)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(visibleDetailTotals.agent_sales_volume)}</td>
                     <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">-</td>
-                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.contract_gci)}</td>
-                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.total_gci)}</td>
-                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.royalties)}</td>
-                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.growth_share)}</td>
-                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.associate_dollar)}</td>
-                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.company_dollar)}</td>
-                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(detailData.totals.team_dollar)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(visibleDetailTotals.contract_gci)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(visibleDetailTotals.total_gci)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(visibleDetailTotals.royalties)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(visibleDetailTotals.growth_share)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(visibleDetailTotals.associate_dollar)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(visibleDetailTotals.company_dollar)}</td>
+                    <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">{renderAlignedCurrency(visibleDetailTotals.team_dollar)}</td>
                     <td className="px-3 py-2 text-right text-sm font-bold tabular-nums text-white">-</td>
                     <td className="px-3 py-2 text-sm font-bold text-white" colSpan={8}></td>
                   </tr>

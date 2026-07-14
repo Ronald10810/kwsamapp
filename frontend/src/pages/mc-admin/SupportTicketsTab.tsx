@@ -187,14 +187,6 @@ function linkedRecordActionLabel(type: LinkedType | null): string {
   return 'Open Record';
 }
 
-function compactLinkedRecordRowLabel(type: LinkedType | null, label: string): string {
-  if (type !== 'listing') return label;
-  const normalized = label.replace(/^Listing:\s*/i, '').trim();
-  const listingCode = normalized.match(/\b[A-Z]{2,}\d{3,}\b/)?.[0];
-  if (listingCode) return listingCode;
-  return normalized.split(' - ')[0]?.trim() || normalized;
-}
-
 function timelineActivityLabel(activityType: string): string {
   const normalized = String(activityType).trim().toUpperCase();
   if (normalized.includes('CREATE')) return 'Ticket created';
@@ -795,125 +787,24 @@ export default function SupportTicketsTab(): JSX.Element {
 
       <div className="space-y-3">
         {isOfficeAdmin && panelMode === 'SUBMIT' && (
-          <>
-            <div className="grid gap-3 lg:grid-cols-2">
-              <div className="surface-card relative h-full overflow-hidden rounded-xl border border-red-200 bg-gradient-to-br from-red-50 via-white to-rose-50 p-4 shadow-sm">
-                <div className="pointer-events-none absolute -top-7 -right-7 h-24 w-24 rounded-full bg-red-100/70" />
-                <div className="relative flex h-full flex-col">
-                  <div className="flex items-start gap-3">
-                    <div className="rounded-lg border border-red-200 bg-white p-2 text-red-600 shadow-sm" aria-hidden="true">
-                      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />
-                        <path d="M8 9h8" />
-                        <path d="M8 13h5" />
-                      </svg>
-                    </div>
-                    <div>
-                      <h3 className="text-[16px] font-semibold text-slate-900">Create Support Ticket</h3>
-                      <p className="mt-1 text-sm text-slate-700">Log a MAPP issue so the Regional Admin team can track, manage and resolve it.</p>
-                      <p className="mt-1 text-xs text-slate-500">Add the related record and screenshots to help us resolve it faster.</p>
-                    </div>
-                  </div>
-                  <div className="mt-auto pt-4">
-                    <div className="mb-3 h-px bg-red-100" />
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowCreateForm((prev) => !prev)}
-                        className="inline-flex h-10 min-w-[140px] items-center justify-center rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-700"
-                      >
-                        {showCreateForm ? 'Close Form' : 'Create Ticket'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPanelMode('TICKETS')}
-                        className="inline-flex h-10 min-w-[140px] items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-                      >
-                        My Tickets
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
+        <div className="surface-card rounded-xl border border-slate-200 p-2.5 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-[15px] font-semibold text-slate-900">Create Support Ticket</h3>
+            <button
+              type="button"
+              onClick={() => setShowCreateForm((prev) => !prev)}
+              className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-red-700"
+            >
+              {showCreateForm ? 'Close Form' : 'Create Ticket'}
+            </button>
+          </div>
 
-              <div className="surface-card rounded-xl border border-slate-200 p-4 shadow-sm">
-                <div className="flex items-start gap-3">
-                  <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-red-600" aria-hidden="true">
-                    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="9" />
-                      <path d="M12 8v4" />
-                      <path d="M12 16h.01" />
-                    </svg>
-                  </div>
-                  <div>
-                    <h3 className="text-[16px] font-semibold text-slate-900">MAPP Support Hub</h3>
-                    <p className="mt-1 text-sm text-slate-600">
-                      Support Tickets is the official place to log MAPP support requests so issues are not lost across WhatsApp, calls or emails.
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">What helps us resolve faster</p>
-                  <ul className="mt-2 grid gap-1 text-sm text-slate-700 md:grid-cols-2">
-                    <li className="flex items-center gap-2"><span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700"><svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l4 4L19 6" /></svg></span>MAPP section</li>
-                    <li className="flex items-center gap-2"><span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700"><svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l4 4L19 6" /></svg></span>Linked record</li>
-                    <li className="flex items-center gap-2"><span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700"><svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l4 4L19 6" /></svg></span>Clear description</li>
-                    <li className="flex items-center gap-2"><span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700"><svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l4 4L19 6" /></svg></span>Screenshot or attachment</li>
-                  </ul>
-                </div>
-                <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
-                  <h4 className="text-sm font-semibold text-slate-900">Track your tickets</h4>
-                  <p className="mt-1 text-sm text-slate-600">View progress under My Tickets and receive email updates when your ticket is updated.</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="surface-card h-full rounded-xl border border-slate-200 p-3 shadow-sm">
-                <div className="mb-2 inline-flex rounded-lg border border-red-200 bg-red-50 p-2 text-red-600" aria-hidden="true">
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />
-                    <path d="M8 9h8" />
-                    <path d="M8 13h5" />
-                  </svg>
-                </div>
-                <h4 className="text-sm font-semibold text-slate-900">Create Ticket</h4>
-                <p className="mt-1 text-sm text-slate-600">Tell us what happened.</p>
-              </div>
-              <div className="surface-card h-full rounded-xl border border-slate-200 p-3 shadow-sm">
-                <div className="mb-2 inline-flex rounded-lg border border-red-200 bg-red-50 p-2 text-red-600" aria-hidden="true">
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="11" cy="11" r="7" />
-                    <path d="m20 20-3.5-3.5" />
-                    <path d="M11 8v6" />
-                    <path d="M8 11h6" />
-                  </svg>
-                </div>
-                <h4 className="text-sm font-semibold text-slate-900">Link Record</h4>
-                <p className="mt-1 text-sm text-slate-600">Select the listing, associate, transaction, team or Market Centre.</p>
-              </div>
-              <div className="surface-card h-full rounded-xl border border-slate-200 p-3 shadow-sm">
-                <div className="mb-2 inline-flex rounded-lg border border-red-200 bg-red-50 p-2 text-red-600" aria-hidden="true">
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="4" y="4" width="16" height="16" rx="2" />
-                    <circle cx="9" cy="9" r="1.5" />
-                    <path d="m20 15-4-4-7 7" />
-                  </svg>
-                </div>
-                <h4 className="text-sm font-semibold text-slate-900">Add Screenshots</h4>
-                <p className="mt-1 text-sm text-slate-600">Paste with Ctrl + V, drag files in, or upload.</p>
-              </div>
-              <div className="surface-card h-full rounded-xl border border-slate-200 p-3 shadow-sm">
-                <div className="mb-2 inline-flex rounded-lg border border-red-200 bg-red-50 p-2 text-red-600" aria-hidden="true">
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M5 12l4 4L19 6" />
-                  </svg>
-                </div>
-                <h4 className="text-sm font-semibold text-slate-900">Track Progress</h4>
-                <p className="mt-1 text-sm text-slate-600">Follow updates under My Tickets and by email.</p>
-              </div>
-            </div>
-          </>
+          {!showCreateForm && (
+            <p className="mt-2 text-sm text-slate-500">
+              Log a MAPP support issue and include as much detail as possible so the Regional Admin team can assist quickly.
+            </p>
+          )}
+        </div>
         )}
 
         {isOfficeAdmin && panelMode === 'SUBMIT' && showCreateForm && (
@@ -930,69 +821,73 @@ export default function SupportTicketsTab(): JSX.Element {
                 </button>
               </div>
 
-              <div className="grid gap-2.5">
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Ticket Details</p>
-                  <div className="mt-2 grid gap-2.5 md:grid-cols-2">
-                    <div>
-                      <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">MAPP Section</label>
-                      <select
-                        value={createSection}
-                        onChange={(e) => setCreateSection(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                      >
-                        <option value="">Select section</option>
-                        {SECTION_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </div>
+              <div className="grid gap-2.5 md:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">MAPP Section</label>
+                  <select
+                    value={createSection}
+                    onChange={(e) => setCreateSection(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">Select section</option>
+                    {SECTION_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                </div>
 
-                    <div>
-                      <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Ticket Title</label>
-                      <input
-                        value={createTitle}
-                        onChange={(e) => setCreateTitle(e.target.value)}
-                        placeholder="Short summary of the issue"
-                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                      />
-                    </div>
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Ticket Title</label>
+                  <input
+                    value={createTitle}
+                    onChange={(e) => setCreateTitle(e.target.value)}
+                    placeholder="Short summary of the issue"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </div>
 
-                    <div>
-                      <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Priority</label>
-                      <select
-                        value={createPriority}
-                        onChange={(e) => setCreatePriority(e.target.value as TicketPriority)}
-                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                      >
-                        {PRIORITIES.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    </div>
+                <div className="md:col-span-2">
+                  <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Issue Description</label>
+                  <p className="mt-1 text-xs text-slate-500">Please include a detailed description of the issue and expected behavior.</p>
+                  <textarea
+                    rows={4}
+                    value={createDescription}
+                    onChange={(e) => setCreateDescription(e.target.value)}
+                    onPaste={(e) => {
+                      if (attachClipboardFiles(e.clipboardData)) {
+                        e.preventDefault();
+                      }
+                    }}
+                    placeholder="Explain what happened and expected behavior"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </div>
 
-                    {isOfficeAdmin ? (
-                      <div>
-                        <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Market Centre</label>
-                        <input
-                          value={activeContext?.marketCenter?.trim() || (activeSourceMc ? `Market Centre ID: ${activeSourceMc}` : 'From active context')}
-                          readOnly
-                          className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-600"
-                        />
-                      </div>
-                    ) : (
-                      <div>
-                        <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Market Centre ID</label>
-                        <input
-                          value={createSourceMc}
-                          onChange={(e) => setCreateSourceMc(e.target.value)}
-                          placeholder="Enter source market centre id"
-                          className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                        />
-                      </div>
-                    )}
+                <div className="grid gap-2 sm:grid-cols-2 md:col-span-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Priority</label>
+                    <select
+                      value={createPriority}
+                      onChange={(e) => setCreatePriority(e.target.value as TicketPriority)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      {PRIORITIES.map((option) => <option key={option} value={option}>{option}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Source MC</label>
+                    <input
+                      value={createSourceMc}
+                      onChange={(e) => setCreateSourceMc(e.target.value)}
+                      disabled={isOfficeAdmin && Boolean(activeSourceMc)}
+                      placeholder={isOfficeAdmin ? activeSourceMc || 'From active context' : 'Enter source market centre id'}
+                      className={clsx(
+                        'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm',
+                        isOfficeAdmin && Boolean(activeSourceMc) && 'bg-slate-100 text-slate-500',
+                      )}
+                    />
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Linked MAPP Record</p>
-                  <p className="mt-1 text-xs text-slate-500">Linking the related record helps the support team open the exact listing, associate, transaction, team or Market Centre.</p>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 md:col-span-2">
                   <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Record Type</label>
                   <select
                     value={createLinkedType}
@@ -1069,28 +964,9 @@ export default function SupportTicketsTab(): JSX.Element {
                   )}
                 </div>
 
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Issue Details</p>
-                  <label className="mt-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Issue Description</label>
-                  <p className="mt-1 text-xs text-slate-500">Describe what happened, what you were doing, and what you have already tried.</p>
-                  <textarea
-                    rows={4}
-                    value={createDescription}
-                    onChange={(e) => setCreateDescription(e.target.value)}
-                    onPaste={(e) => {
-                      if (attachClipboardFiles(e.clipboardData)) {
-                        e.preventDefault();
-                      }
-                    }}
-                    placeholder="Explain what happened, what you were doing, and what you expected to happen"
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  />
-                </div>
-
-                <div className="rounded-lg border border-slate-200 bg-white p-2.5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Attachments / Screenshots</p>
-                  <p className="mt-1 text-xs text-slate-500">Paste a screenshot with Ctrl + V, drag and drop files here, or upload a file.</p>
+                <div className="rounded-lg border border-slate-200 bg-white p-2.5 md:col-span-2">
                   <div className="flex items-center justify-between gap-2">
+                    <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Attachments / Screenshots</label>
                     <button
                       type="button"
                       onClick={() => createAttachmentInputRef.current?.click()}
@@ -1110,7 +986,7 @@ export default function SupportTicketsTab(): JSX.Element {
                     }}
                   />
                   <div className="mt-2 rounded-lg border border-slate-300 bg-slate-50 p-2">
-                    <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Paste Screenshot Here</label>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Paste Image Here</label>
                     <textarea
                       rows={1}
                       onPaste={(e) => {
@@ -1119,7 +995,7 @@ export default function SupportTicketsTab(): JSX.Element {
                           setSuccess('Screenshot pasted and added to attachments.');
                         }
                       }}
-                      placeholder="Click here and press Ctrl + V to paste a screenshot"
+                      placeholder="Click inside this box, then press Ctrl+V to paste a screenshot"
                       className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
                     />
                   </div>
@@ -1152,7 +1028,7 @@ export default function SupportTicketsTab(): JSX.Element {
                       createDropActive ? 'border-red-400 bg-red-50 text-red-700' : 'border-slate-300 bg-slate-50 text-slate-600',
                     )}
                   >
-                    Click here, paste a screenshot, or drag files into this box.
+                    Drag and drop screenshots/files here.
                   </div>
                   {createAttachmentFiles.length > 0 && (
                     <div className="mt-2 max-h-32 overflow-auto rounded-lg border border-slate-200 bg-slate-50">
@@ -1187,7 +1063,7 @@ export default function SupportTicketsTab(): JSX.Element {
                   type="button"
                   onClick={() => void createTicket()}
                   disabled={creating || !createSection.trim() || !createTitle.trim() || !createDescription.trim() || (linkedRecordRequired && !linkedSelected)}
-                  className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                  className="md:col-span-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
                   {creating ? 'Creating...' : 'Create Ticket'}
                 </button>
@@ -1303,7 +1179,6 @@ export default function SupportTicketsTab(): JSX.Element {
                             <div className="mt-1 text-xs text-slate-500">
                               Section: {ticket.section} | Market Centre: {ticketMarketCentre} | Submitted: {formatDate(ticket.created_at)} | Last updated: {formatDate(ticket.updated_at)}
                             </div>
-                            {ticket.linked_entity_label && <div className="mt-1 max-w-[72ch] text-xs leading-5 text-slate-500 break-words">{linkedRecordLabel(ticket.linked_entity_type)}: {compactLinkedRecordRowLabel(ticket.linked_entity_type, ticket.linked_entity_label)}</div>}
                             {ticket.resolved_by_name && (
                               <div className="mt-1 text-xs text-slate-500">Resolved by: {ticket.resolved_by_name}</div>
                             )}
@@ -1327,11 +1202,6 @@ export default function SupportTicketsTab(): JSX.Element {
                               <div className="mt-1 text-xs text-slate-500">
                                 Resolved by: {detail.ticket.resolved_by_name}
                                 {detail.ticket.resolved_at ? ` on ${formatDate(detail.ticket.resolved_at)}` : ''}
-                              </div>
-                            )}
-                            {simplifyStatus(detail.ticket.status) === 'RESOLVED' && (
-                              <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                                This ticket has been marked as resolved. If the issue continues, please log a new support ticket or follow the correct support process.
                               </div>
                             )}
                             {detail.ticket.linked_entity_label && (
@@ -1408,7 +1278,6 @@ export default function SupportTicketsTab(): JSX.Element {
                             <div className="mt-1 text-xs text-slate-500">
                               Section: {ticket.section} | Market Centre: {marketCentreLabel(ticket)} | Submitted: {formatDate(ticket.created_at)} | Last updated: {formatDate(ticket.updated_at)}
                             </div>
-                            {ticket.linked_entity_label && <div className="mt-1 max-w-[72ch] text-xs leading-5 text-slate-500 break-words">{linkedRecordLabel(ticket.linked_entity_type)}: {compactLinkedRecordRowLabel(ticket.linked_entity_type, ticket.linked_entity_label)}</div>}
                             {ticket.allocated_to_name && (
                               <div className="mt-1 text-xs text-slate-500">Allocated to: {ticket.allocated_to_name}</div>
                             )}
@@ -1429,28 +1298,82 @@ export default function SupportTicketsTab(): JSX.Element {
 
                           {detail?.ticket.id === ticket.id && (
                             <div className="space-y-3">
-                              <div className={clsx('grid gap-3', isRegionalAdmin ? 'lg:grid-cols-12' : 'lg:grid-cols-1')}>
-                                <div className={clsx('space-y-3', isRegionalAdmin && 'lg:col-span-6 lg:flex lg:flex-col')}>
-                                  <div className="rounded-lg border border-slate-200 bg-white p-3">
-                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Issue Summary</p>
-                                    <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{detail.ticket.description}</p>
-                                    <div className="mt-2 text-xs text-slate-500">Submitted by {detail.ticket.created_by_name ?? detail.ticket.created_by_email} on {formatDate(detail.ticket.created_at)}</div>
-                                    {simplifyStatus(detail.ticket.status) === 'RESOLVED' && (
-                                      <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                                        This ticket has been marked as resolved. If the issue continues, please log a new support ticket or follow the correct support process.
-                                      </div>
-                                    )}
+                              <div className="grid gap-2.5 md:grid-cols-2">
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Issue Summary</p>
+                                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{detail.ticket.description}</p>
+                                  <div className="mt-2 text-xs text-slate-500">
+                                    Submitted by {detail.ticket.created_by_name ?? detail.ticket.created_by_email} on {formatDate(detail.ticket.created_at)}
                                   </div>
+                                </div>
 
-                                  {detail.ticket.linked_entity_label && (
-                                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-slate-700">
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Linked Record</p>
-                                      <div className="mt-1.5 break-words">
-                                        <span className="font-semibold text-slate-800">{linkedRecordLabel(detail.ticket.linked_entity_type)}:</span> {detail.ticket.linked_entity_label}
-                                      </div>
+                                {isRegionalAdmin && (
+                                  <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Update Ticket Status</p>
+                                    <p className="mt-1 text-xs text-slate-500">When you save a status update, the submitter will receive an email with your message.</p>
+                                    <div className="mt-2">
+                                      <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">New Status</label>
+                                      <select
+                                        value={statusNext}
+                                        onChange={(e) => setStatusNext(e.target.value as UiTicketStatus)}
+                                        disabled={savingStatus}
+                                        className="mt-1 h-10 w-full rounded-md border border-slate-300 px-2.5 text-sm disabled:bg-slate-100"
+                                      >
+                                        {STATUS_FILTER_OPTIONS.map((status) => <option key={status} value={status}>{uiStatusLabel(status)}</option>)}
+                                      </select>
+                                    </div>
+                                    <textarea
+                                      rows={3}
+                                      value={statusNote}
+                                      onChange={(e) => setStatusNote(e.target.value)}
+                                      disabled={savingStatus}
+                                      placeholder="Update message to submitter"
+                                      className="mt-2 w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm leading-5 disabled:bg-slate-100"
+                                    />
+
+                                    <div className="mt-3">
+                                      <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Allocation</label>
+                                      <select
+                                        value={assignmentEmail}
+                                        onChange={(e) => setAssignmentEmail(e.target.value)}
+                                        className="mt-1.5 h-10 w-full rounded-md border border-slate-300 px-2.5 text-sm"
+                                      >
+                                        <option value="">Unassigned</option>
+                                        {assignees.map((person) => (
+                                          <option key={person.email} value={person.email}>{person.name} ({person.email})</option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        type="button"
+                                        onClick={() => void saveAssignment()}
+                                        disabled={savingAssignment}
+                                        className="mt-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50"
+                                      >
+                                        {savingAssignment ? 'Saving...' : 'Save Assignment'}
+                                      </button>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => void updateStatus()}
+                                      disabled={savingStatus}
+                                      className="mt-3 w-full rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
+                                    >
+                                      {savingStatus ? 'Saving...' : 'Save Update & Notify Submitter'}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="grid gap-2.5 md:grid-cols-2">
+                                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Linked Record</p>
+                                  {detail.ticket.linked_entity_label ? (
+                                    <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-slate-700">
+                                      <span className="font-semibold text-slate-800">{linkedRecordLabel(detail.ticket.linked_entity_type)}:</span> {detail.ticket.linked_entity_label}
                                       {normalizeLinkedPathForEdit(detail.ticket.linked_entity_path) && (
                                         <a
-                                          className="mt-1.5 inline-block font-semibold text-blue-700 underline"
+                                          className="ml-2 font-semibold text-blue-700 underline"
                                           href={normalizeLinkedPathForEdit(detail.ticket.linked_entity_path) ?? '#'}
                                           target="_blank"
                                           rel="noreferrer"
@@ -1459,131 +1382,71 @@ export default function SupportTicketsTab(): JSX.Element {
                                         </a>
                                       )}
                                     </div>
+                                  ) : (
+                                    <p className="mt-2 text-sm text-slate-500">No linked record.</p>
                                   )}
 
-                                  <div className="rounded-lg border border-slate-200 p-2.5 lg:flex lg:min-h-[320px] lg:flex-1 lg:flex-col">
-                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Activity Timeline</p>
-                                    <div className="mt-2 max-h-64 overflow-auto rounded-lg border border-slate-200 bg-slate-50 lg:max-h-none lg:flex-1">
-                                      {detail.activity.map((event) => (
-                                        <div key={event.id} className="border-b border-slate-100 px-3 py-2.5 text-sm last:border-b-0">
-                                          <div className="font-semibold text-slate-800">{timelineActivityLabel(event.activity_type)}</div>
-                                          {event.body && <div className="mt-1 whitespace-pre-wrap text-slate-700">{event.body}</div>}
-                                          {event.status_from && event.status_to && (
-                                            <div className="mt-1 text-xs text-slate-600">{statusLabelFromRaw(event.status_from)}{' -> '}{statusLabelFromRaw(event.status_to)}</div>
-                                          )}
-                                          <div className="mt-1 text-xs text-slate-500">{event.actor_name ?? event.actor_email ?? 'System'} | {formatDate(event.created_at)}</div>
+                                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Attachments</p>
+                                    <p className="mt-1 text-xs text-slate-500">Upload supporting screenshots or files for this ticket.</p>
+                                    <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+                                      <input
+                                        type="file"
+                                        onChange={(e) => setAttachmentFile(e.target.files?.[0] ?? null)}
+                                        className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => void uploadAttachment()}
+                                        disabled={!attachmentFile || savingAttachment}
+                                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50"
+                                      >
+                                        {savingAttachment ? 'Uploading...' : 'Upload'}
+                                      </button>
+                                    </div>
+                                    <input
+                                      value={attachmentNote}
+                                      onChange={(e) => setAttachmentNote(e.target.value)}
+                                      placeholder="Optional attachment note"
+                                      className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                                    />
+                                  </div>
+
+                                  {detail.attachments.length > 0 && (
+                                    <div className="mt-3 max-h-36 overflow-auto rounded-lg border border-slate-200 bg-slate-50">
+                                      {detail.attachments.map((item) => (
+                                        <div key={item.id} className="border-b border-slate-100 px-3 py-2 text-sm last:border-b-0">
+                                          <a href={item.file_url} target="_blank" rel="noreferrer" className="font-semibold text-blue-700 underline">{item.file_name}</a>
+                                          <div className="text-xs text-slate-500">{item.file_size ? `${item.file_size} bytes` : 'size n/a'} | {formatDate(item.created_at)}</div>
+                                          {item.note && <div className="text-xs text-slate-600">{item.note}</div>}
                                         </div>
                                       ))}
                                     </div>
-                                  </div>
+                                  )}
                                 </div>
 
-                                {isRegionalAdmin && (
-                                  <div className="space-y-3 lg:col-span-6 lg:flex lg:flex-col">
-                                    <div className="rounded-lg border border-slate-200 bg-white p-2.5 lg:flex lg:min-h-[320px] lg:flex-1 lg:flex-col">
-                                      <div className="space-y-3.5 lg:flex lg:h-full lg:flex-col lg:space-y-0 lg:gap-3.5">
-                                        <div>
-                                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Update Ticket Status</p>
-                                          <p className="mt-1 text-xs text-slate-500">When you save a status update, the submitter will receive an email with your message.</p>
-                                          <label className="mt-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">New Status</label>
-                                          <select
-                                            value={statusNext}
-                                            onChange={(e) => setStatusNext(e.target.value as UiTicketStatus)}
-                                            disabled={savingStatus}
-                                            className="mt-1.5 h-9 w-full rounded-md border border-slate-300 px-2.5 text-sm disabled:bg-slate-100"
-                                          >
-                                            {STATUS_FILTER_OPTIONS.map((status) => <option key={status} value={status}>{uiStatusLabel(status)}</option>)}
-                                          </select>
-                                          <textarea
-                                            rows={2}
-                                            value={statusNote}
-                                            onChange={(e) => setStatusNote(e.target.value)}
-                                            disabled={savingStatus}
-                                            placeholder="Update message to submitter"
-                                            className="mt-1.5 w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm leading-5 disabled:bg-slate-100"
-                                          />
-                                        </div>
-
-                                        <div>
-                                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Allocation</p>
-                                          <select
-                                            value={assignmentEmail}
-                                            onChange={(e) => setAssignmentEmail(e.target.value)}
-                                            className="mt-1.5 h-9 w-full rounded-md border border-slate-300 px-2.5 text-sm"
-                                          >
-                                            <option value="">Unassigned</option>
-                                            {assignees.map((person) => (
-                                              <option key={person.email} value={person.email}>{person.name} ({person.email})</option>
-                                            ))}
-                                          </select>
-                                          <button
-                                            type="button"
-                                            onClick={() => void saveAssignment()}
-                                            disabled={savingAssignment}
-                                            className="mt-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50"
-                                          >
-                                            {savingAssignment ? 'Saving...' : 'Save Assignment'}
-                                          </button>
-                                        </div>
-
-                                        <button
-                                          type="button"
-                                          onClick={() => void updateStatus()}
-                                          disabled={savingStatus}
-                                          className="mt-1 w-full rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400 lg:mt-auto"
-                                        >
-                                          {savingStatus ? 'Saving...' : 'Save Update & Notify Submitter'}
-                                        </button>
+                                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Activity Timeline</p>
+                                  <div className="mt-2 max-h-56 overflow-auto rounded-lg border border-slate-200 bg-slate-50">
+                                    {detail.activity.map((event) => (
+                                      <div key={event.id} className="border-b border-slate-100 px-3 py-2 text-sm last:border-b-0">
+                                        <div className="font-semibold text-slate-800">{timelineActivityLabel(event.activity_type)}</div>
+                                        {event.body && <div className="mt-1 whitespace-pre-wrap text-slate-700">{event.body}</div>}
+                                        {event.status_from && event.status_to && (
+                                          <div className="mt-1 text-xs text-slate-600">{statusLabelFromRaw(event.status_from)}{' -> '}{statusLabelFromRaw(event.status_to)}</div>
+                                        )}
+                                        <div className="mt-1 text-xs text-slate-500">{event.actor_name ?? event.actor_email ?? 'System'} | {formatDate(event.created_at)}</div>
                                       </div>
-                                    </div>
-
-                                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Attachments</p>
-                                      <p className="mt-1 text-xs text-slate-500">Upload supporting screenshots or files for this ticket.</p>
-                                      <div className="mt-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-2.5">
-                                        <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                                          <input
-                                            type="file"
-                                            onChange={(e) => setAttachmentFile(e.target.files?.[0] ?? null)}
-                                            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => void uploadAttachment()}
-                                            disabled={!attachmentFile || savingAttachment}
-                                            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50"
-                                          >
-                                            {savingAttachment ? 'Uploading...' : 'Upload'}
-                                          </button>
-                                        </div>
-                                        <input
-                                          value={attachmentNote}
-                                          onChange={(e) => setAttachmentNote(e.target.value)}
-                                          placeholder="Optional attachment note"
-                                          className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                                        />
-                                      </div>
-                                      {detail.attachments.length > 0 && (
-                                        <div className="mt-3 max-h-40 overflow-auto rounded-lg border border-slate-200 bg-slate-50">
-                                          {detail.attachments.map((item) => (
-                                            <div key={item.id} className="border-b border-slate-100 px-3 py-2 text-sm last:border-b-0">
-                                              <a href={item.file_url} target="_blank" rel="noreferrer" className="font-semibold text-blue-700 underline">{item.file_name}</a>
-                                              <div className="text-xs text-slate-500">{item.file_size ? `${item.file_size} bytes` : 'size n/a'} | {formatDate(item.created_at)}</div>
-                                              {item.note && <div className="text-xs text-slate-600">{item.note}</div>}
-                                            </div>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </div>
+                                    ))}
                                   </div>
-                                )}
+                                </div>
                               </div>
 
                               <div className="flex justify-end">
                                 <button
                                   type="button"
                                   onClick={() => setSelectedTicketId(null)}
-                                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700"
+                                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
                                 >
                                   Close up
                                 </button>

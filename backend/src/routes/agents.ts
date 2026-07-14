@@ -244,7 +244,7 @@ function normalizeIdentifier(value: unknown): string {
 }
 
 function resolveEffectiveScopeMarketCenterId(perms: UserPermissions): string | null {
-  const value = perms.homeMcId ?? perms.marketCenterId ?? null;
+  const value = perms.marketCenterId ?? perms.homeMcId ?? null;
   return value && value.trim().length > 0 ? value.trim() : null;
 }
 

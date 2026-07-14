@@ -464,13 +464,13 @@ async function ensureTables(): Promise<void> {
 
 await ensureTables().catch(() => undefined);
 
-let smtpTransport: any = null;
-function getMailer() {
+let smtpTransport: ReturnType<typeof nodemailer.createTransport> | null = null;
+function getMailer(): ReturnType<typeof nodemailer.createTransport> {
   if (smtpTransport) return smtpTransport;
   if (!env.support.smtpUser || !env.support.smtpPass) {
     throw new Error('Support SMTP credentials are not configured.');
   }
-  const transportConfig = {
+  smtpTransport = nodemailer.createTransport({
     host: env.support.smtpHost,
     port: env.support.smtpPort,
     secure: env.support.smtpSecure,
@@ -478,8 +478,7 @@ function getMailer() {
       user: env.support.smtpUser,
       pass: env.support.smtpPass,
     },
-  };
-  smtpTransport = nodemailer.createTransport(transportConfig as any);
+  });
   return smtpTransport;
 }
 

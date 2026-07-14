@@ -475,11 +475,25 @@ router.get('/contexts', requireAuthNoAssociate, async (req, res) => {
             [assoc.id]
           ),
           pool.query<{ source_market_center_id: string; market_center_id: string | null; market_center_name: string | null }>(
-            `SELECT amc.source_market_center_id, mc.id::text AS market_center_id, mc.name AS market_center_name
-               FROM migration.associate_admin_market_centers amc
-               LEFT JOIN migration.core_market_centers mc
-                 ON mc.source_market_center_id = amc.source_market_center_id
-                 AND LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1')
+            `SELECT
+               COALESCE(resolved.source_market_center_id, amc.source_market_center_id) AS source_market_center_id,
+               resolved.id::text AS market_center_id,
+               resolved.name AS market_center_name
+             FROM migration.associate_admin_market_centers amc
+             LEFT JOIN LATERAL (
+               SELECT mc.id, mc.source_market_center_id, mc.name
+               FROM migration.core_market_centers mc
+               WHERE LOWER(TRIM(COALESCE(mc.status_name, ''))) IN ('active', '1')
+                 AND (
+                   LOWER(TRIM(COALESCE(mc.source_market_center_id, ''))) = LOWER(TRIM(COALESCE(amc.source_market_center_id, '')))
+                   OR LOWER(TRIM(COALESCE(mc.name, ''))) = LOWER(TRIM(COALESCE(amc.source_market_center_id, '')))
+                 )
+               ORDER BY CASE
+                 WHEN LOWER(TRIM(COALESCE(mc.source_market_center_id, ''))) = LOWER(TRIM(COALESCE(amc.source_market_center_id, ''))) THEN 0
+                 ELSE 1
+               END, mc.id ASC
+               LIMIT 1
+             ) resolved ON TRUE
               WHERE amc.associate_id = $1`,
             [assoc.id]
           ),
@@ -522,10 +536,16 @@ router.get('/contexts', requireAuthNoAssociate, async (req, res) => {
     };
 
     const contexts: ContextEntry[] = [];
+    const seenContextIds = new Set<string>();
+    const pushContext = (context: ContextEntry) => {
+      if (seenContextIds.has(context.id)) return;
+      seenContextIds.add(context.id);
+      contexts.push(context);
+    };
 
     // 1. Regional Admin context
     if (isRegionalAdmin) {
-      contexts.push({
+      pushContext({
         id: 'regional_admin',
         label: 'Regional Admin',
         role: 'Regional Admin',
@@ -537,27 +557,28 @@ router.get('/contexts', requireAuthNoAssociate, async (req, res) => {
 
     // 2. Office Admin (home MC)
     if (isOfficeAdmin && assoc?.source_market_center_id) {
-      contexts.push({
+      pushContext({
         id: `office_admin_${assoc.source_market_center_id}`,
         label: `Office Admin${assoc.market_center_name ? ` — ${assoc.market_center_name}` : ''}`,
         role: 'Office Admin',
         marketCenter: assoc.market_center_name ?? null,
-          marketCenterId: assoc.source_market_center_id,
+        marketCenterId: assoc.source_market_center_id,
         associateId: assoc.id,
       });
     }
 
     // 3. Admin MC contexts (additional MCs granted via admin_market_centers)
     for (const mc of adminMcs) {
-      const mcId = mc.source_market_center_id;
+      const mcId = String(mc.source_market_center_id ?? '').trim();
+      if (!mcId) continue;
       // Skip if already covered by the home office_admin context above
       if (isOfficeAdmin && assoc?.source_market_center_id === mcId) continue;
-      contexts.push({
+      pushContext({
         id: `admin_${mcId}`,
         label: `Office Admin${mc.market_center_name ? ` — ${mc.market_center_name}` : ` — ${mcId}`}`,
         role: 'Office Admin',
         marketCenter: mc.market_center_name ?? null,
-          marketCenterId: mc.source_market_center_id,
+        marketCenterId: mcId,
         associateId: assoc?.id ?? null,
       });
     }
@@ -575,7 +596,7 @@ router.get('/contexts', requireAuthNoAssociate, async (req, res) => {
     if (assoc && teamRoleTitle && (teamContextDbId || teamContextSourceId)) {
       const roleKey = teamRoleTitle.toLowerCase().replace(/ /g, '_');
       const teamContextId = teamContextDbId ?? teamContextSourceId;
-      contexts.push({
+      pushContext({
         id: `${roleKey}_${teamContextId}`,
         label: `${teamRoleTitle}${teamContextName ? ` — ${teamContextName}` : ''}`,
         role: teamRoleTitle,
@@ -587,7 +608,7 @@ router.get('/contexts', requireAuthNoAssociate, async (req, res) => {
 
     // 5. Agent context — always add if there is an associate record
     if (assoc) {
-      contexts.push({
+      pushContext({
         id: 'agent',
         label: `Agent${assoc.market_center_name ? ` — ${assoc.market_center_name}` : ''}`,
         role: 'Agent',
@@ -599,7 +620,7 @@ router.get('/contexts', requireAuthNoAssociate, async (req, res) => {
 
     // If nothing resolved (no associate record, no roles) return a viewer context
     if (contexts.length === 0) {
-      contexts.push({
+      pushContext({
         id: 'viewer',
         label: 'Viewer',
         role: 'Viewer',

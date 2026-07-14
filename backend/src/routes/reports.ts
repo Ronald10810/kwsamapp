@@ -89,6 +89,16 @@ type MonthEndDetailRow = {
   transfer_attorney_phone: string;
 };
 
+type CapCycleSnapshot = {
+  associate_name: string;
+  source_associate_id: string;
+  cap_date: string | null;
+  cap_amount: number;
+  company_dollar: number;
+  cap_remaining: number;
+  manual_cap: boolean;
+};
+
 type CappersView = 'associate' | 'team';
 
 type CappersTeamContribution = {
@@ -102,7 +112,7 @@ type CappersRegisteredDeal = {
   transaction_number: string;
   transaction_status: string;
   kwl_number: string;
-  registered_date: string | null;
+  reporting_date: string | null;
   company_dollar: number;
 };
 
@@ -282,12 +292,180 @@ function normalizeMonthEndDateBasis(raw: unknown): 'status_change' | 'transactio
   return String(raw ?? '').trim().toLowerCase() === 'transaction' ? 'transaction' : 'status_change';
 }
 
+function buildHybridReportingDateSql(txAlias: string, tacAlias: string): string {
+  return `CASE
+    WHEN LOWER(TRIM(COALESCE(${txAlias}.transaction_status, ''))) = 'start'
+      THEN COALESCE(${txAlias}.transaction_date::date, ${tacAlias}.effective_reporting_date::date)
+    ELSE COALESCE(${txAlias}.status_change_date::date, ${tacAlias}.effective_reporting_date::date)
+  END`;
+}
+
+function buildRegisteredStatusSql(txAlias: string): string {
+  return `LOWER(TRIM(COALESCE(${txAlias}.transaction_status, ''))) = 'registered'`;
+}
+
+function buildRegisteredOnlyOrSelectedStatusSql(txAlias: string, selectedStatusesParam: string): string {
+  return `(
+    EXISTS (
+      SELECT 1
+      FROM UNNEST(${selectedStatusesParam}) AS status_value
+      WHERE LOWER(TRIM(status_value)) = 'registered'
+    )
+    AND ${buildRegisteredStatusSql(txAlias)}
+  )
+  OR (
+    NOT EXISTS (
+      SELECT 1
+      FROM UNNEST(${selectedStatusesParam}) AS status_value
+      WHERE LOWER(TRIM(status_value)) = 'registered'
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM UNNEST(${selectedStatusesParam}) AS selected_status
+      WHERE LOWER(TRIM(COALESCE(${txAlias}.transaction_status, ''))) = LOWER(TRIM(selected_status))
+    )
+  )`;
+}
+
+async function fetchAssociateCapCycleSnapshot(associateId: number): Promise<CapCycleSnapshot | null> {
+  if (!pool || !Number.isFinite(associateId) || !associateId) return null;
+
+  const result = await pool.query<{
+    associate_name: string;
+    source_associate_id: string;
+    cap_date: string | null;
+    cap_amount: string;
+    cap_achieved: string;
+    cap_remaining: string;
+    manual_cap: boolean;
+  }>(
+    `
+    WITH cap_base AS (
+      SELECT
+        ca.id AS associate_id,
+        COALESCE(NULLIF(TRIM(ca.full_name), ''), NULLIF(TRIM(CONCAT(COALESCE(ca.first_name, ''), ' ', COALESCE(ca.last_name, ''))), ''), 'Unknown Associate') AS associate_name,
+        COALESCE(NULLIF(TRIM(ca.source_associate_id), ''), ca.id::text) AS source_associate_id,
+        ca.cap_date,
+        COALESCE(ca.manual_cap, false) AS manual_cap,
+        GREATEST(COALESCE(ca.cap, 0), 0)::numeric(18,2) AS associate_cap_amount,
+        CASE
+          WHEN ca.cap_date IS NULL THEN NULL::date
+          ELSE make_date(
+            EXTRACT(YEAR FROM CURRENT_DATE)::int,
+            EXTRACT(MONTH FROM ca.cap_date)::int,
+            EXTRACT(DAY FROM ca.cap_date)::int
+          )
+        END AS anniversary_this_year
+      FROM migration.core_associates ca
+      WHERE ca.id = $1::bigint
+    ),
+    cycle_window AS (
+      SELECT
+        cb.*,
+        CASE
+          WHEN cb.cap_date IS NULL THEN NULL::date
+          WHEN cb.anniversary_this_year >= CURRENT_DATE THEN cb.anniversary_this_year
+          ELSE (cb.anniversary_this_year + INTERVAL '1 year')::date
+        END AS next_cap_date
+      FROM cap_base cb
+    ),
+    latest_caps AS (
+      SELECT
+        tac.associate_id,
+        COALESCE(tac.cap_amount, 0)::numeric(18,2) AS cap_amount,
+        COALESCE(tac.cap_remaining, 0)::numeric(18,2) AS cap_remaining,
+        tac.cap_cycle_end_date,
+        ROW_NUMBER() OVER (
+          PARTITION BY tac.associate_id
+          ORDER BY tac.effective_reporting_date DESC NULLS LAST, tac.updated_at DESC, tac.id DESC
+        ) AS rn
+      FROM migration.transaction_agent_calculations tac
+      WHERE tac.associate_id = $1::bigint
+    ),
+    latest_cycle_caps AS (
+      SELECT
+        tac.associate_id,
+        COALESCE(tac.cap_amount, 0)::numeric(18,2) AS cap_amount,
+        COALESCE(tac.cap_remaining, 0)::numeric(18,2) AS cap_remaining,
+        ROW_NUMBER() OVER (
+          PARTITION BY tac.associate_id
+          ORDER BY tac.effective_reporting_date DESC NULLS LAST, tac.updated_at DESC, tac.id DESC
+        ) AS rn
+      FROM migration.transaction_agent_calculations tac
+      INNER JOIN cycle_window cw ON cw.associate_id = tac.associate_id
+      WHERE cw.next_cap_date IS NOT NULL
+        AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
+        AND tac.effective_reporting_date::date < cw.next_cap_date
+    )
+    SELECT
+      cw.associate_name,
+      cw.source_associate_id,
+      COALESCE(cw.next_cap_date, cw.cap_date, lc.cap_cycle_end_date)::date::text AS cap_date,
+      GREATEST(COALESCE(lcc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)::numeric(18,2)::text AS cap_amount,
+      CASE
+        WHEN cw.manual_cap = true THEN GREATEST(COALESCE(lcc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)::numeric(18,2)
+        ELSE LEAST(
+          GREATEST(COALESCE(lcc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)::numeric(18,2),
+          GREATEST(
+            GREATEST(COALESCE(lcc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)::numeric(18,2)
+              - GREATEST(COALESCE(lcc.cap_remaining, lc.cap_remaining, COALESCE(lcc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0)), 0)::numeric(18,2),
+            0::numeric
+          )
+        )
+      END::text AS cap_achieved,
+      CASE
+        WHEN cw.manual_cap = true THEN 0::numeric(18,2)
+        ELSE GREATEST(COALESCE(lcc.cap_remaining, lc.cap_remaining, COALESCE(lcc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0)), 0)::numeric(18,2)
+      END::text AS cap_remaining,
+      cw.manual_cap
+    FROM cycle_window cw
+    LEFT JOIN latest_caps lc ON lc.associate_id = cw.associate_id AND lc.rn = 1
+    LEFT JOIN latest_cycle_caps lcc ON lcc.associate_id = cw.associate_id AND lcc.rn = 1
+    `,
+    [associateId]
+  );
+
+  const row = result.rows[0];
+  if (!row) return null;
+
+  return {
+    associate_name: row.associate_name,
+    source_associate_id: row.source_associate_id,
+    cap_date: row.cap_date,
+    cap_amount: Number(row.cap_amount),
+    company_dollar: Number(row.cap_achieved),
+    cap_remaining: Number(row.cap_remaining),
+    manual_cap: Boolean(row.manual_cap),
+  };
+}
 function parseTeamContextToken(activeContextId: string): string | null {
   const normalized = activeContextId.trim().toLowerCase();
   const match = /^(lead_agent|team_admin|team_agent)(?:_(.+))?$/.exec(normalized);
   if (!match) return null;
   const token = (match[2] ?? '').trim();
   return token.length > 0 ? token : null;
+}
+
+async function resolveAssociateDbId(rawAssociateId: string | null | undefined): Promise<number | null> {
+  if (!pool) return null;
+
+  const candidate = String(rawAssociateId ?? '').trim();
+  if (!candidate) return null;
+
+  const result = await pool.query<{ id: string }>(
+    `
+    SELECT ca.id::text AS id
+    FROM migration.core_associates ca
+    WHERE ca.id::text = $1::text
+       OR COALESCE(NULLIF(TRIM(ca.source_associate_id), ''), ca.id::text) = $1::text
+    ORDER BY CASE WHEN ca.id::text = $1::text THEN 0 ELSE 1 END, ca.id ASC
+    LIMIT 1
+    `,
+    [candidate]
+  );
+
+  const resolved = Number(result.rows[0]?.id ?? 0);
+  return Number.isFinite(resolved) && resolved > 0 ? resolved : null;
 }
 
 async function resolveScopedTeamSourceId(req: { headers: Record<string, unknown>; permissions?: { scope: string; associateDbId: string | null } }): Promise<string | null> {
@@ -1007,6 +1185,23 @@ router.get('/month-end', resolvePermissions, requireReportAccess(REPORT_KEYS.MON
     const effectiveTeamId = teamId || scopedTeamSourceId || '';
     const effectiveAssociateId = associateId || (resolvedScopeAssociateId ? String(resolvedScopeAssociateId) : '');
     const useAssociateGrouping = !!(effectiveTeamId || effectiveAssociateId);
+    const collapseScopedOfficeAdminRows = perms.scope === 'MARKET_CENTRE' && !useAssociateGrouping && Boolean(scopeMcId);
+    let scopedOfficeAdminMarketCenterName: string | null = null;
+
+    if (collapseScopedOfficeAdminRows && scopeMcId) {
+      const scopedMarketCenterResult = await pool.query<{ name: string | null }>(
+        `
+        SELECT name
+        FROM migration.core_market_centers
+        WHERE source_market_center_id = $1
+          AND LOWER(TRIM(COALESCE(status_name, ''))) IN ('active', '1')
+        ORDER BY id ASC
+        LIMIT 1
+        `,
+        [scopeMcId]
+      );
+      scopedOfficeAdminMarketCenterName = scopedMarketCenterResult.rows[0]?.name?.trim() || scopeMcId;
+    }
 
     if (scopeMcId) {
       params.push(scopeMcId);
@@ -1025,12 +1220,20 @@ router.get('/month-end', resolvePermissions, requireReportAccess(REPORT_KEYS.MON
     const associateFilterParam = `$${params.length}`;
     params.push(useAssociateGrouping ? 'true' : 'false');
     const useAssociateGroupingParam = `$${params.length}`;
+    params.push(collapseScopedOfficeAdminRows ? 'true' : 'false');
+    const collapseScopedOfficeAdminRowsParam = `$${params.length}`;
+    params.push(scopedOfficeAdminMarketCenterName ?? '');
+    const scopedOfficeAdminMarketCenterNameParam = `$${params.length}`;
+    params.push(scopeMcId ?? '');
+    const scopedOfficeAdminMarketCenterIdParam = `$${params.length}`;
 
     let mcFilterClause = '';
     if (perms.scope === 'GLOBAL' && marketCenterIds.length > 0) {
       params.push(marketCenterIds);
       mcFilterClause = `AND mc_source_id = ANY($${params.length}::text[])`;
     }
+
+    const reportingDateExpr = buildHybridReportingDateSql('ct', 'tac');
 
     const sql = `
       WITH ${transactionAgentCalculationDedupCte},
@@ -1117,8 +1320,8 @@ router.get('/month-end', resolvePermissions, requireReportAccess(REPORT_KEYS.MON
               ELSE 1.0::numeric
             END AS scale_ratio
         ) _parity
-        WHERE COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date) >= $1::date
-          AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date) <= $2::date
+        WHERE ${reportingDateExpr} >= $1::date
+          AND ${reportingDateExpr} <= $2::date
           AND ca.id IS NOT NULL
           AND ${salesOnlyTransactionExclusionSql}
           AND (
@@ -1128,7 +1331,7 @@ router.get('/month-end', resolvePermissions, requireReportAccess(REPORT_KEYS.MON
               FROM UNNEST($3::text[]) AS selected_status
               WHERE (
                 LOWER(TRIM(selected_status)) = 'registered'
-                AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
+                AND ${buildRegisteredStatusSql('ct')}
               )
               OR (
                 LOWER(TRIM(selected_status)) <> 'registered'
@@ -1269,11 +1472,15 @@ router.get('/month-end', resolvePermissions, requireReportAccess(REPORT_KEYS.MON
       per_tx_mc AS (
         SELECT
           r.transaction_id,
-          CASE WHEN ${useAssociateGroupingParam}::boolean
+          CASE
+            WHEN ${collapseScopedOfficeAdminRowsParam}::boolean THEN COALESCE(NULLIF(${scopedOfficeAdminMarketCenterNameParam}::text, ''), COALESCE(r.market_center_name, 'Unassigned / Unknown'))
+            WHEN ${useAssociateGroupingParam}::boolean
             THEN COALESCE(r.associate_name, 'Unknown Associate')
             ELSE COALESCE(r.market_center_name, 'Unassigned / Unknown')
           END AS market_center_name,
-          CASE WHEN ${useAssociateGroupingParam}::boolean
+          CASE
+            WHEN ${collapseScopedOfficeAdminRowsParam}::boolean THEN COALESCE(NULLIF(${scopedOfficeAdminMarketCenterIdParam}::text, ''), COALESCE(r.mc_source_id, ''))
+            WHEN ${useAssociateGroupingParam}::boolean
             THEN COALESCE(r.source_associate_id, 'unassigned')
             ELSE COALESCE(r.mc_source_id, '')
           END AS mc_source_id,
@@ -1301,11 +1508,15 @@ router.get('/month-end', resolvePermissions, requireReportAccess(REPORT_KEYS.MON
         FROM resolved r
         JOIN tx_flags f ON f.transaction_id = r.transaction_id
         GROUP BY r.transaction_id,
-          CASE WHEN ${useAssociateGroupingParam}::boolean
+          CASE
+            WHEN ${collapseScopedOfficeAdminRowsParam}::boolean THEN COALESCE(NULLIF(${scopedOfficeAdminMarketCenterNameParam}::text, ''), COALESCE(r.market_center_name, 'Unassigned / Unknown'))
+            WHEN ${useAssociateGroupingParam}::boolean
             THEN COALESCE(r.associate_name, 'Unknown Associate')
             ELSE COALESCE(r.market_center_name, 'Unassigned / Unknown')
           END,
-          CASE WHEN ${useAssociateGroupingParam}::boolean
+          CASE
+            WHEN ${collapseScopedOfficeAdminRowsParam}::boolean THEN COALESCE(NULLIF(${scopedOfficeAdminMarketCenterIdParam}::text, ''), COALESCE(r.mc_source_id, ''))
+            WHEN ${useAssociateGroupingParam}::boolean
             THEN COALESCE(r.source_associate_id, 'unassigned')
             ELSE COALESCE(r.mc_source_id, '')
           END,
@@ -1648,7 +1859,7 @@ router.get('/month-end/transaction-summary', resolvePermissions, requireReportAc
       : (Number.isFinite(scopeAssociateId) && scopeAssociateId ? scopeAssociateId : null);
     const effectiveAssociateId = associateId || (resolvedScopeAssociateId ? String(resolvedScopeAssociateId) : '');
     const useAssociateGrouping = !!(effectiveTeamId || effectiveAssociateId);
-    const dateFilterExpr = dateBasis === 'transaction' ? 'ct.transaction_date::date' : 'ct.status_change_date::date';
+    const dateFilterExpr = buildHybridReportingDateSql('ct', 'tac');
     const normalizedSaleTypeSql = `LOWER(TRIM(COALESCE(
       NULLIF(ct.sale_type, ''),
       CASE
@@ -1765,8 +1976,8 @@ router.get('/month-end/transaction-summary', resolvePermissions, requireReportAc
               ELSE 1.0::numeric
             END AS scale_ratio
         ) _parity
-        WHERE COALESCE(${dateFilterExpr}, tac.effective_reporting_date::date) >= $1::date
-          AND COALESCE(${dateFilterExpr}, tac.effective_reporting_date::date) <= $2::date
+        WHERE ${dateFilterExpr} >= $1::date
+          AND ${dateFilterExpr} <= $2::date
           AND ca.id IS NOT NULL
           AND ${salesOnlyTransactionExclusionSql}
           AND (
@@ -1776,7 +1987,7 @@ router.get('/month-end/transaction-summary', resolvePermissions, requireReportAc
               FROM UNNEST($3::text[]) AS selected_status
               WHERE (
                 LOWER(TRIM(selected_status)) = 'registered'
-                AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
+                AND ${buildRegisteredStatusSql('ct')}
               )
               OR (
                 LOWER(TRIM(selected_status)) <> 'registered'
@@ -1958,7 +2169,19 @@ router.get('/month-end/transaction-summary', resolvePermissions, requireReportAc
       team_dollar: 0,
     });
 
-    return res.json({ rows, totals, date_basis: dateBasis });
+    const resolvedAssociateDbId = await resolveAssociateDbId(effectiveAssociateId || null);
+    const capSnapshot = resolvedAssociateDbId
+      ? await fetchAssociateCapCycleSnapshot(resolvedAssociateDbId)
+      : null;
+
+    if (capSnapshot) {
+      totals.company_dollar = Math.round(capSnapshot.company_dollar * 100) / 100;
+      if (useAssociateGrouping && rows.length === 1) {
+        rows[0].company_dollar = totals.company_dollar;
+      }
+    }
+
+    return res.json({ rows, totals, date_basis: dateBasis, cap_snapshot: capSnapshot });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return res.status(500).json({ error: message });
@@ -1988,7 +2211,7 @@ router.get('/month-end/transactions', resolvePermissions, requireReportAccess(RE
       ? null
       : (Number.isFinite(scopeAssociateId) && scopeAssociateId ? scopeAssociateId : null);
     const effectiveAssociateId = associateId || (resolvedScopeAssociateId ? String(resolvedScopeAssociateId) : '');
-    const dateFilterExpr = dateBasis === 'transaction' ? 'ct.transaction_date::date' : 'ct.status_change_date::date';
+    const dateFilterExpr = buildHybridReportingDateSql('ct', 'tac');
     const normalizedSaleTypeSql = `LOWER(TRIM(COALESCE(
       NULLIF(ct.sale_type, ''),
       CASE
@@ -2111,24 +2334,13 @@ router.get('/month-end/transactions', resolvePermissions, requireReportAccess(RE
             ELSE 1.0::numeric
           END AS scale_ratio
       ) _parity
-      WHERE COALESCE(${dateFilterExpr}, tac.effective_reporting_date::date) >= $1::date
-        AND COALESCE(${dateFilterExpr}, tac.effective_reporting_date::date) <= $2::date
+      WHERE ${dateFilterExpr} >= $1::date
+        AND ${dateFilterExpr} <= $2::date
         AND ca.id IS NOT NULL
         AND ${salesOnlyTransactionExclusionSql}
         AND (
           CARDINALITY($3::text[]) = 0
-          OR EXISTS (
-            SELECT 1
-            FROM UNNEST($3::text[]) AS selected_status
-            WHERE (
-              LOWER(TRIM(selected_status)) = 'registered'
-              AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
-            )
-            OR (
-              LOWER(TRIM(selected_status)) <> 'registered'
-              AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = LOWER(TRIM(selected_status))
-            )
-          )
+          OR ${buildRegisteredOnlyOrSelectedStatusSql('ct', '$3::text[]')}
         )
         AND (
           CARDINALITY($4::text[]) = 0
@@ -2140,16 +2352,16 @@ router.get('/month-end/transactions', resolvePermissions, requireReportAccess(RE
         )
         AND (
           $5::text IS NULL
-          OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(mc_tx_primary.source_market_center_id, mc_tx.source_market_center_id, mc_office.source_market_center_id, mc_assoc.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($5::text)), '[^a-z0-9]+', '', 'g')
+          OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(ct.source_market_center_id, mc_tx_primary.source_market_center_id, mc_tx.source_market_center_id, mc_office.source_market_center_id, mc_assoc.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($5::text)), '[^a-z0-9]+', '', 'g')
         )
         AND ($6::bigint IS NULL OR tac.associate_id = $6::bigint)
         AND (
           CARDINALITY($7::text[]) = 0
-          OR EXISTS (
-            SELECT 1
-            FROM UNNEST($7::text[]) AS selected(mc_id)
-            WHERE REGEXP_REPLACE(LOWER(TRIM(COALESCE(ct.source_market_center_id, mc_tx_primary.source_market_center_id, mc_tx.source_market_center_id, mc_office.source_market_center_id, mc_assoc.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM(selected.mc_id)), '[^a-z0-9]+', '', 'g')
-          )
+          OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(NULLIF(ct.source_market_center_id, ''), ''))), '[^a-z0-9]+', '', 'g') = ANY($7::text[])
+          OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(NULLIF(mc_tx_primary.source_market_center_id, ''), ''))), '[^a-z0-9]+', '', 'g') = ANY($7::text[])
+          OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(NULLIF(mc_tx.source_market_center_id, ''), ''))), '[^a-z0-9]+', '', 'g') = ANY($7::text[])
+          OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(NULLIF(mc_office.source_market_center_id, ''), ''))), '[^a-z0-9]+', '', 'g') = ANY($7::text[])
+          OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(NULLIF(mc_assoc.source_market_center_id, ''), ''))), '[^a-z0-9]+', '', 'g') = ANY($7::text[])
         )
         AND (
           NULLIF($8::text, '') IS NULL
@@ -2165,7 +2377,6 @@ router.get('/month-end/transactions', resolvePermissions, requireReportAccess(RE
           NULLIF($9::text, '') IS NULL
           OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(ca.source_associate_id, ca.id::text, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($9::text)), '[^a-z0-9]+', '', 'g')
         )
-      ORDER BY COALESCE(${dateFilterExpr}, tac.effective_reporting_date::date) DESC NULLS LAST, market_center_name ASC, associate_name ASC
       `,
       [
         dateFrom,
@@ -2180,7 +2391,7 @@ router.get('/month-end/transactions', resolvePermissions, requireReportAccess(RE
       ]
     );
 
-    const rows: MonthEndDetailRow[] = result.rows.map((row) => ({
+    let rows: MonthEndDetailRow[] = result.rows.map((row) => ({
       market_center_name: row.market_center_name,
       mc_source_id: row.mc_source_id,
       associate_name: row.associate_name,
@@ -2270,7 +2481,16 @@ router.get('/month-end/transactions', resolvePermissions, requireReportAccess(RE
       cap_remaining: Math.round(rows.reduce((sum, row) => sum + row.cap_remaining, 0) * 100) / 100,
     };
 
-    return res.json({ rows, totals, date_basis: dateBasis });
+    const resolvedAssociateDbId = await resolveAssociateDbId(effectiveAssociateId || null);
+    const capSnapshot = resolvedAssociateDbId
+      ? await fetchAssociateCapCycleSnapshot(resolvedAssociateDbId)
+      : null;
+
+    if (capSnapshot) {
+      totals.company_dollar = Math.round(capSnapshot.company_dollar * 100) / 100;
+    }
+
+    return res.json({ rows, totals, date_basis: dateBasis, cap_snapshot: capSnapshot });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return res.status(500).json({ error: message });
@@ -2504,6 +2724,8 @@ router.get('/top-down-agent', resolvePermissions, requireReportAccess(REPORT_KEY
       ? null
       : (Number.isFinite(scopeAssociateId) && scopeAssociateId ? scopeAssociateId : null);
 
+    const productionDateExpr = buildHybridReportingDateSql('ct', 'tac');
+
     const productionRowsResult = await pool.query<{
       source_associate_id: string;
       associate_name: string;
@@ -2545,14 +2767,14 @@ router.get('/top-down-agent', resolvePermissions, requireReportAccess(REPORT_KEY
         LEFT JOIN migration.core_market_centers mc_assoc ON mc_assoc.source_market_center_id = ca.source_market_center_id
         LEFT JOIN migration.core_market_centers mc_tx ON mc_tx.id = ct.market_center_id
         LEFT JOIN migration.core_market_centers mc_tx_primary ON mc_tx_primary.id = ct.primary_market_center_id
-        WHERE COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date) >= $1::date
-          AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date) <= $2::date
+        WHERE ${productionDateExpr} >= $1::date
+          AND ${productionDateExpr} <= $2::date
           AND ${salesOnlyTransactionExclusionSql}
           AND (
             NULLIF($3::text, '') IS NULL
             OR (
               LOWER(TRIM($3::text)) = 'registered'
-              AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
+              AND LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered'
             )
             OR (
               LOWER(TRIM($3::text)) <> 'registered'
@@ -3158,7 +3380,7 @@ router.get('/mc-dashboard/filter-options', resolvePermissions, async (req, res) 
       });
     }
 
-    const selected = perms.homeMcId ?? perms.marketCenterId ?? null;
+    const selected = perms.marketCenterId ?? perms.homeMcId ?? null;
     if (!selected) {
       return res.json({ market_centers: [], selected_market_center_id: null });
     }
@@ -3198,7 +3420,7 @@ router.get('/mc-dashboard', resolvePermissions, async (req, res) => {
     const queryMcId = String(req.query.market_center_id ?? '').trim();
     const targetMcSourceId = perms.scope === 'GLOBAL'
       ? queryMcId
-      : (perms.homeMcId ?? perms.marketCenterId ?? '');
+      : (perms.marketCenterId ?? perms.homeMcId ?? '');
 
     if (!targetMcSourceId) {
       return res.status(400).json({ error: 'market_center_id is required for the active context.' });
@@ -3537,7 +3759,7 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
         FROM migration.transaction_agent_calculations tac
         WHERE tac.associate_id IS NOT NULL
       ),
-      latest_cycle_registered_caps AS (
+      latest_cycle_caps AS (
         SELECT
           tac.associate_id,
           COALESCE(tac.cap_amount, 0) AS cap_amount,
@@ -3549,10 +3771,40 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
         FROM migration.transaction_agent_calculations tac
         INNER JOIN cycle_windows cw ON cw.associate_id = tac.associate_id
         WHERE tac.associate_id IS NOT NULL
-          AND tac.is_registered = true
           AND cw.next_cap_date IS NOT NULL
           AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
           AND tac.effective_reporting_date::date < cw.next_cap_date
+      ),
+      latest_cycle_registered_caps AS (
+        SELECT
+          tac.associate_id,
+          COALESCE(tac.cap_amount, 0) AS cap_amount,
+          COALESCE(tac.cap_remaining, 0) AS cap_remaining,
+          ROW_NUMBER() OVER (
+            PARTITION BY tac.associate_id
+            ORDER BY tac.effective_reporting_date DESC NULLS LAST, tac.updated_at DESC, tac.id DESC
+          ) AS rn
+        FROM migration.transaction_agent_calculations tac
+        INNER JOIN cycle_windows cw ON cw.associate_id = tac.associate_id
+        INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
+        WHERE tac.associate_id IS NOT NULL
+          AND ${buildRegisteredStatusSql('ct')}
+          AND cw.next_cap_date IS NOT NULL
+          AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
+          AND tac.effective_reporting_date::date < cw.next_cap_date
+      ),
+      associate_registered_achieved AS (
+        SELECT
+          cw.associate_id,
+          ROUND(COALESCE(SUM(tac.market_center_dollar), 0)::numeric, 2) AS cap_achieved
+        FROM cycle_windows cw
+        INNER JOIN migration.transaction_agent_calculations tac ON tac.associate_id = cw.associate_id
+        INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
+        WHERE cw.next_cap_date IS NOT NULL
+          AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
+          AND tac.effective_reporting_date::date < cw.next_cap_date
+          AND ${buildRegisteredStatusSql('ct')}
+        GROUP BY cw.associate_id
       ),
       associate_base AS (
         SELECT
@@ -3565,21 +3817,27 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
           COALESCE(NULLIF(TRIM(t.name), ''), 'No Team') AS team_name,
           COALESCE(NULLIF(TRIM(t.source_team_id), ''), '') AS source_team_id,
           COALESCE(cw.next_cap_date, ca.cap_date, lc.cap_cycle_end_date) AS cap_date,
-          GREATEST(COALESCE(lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)::numeric(18,2) AS cap_amount,
-          GREATEST(
-            COALESCE(
-              lrc.cap_remaining,
-              COALESCE(lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0)
-            ),
-            0
-          )::numeric(18,2) AS cap_remaining,
+          GREATEST(COALESCE(lcc.cap_amount, lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)::numeric(18,2) AS cap_amount,
+          CASE
+            WHEN cw.manual_cap = true THEN 0::numeric(18,2)
+            ELSE GREATEST(
+              GREATEST(COALESCE(lcc.cap_amount, lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)
+              - LEAST(
+                GREATEST(COALESCE(lcc.cap_amount, lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0),
+                COALESCE(ara.cap_achieved, 0)
+              ),
+              0
+            )::numeric(18,2)
+          END AS cap_remaining,
           cw.manual_cap AS manual_cap
         FROM migration.core_associates ca
         LEFT JOIN migration.core_market_centers mc ON mc.id = ca.market_center_id
         LEFT JOIN migration.core_teams t ON t.id = ca.team_id
         LEFT JOIN cycle_windows cw ON cw.associate_id = ca.id
         LEFT JOIN latest_caps lc ON lc.associate_id = ca.id AND lc.rn = 1
+        LEFT JOIN latest_cycle_caps lcc ON lcc.associate_id = ca.id AND lcc.rn = 1
         LEFT JOIN latest_cycle_registered_caps lrc ON lrc.associate_id = ca.id AND lrc.rn = 1
+        LEFT JOIN associate_registered_achieved ara ON ara.associate_id = ca.id
         WHERE LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1')
           AND (
             $1::text IS NULL
@@ -3593,22 +3851,6 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
             $7::text IS NULL
             OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(NULLIF(t.source_team_id, ''), NULLIF(ca.source_team_id, ''), t.id::text, ca.team_id::text, t.name, ''))), '[^a-z0-9]+', '', 'g') = REGEXP_REPLACE(LOWER(TRIM($7::text)), '[^a-z0-9]+', '', 'g')
           )
-      ),
-      associate_cycle_achieved AS (
-        SELECT
-          ab.id AS associate_id,
-          ROUND(COALESCE(SUM(tac.market_center_dollar), 0)::numeric, 2) AS cap_achieved
-        FROM associate_base ab
-        LEFT JOIN migration.transaction_agent_calculations tac ON tac.associate_id = ab.id
-        WHERE tac.is_registered = true
-          AND (
-            ab.cap_date IS NULL
-            OR (
-              tac.effective_reporting_date::date >= (ab.cap_date - INTERVAL '1 year')::date
-              AND tac.effective_reporting_date::date < ab.cap_date
-            )
-          )
-        GROUP BY ab.id
       ),
       latest_team_caps AS (
         SELECT
@@ -3666,14 +3908,15 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
         FROM team_base tb
         INNER JOIN migration.core_associates ca ON ca.team_id = tb.team_id
         INNER JOIN migration.transaction_agent_calculations tac ON tac.associate_id = ca.id
-        WHERE tac.is_registered = true
-          AND (
+        INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
+        WHERE (
             tb.cap_date IS NULL
             OR (
               tac.effective_reporting_date::date >= (tb.cap_date - INTERVAL '1 year')::date
               AND tac.effective_reporting_date::date < tb.cap_date
             )
           )
+          AND ${buildRegisteredStatusSql('ct')}
         GROUP BY tb.team_id
       ),
       associate_rows AS (
@@ -3686,10 +3929,10 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
           team_name,
           cap_date::date::text AS cap_date,
           cap_amount,
-          LEAST(cap_amount, COALESCE(aca.cap_achieved, 0))::numeric(18,2) AS cap_achieved,
-          GREATEST(cap_amount - LEAST(cap_amount, COALESCE(aca.cap_achieved, 0)), 0)::numeric(18,2) AS cap_remaining,
+          LEAST(cap_amount, GREATEST(cap_amount - cap_remaining, 0))::numeric(18,2) AS cap_achieved,
+          cap_remaining::numeric(18,2) AS cap_remaining,
           CASE
-            WHEN cap_amount > 0 THEN ROUND((GREATEST(cap_amount - LEAST(cap_amount, COALESCE(aca.cap_achieved, 0)), 0) / cap_amount) * 100, 2)
+            WHEN cap_amount > 0 THEN ROUND((cap_remaining / cap_amount) * 100, 2)
             ELSE 0
           END AS cap_percent_remaining,
           CASE
@@ -3703,7 +3946,6 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
           END AS months_to_cap_date,
           manual_cap
         FROM associate_base
-        LEFT JOIN associate_cycle_achieved aca ON aca.associate_id = associate_base.id
         WHERE (team_id IS NULL OR $9::boolean = true)
       ),
       team_rows AS (
@@ -3716,9 +3958,16 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
           tb.team_name,
           tb.cap_date::date::text AS cap_date,
           tb.cap_amount,
-          LEAST(tb.cap_amount, COALESCE(ta.cap_achieved, 0))::numeric(18,2) AS cap_achieved,
-          GREATEST(tb.cap_amount - LEAST(tb.cap_amount, COALESCE(ta.cap_achieved, 0)), 0)::numeric(18,2) AS cap_remaining,
           CASE
+            WHEN tb.manual_cap = true THEN tb.cap_amount
+            ELSE LEAST(tb.cap_amount, COALESCE(ta.cap_achieved, 0))::numeric(18,2)
+          END AS cap_achieved,
+          CASE
+            WHEN tb.manual_cap = true THEN 0::numeric(18,2)
+            ELSE GREATEST(tb.cap_amount - LEAST(tb.cap_amount, COALESCE(ta.cap_achieved, 0)), 0)::numeric(18,2)
+          END AS cap_remaining,
+          CASE
+            WHEN tb.manual_cap = true THEN 0
             WHEN tb.cap_amount > 0 THEN ROUND((GREATEST(tb.cap_amount - LEAST(tb.cap_amount, COALESCE(ta.cap_achieved, 0)), 0) / tb.cap_amount) * 100, 2)
             ELSE 0
           END AS cap_percent_remaining,
@@ -3860,7 +4109,7 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
         transaction_number: string;
         transaction_status: string;
         kwl_number: string;
-        registered_date: string | null;
+        reporting_date: string | null;
         company_dollar: string;
       }>(
         `
@@ -3869,37 +4118,62 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
           SELECT
             ca.id AS associate_id,
             input_rows.source_associate_id,
-            input_rows.cap_date
+            input_rows.cap_date,
+            GREATEST(COALESCE(ca.cap, 0), 0)::numeric(18,2) AS cap_amount
           FROM UNNEST($1::text[], $2::date[]) AS input_rows(source_associate_id, cap_date)
           INNER JOIN migration.core_associates ca
             ON COALESCE(NULLIF(TRIM(ca.source_associate_id), ''), ca.id::text) = input_rows.source_associate_id
+        ),
+        deal_rows AS (
+          SELECT
+            sa.source_associate_id,
+            sa.cap_amount,
+            COALESCE(NULLIF(TRIM(ct.source_transaction_id), ''), tac.transaction_id::text) AS source_transaction_id,
+            COALESCE(NULLIF(TRIM(ct.transaction_number), ''), tac.transaction_id::text) AS transaction_number,
+            COALESCE(NULLIF(TRIM(ct.transaction_status), ''), CASE WHEN tac.is_registered = true THEN 'Registered' ELSE '' END) AS transaction_status,
+            COALESCE(NULLIF(TRIM(ct.listing_number), ''), '') AS kwl_number,
+            MAX(COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date))::date AS reporting_date,
+            ROUND(COALESCE(SUM(tac.market_center_dollar), 0)::numeric, 2) AS company_dollar
+          FROM selected_associates sa
+          INNER JOIN tac_dedup tac ON tac.associate_id = sa.associate_id
+          INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
+          WHERE (
+              sa.cap_date IS NULL
+              OR (
+                tac.effective_reporting_date::date >= (sa.cap_date - INTERVAL '1 year')::date
+                AND tac.effective_reporting_date::date < sa.cap_date
+              )
+            )
+            AND ${buildRegisteredStatusSql('ct')}
+          GROUP BY
+            sa.source_associate_id,
+            sa.cap_amount,
+            COALESCE(NULLIF(TRIM(ct.source_transaction_id), ''), tac.transaction_id::text),
+            COALESCE(NULLIF(TRIM(ct.transaction_number), ''), tac.transaction_id::text),
+            COALESCE(NULLIF(TRIM(ct.transaction_status), ''), CASE WHEN tac.is_registered = true THEN 'Registered' ELSE '' END),
+            COALESCE(NULLIF(TRIM(ct.listing_number), ''), '')
+        ),
+        ordered_deals AS (
+          SELECT
+            dr.*,
+            SUM(dr.company_dollar) OVER (
+              PARTITION BY dr.source_associate_id
+              ORDER BY dr.reporting_date ASC, dr.transaction_number ASC, dr.source_transaction_id ASC
+            ) AS running_company_dollar
+          FROM deal_rows dr
         )
         SELECT
-          sa.source_associate_id,
-          COALESCE(NULLIF(TRIM(ct.source_transaction_id), ''), tac.transaction_id::text) AS source_transaction_id,
-          COALESCE(NULLIF(TRIM(ct.transaction_number), ''), tac.transaction_id::text) AS transaction_number,
-          COALESCE(NULLIF(TRIM(ct.transaction_status), ''), CASE WHEN tac.is_registered = true THEN 'Registered' ELSE '' END) AS transaction_status,
-          COALESCE(NULLIF(TRIM(ct.listing_number), ''), '') AS kwl_number,
-          MAX(COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date))::text AS registered_date,
-          ROUND(COALESCE(SUM(tac.market_center_dollar), 0)::numeric, 2)::text AS company_dollar
-        FROM selected_associates sa
-        INNER JOIN tac_dedup tac ON tac.associate_id = sa.associate_id
-        INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
-        WHERE tac.is_registered = true
-          AND (
-            sa.cap_date IS NULL
-            OR (
-              tac.effective_reporting_date::date >= (sa.cap_date - INTERVAL '1 year')::date
-              AND tac.effective_reporting_date::date < sa.cap_date
-            )
-          )
-        GROUP BY
-          sa.source_associate_id,
-          COALESCE(NULLIF(TRIM(ct.source_transaction_id), ''), tac.transaction_id::text),
-          COALESCE(NULLIF(TRIM(ct.transaction_number), ''), tac.transaction_id::text),
-          COALESCE(NULLIF(TRIM(ct.transaction_status), ''), CASE WHEN tac.is_registered = true THEN 'Registered' ELSE '' END),
-          COALESCE(NULLIF(TRIM(ct.listing_number), ''), '')
-        ORDER BY sa.source_associate_id ASC, MAX(COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date)) DESC NULLS LAST, transaction_number ASC
+          source_associate_id,
+          source_transaction_id,
+          transaction_number,
+          transaction_status,
+          kwl_number,
+          reporting_date::text,
+          company_dollar::text
+        FROM ordered_deals
+        WHERE cap_amount <= 0
+          OR (running_company_dollar - company_dollar) < cap_amount
+        ORDER BY source_associate_id ASC, reporting_date DESC NULLS LAST, transaction_number ASC
         `,
         [
           rows.map((row) => row.source_entity_id),
@@ -3916,7 +4190,7 @@ router.get('/cappers', resolvePermissions, requireReportAccess(REPORT_KEYS.CAPPE
           transaction_number: deal.transaction_number,
           transaction_status: deal.transaction_status,
           kwl_number: deal.kwl_number,
-          registered_date: deal.registered_date,
+          reporting_date: deal.reporting_date,
           company_dollar: Number(deal.company_dollar),
         });
         dealsByAssociate.set(deal.source_associate_id, existing);

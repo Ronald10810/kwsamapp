@@ -9,6 +9,7 @@ import { uploadToGcs } from '../services/gcsStorage.js';
 import { env } from '../config/env.js';
 import { resolvePermissions } from '../middleware/permissions.js';
 import { normalizeMarketingUrl, normalizeMarketingUrlRecord, normalizeMarketingUrlType } from '../utils/marketingUrls.js';
+import { getAppTimeZone } from '../utils/timeZone.js';
 
 const router = Router();
 const pool = getOptionalPgPool();
@@ -314,9 +315,21 @@ function mapKwwParkingFeatures(values: Iterable<string>): string[] {
 function toDateValue(value: unknown): string | null {
   const text = toText(value);
   if (!text) return null;
+  const trimmed = text.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
   const date = new Date(text);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString().slice(0, 10);
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: getAppTimeZone(),
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value ?? '0000';
+  const month = parts.find((part) => part.type === 'month')?.value ?? '01';
+  const day = parts.find((part) => part.type === 'day')?.value ?? '01';
+  return `${year}-${month}-${day}`;
 }
 
 function toDateTimeValue(value: unknown): string | null {
@@ -4627,6 +4640,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     // free-form `Other.tags` strings for this payload shape with HTTP 400 conversion errors.
 
     const initialRentalRate = rentalRateCandidates[0] ?? null;
+    const occupationDateValue = toDateValue(listing.occupation_date);
 
     const p24Payload: Record<string, unknown> = {
       agencyId: Number(resolvedAgencyId),
@@ -4637,7 +4651,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       price: Number.isFinite(price) && price > 0 ? price : null,
       isPOA: toBool(listing.poa),
       listingVisibility: 'public',
-      occupationDate: toDateValue(listing.occupation_date),
+      occupationDate: occupationDateValue,
       expiryDate: expiryDateValue,
       description: descriptionWithShowWindows,
       descriptionHeader,
@@ -4754,6 +4768,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       },
       rentalInfo: listingType === 'Rental' ? {
         ...(initialRentalRate !== null ? { rentalRate: initialRentalRate } : {}),
+        ...(occupationDateValue ? { availableFrom: occupationDateValue, occupationDate: occupationDateValue } : {}),
         leasePeriod: toText(listing.lease_period) ?? null,
         depositRequirementsComments: toText(listing.deposit_requirements) ?? null,
       } : null,

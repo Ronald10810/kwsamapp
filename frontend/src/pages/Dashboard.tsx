@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '../contexts/AuthContext';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -6,6 +7,13 @@ function msUntilNextHourWindow(): number {
   const now = Date.now();
   const remainder = now % HOUR_MS;
   return remainder === 0 ? HOUR_MS : HOUR_MS - remainder;
+}
+
+function formatIsoDate(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 type OpsSummary = {
@@ -72,6 +80,18 @@ type OpsSummary = {
     totalTransactions: number;
     totalGci: number;
   }>;
+};
+
+type DashboardMonthEndParityResponse = {
+  rows: Array<{
+    market_center_name: string;
+    contracts: number;
+    total_gci: number;
+  }>;
+  totals: {
+    contracts: number;
+    total_gci: number;
+  };
 };
 
 async function fetchOpsSummary(): Promise<OpsSummary> {
@@ -241,6 +261,12 @@ function RankBadge({ rank }: { rank: number }) {
 }
 
 export default function Dashboard() {
+  const { token, activeContext } = useAuth();
+  const activeContextId = activeContext?.id ?? 'no-context';
+  const authHeaders: Record<string, string> = {};
+  if (token) authHeaders.Authorization = `Bearer ${token}`;
+  if (activeContext?.id) authHeaders['X-Active-Context'] = activeContext.id;
+
   const { data } = useQuery({
     queryKey: ['ops-summary'],
     queryFn: fetchOpsSummary,
@@ -257,6 +283,38 @@ export default function Dashboard() {
     refetchOnWindowFocus: false,
     staleTime: HOUR_MS,
     gcTime: HOUR_MS,
+  });
+
+  const monthEndParityWindow = (() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return {
+      dateFrom: formatIsoDate(start),
+      dateTo: formatIsoDate(now),
+    };
+  })();
+
+  const { data: monthEndParity } = useQuery({
+    queryKey: ['dashboard-month-end-parity', activeContextId, monthEndParityWindow.dateFrom, monthEndParityWindow.dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        date_from: monthEndParityWindow.dateFrom,
+        date_to: monthEndParityWindow.dateTo,
+        transaction_status: 'Registered',
+        sale_type: 'For Sale',
+      });
+      const response = await fetch(`/api/reports/month-end?${params.toString()}`, {
+        headers: authHeaders,
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error('Unable to load dashboard month-end parity');
+      return response.json() as Promise<DashboardMonthEndParityResponse>;
+    },
+    refetchInterval: () => msUntilNextHourWindow(),
+    refetchOnWindowFocus: false,
+    staleTime: HOUR_MS,
+    gcTime: HOUR_MS,
+    retry: 1,
   });
 
   const generatedAt = data
@@ -291,11 +349,19 @@ export default function Dashboard() {
   const safeActive = data?.active ?? { associates: 0, forSaleListings: 0, rentalListings: 0 };
   const effectiveForSaleListings = listingKpis?.forSale ?? safeActive.forSaleListings ?? 0;
   const effectiveRentalListings = listingKpis?.toLet ?? safeActive.rentalListings ?? 0;
-  const marketCenterPerformance = Array.isArray(data?.marketCenterPerformance) ? data.marketCenterPerformance : [];
+  const marketCenterPerformance = monthEndParity?.rows
+    ? monthEndParity.rows.map((row) => ({
+        marketCenter: row.market_center_name,
+        totalTransactions: Number(row.contracts ?? 0),
+        totalGci: Number(row.total_gci ?? 0),
+        totalSalesPrice: 0,
+      }))
+    : (Array.isArray(data?.marketCenterPerformance) ? data.marketCenterPerformance : []);
   const associatePerformance = Array.isArray(data?.associatePerformance) ? data.associatePerformance : [];
   const teamPerformance = Array.isArray(data?.teamPerformance) ? data.teamPerformance : [];
 
-  const registeredTransactions = marketCenterPerformance.reduce((sum, row) => sum + row.totalTransactions, 0);
+  const registeredTransactions = monthEndParity?.totals?.contracts
+    ?? marketCenterPerformance.reduce((sum, row) => sum + row.totalTransactions, 0);
 
   const metrics = [
     {
