@@ -787,23 +787,78 @@ export default function SupportTicketsTab(): JSX.Element {
 
       <div className="space-y-3">
         {isOfficeAdmin && panelMode === 'SUBMIT' && (
-        <div className="surface-card rounded-xl border border-slate-200 p-2.5 shadow-sm">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-[15px] font-semibold text-slate-900">Create Support Ticket</h3>
-            <button
-              type="button"
-              onClick={() => setShowCreateForm((prev) => !prev)}
-              className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-red-700"
-            >
-              {showCreateForm ? 'Close Form' : 'Create Ticket'}
-            </button>
+        <div className="surface-card rounded-xl border border-slate-200 p-3 shadow-sm">
+          <div className="grid gap-3 xl:grid-cols-[2fr_1.2fr]">
+            <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-white via-red-50/35 to-white p-4">
+              <h3 className="text-[28px] font-bold tracking-tight text-slate-900">Create Support Ticket</h3>
+              <p className="mt-2 max-w-2xl text-sm text-slate-600">
+                Log a MAPP issue so the Regional Admin team can track, manage and resolve it.
+              </p>
+              <p className="mt-1 max-w-2xl text-sm text-slate-500">
+                Add the related record and screenshots to help us resolve it faster.
+              </p>
+
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateForm(true)}
+                  className="rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-red-700"
+                >
+                  Create Ticket
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPanelMode('TICKETS')}
+                  className="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:border-red-300 hover:text-red-700"
+                >
+                  My Tickets
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <h4 className="text-[28px] leading-none text-red-500">!</h4>
+              <h3 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">MAPP Support Hub</h3>
+              <p className="mt-2 text-sm text-slate-600">
+                Support Tickets is the official place to log MAPP support requests so issues are not lost across WhatsApp,
+                calls or emails.
+              </p>
+
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">What Helps Us Resolve Faster</p>
+                <div className="mt-2 grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
+                  <div>✓ MAPP section</div>
+                  <div>✓ Linked record</div>
+                  <div>✓ Clear description</div>
+                  <div>✓ Screenshot or attachment</div>
+                </div>
+              </div>
+
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                <p className="font-semibold text-slate-700">Track your tickets</p>
+                <p className="mt-1">View progress under My Tickets and receive email updates when your ticket is updated.</p>
+              </div>
+            </div>
           </div>
 
-          {!showCreateForm && (
-            <p className="mt-2 text-sm text-slate-500">
-              Log a MAPP support issue and include as much detail as possible so the Regional Admin team can assist quickly.
-            </p>
-          )}
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-sm font-semibold text-slate-900">Create Ticket</p>
+              <p className="mt-1 text-sm text-slate-600">Tell us what happened.</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-sm font-semibold text-slate-900">Link Record</p>
+              <p className="mt-1 text-sm text-slate-600">Select the listing, associate, transaction, team or Market Centre.</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-sm font-semibold text-slate-900">Add Screenshots</p>
+              <p className="mt-1 text-sm text-slate-600">Paste with Ctrl + V, drag files in, or upload.</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-sm font-semibold text-slate-900">Track Progress</p>
+              <p className="mt-1 text-sm text-slate-600">Follow updates under My Tickets and by email.</p>
+            </div>
+          </div>
         </div>
         )}
 
