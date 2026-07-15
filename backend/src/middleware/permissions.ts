@@ -52,6 +52,19 @@ export async function resolvePermissions(req: Request, res: Response, next: Next
     return;
   }
 
+  if (req.user.role === 'SYSTEM_INTERNAL') {
+    req.permissions = {
+      scope: 'GLOBAL',
+      associateDbId: null,
+      marketCenterId: null,
+      homeMcId: null,
+      isRegionalAdmin: true,
+      isOfficeAdmin: false,
+    };
+    next();
+    return;
+  }
+
   try {
     const pool = getRequiredPgPool();
     const email = req.user.email;

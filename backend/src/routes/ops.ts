@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { getOptionalPgPool } from '../config/db.js';
 import { salesOnlyTransactionExclusionSql, transactionAgentCalculationDedupCte } from './reportingSql.js';
+import { resolvePermissions } from '../middleware/permissions.js';
+import { runListingExpiryJob } from '../services/listingExpiryJob.js';
 import { getTodayInAppTimeZone } from '../utils/timeZone.js';
 
 const router = Router();
@@ -35,6 +37,30 @@ type ReportingWindowRow = {
 
 const OPS_SUMMARY_CACHE_TTL_MS = 60 * 60 * 1000;
 let opsSummaryCache: { payload: unknown; cachedAtMs: number } | null = null;
+
+router.post('/expire-listings/run', resolvePermissions, async (req, res) => {
+  const perms = req.permissions;
+  if (!perms || perms.scope !== 'GLOBAL') {
+    return res.status(403).json({ error: 'Only global administrators or internal automation may run listing expiry.' });
+  }
+
+  try {
+    const body = (req.body ?? {}) as { asOfDate?: string };
+    const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined;
+    const activeContextId = typeof req.headers['x-active-context'] === 'string' ? req.headers['x-active-context'] : undefined;
+
+    const result = await runListingExpiryJob({
+      asOfDate: typeof body.asOfDate === 'string' ? body.asOfDate : undefined,
+      authHeader,
+      activeContextId,
+    });
+
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ error: message });
+  }
+});
 
 router.get('/summary', async (_req, res) => {
   const nowMs = Date.now();

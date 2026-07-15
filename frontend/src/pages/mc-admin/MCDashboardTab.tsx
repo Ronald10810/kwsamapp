@@ -152,26 +152,47 @@ function UiIcon({ kind }: { kind: 'birthday' | 'anniversary' | 'new-agent' | 'ac
   return <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h13A2.5 2.5 0 0 1 21 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5Z" stroke="currentColor" strokeWidth="1.7" /><path d="M21 10h-6a2 2 0 0 0 0 4h6" stroke="currentColor" strokeWidth="1.7" /></svg>;
 }
 
-function KpiCard({ title, value, subtitle, icon }: { title: string; value: string; subtitle?: string; icon?: JSX.Element }) {
+function KpiCard({
+  title,
+  value,
+  subtitle,
+  icon,
+  valueClassName,
+}: {
+  title: string;
+  value: string;
+  subtitle?: string;
+  icon?: JSX.Element;
+  valueClassName?: string;
+}) {
+  const isCurrencyValue = /^R\s/.test(value);
+  const compactValueClass =
+    value.length >= 16
+      ? (isCurrencyValue ? 'text-[18px]' : 'text-[20px]')
+      : value.length >= 13
+        ? 'text-[22px]'
+        : 'text-[26px]';
+
   return (
     <div
-      className="rounded-xl border shadow-sm"
+      className="rounded-xl border bg-white shadow-sm"
       style={{
         borderColor: 'var(--border-soft)',
-        background: 'linear-gradient(165deg, #ffffff 0%, #fff5f5 100%)',
-        borderLeft: '3px solid var(--brand)',
+        borderLeft: '2px solid #e5e7eb',
       }}
     >
       <div className="flex items-start justify-between gap-2 px-4 pt-3">
-        <p className="text-[10px] font-bold uppercase tracking-[0.12em] leading-tight" style={{ color: 'var(--text-muted)' }}>{title}</p>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] leading-tight" style={{ color: 'var(--text-muted)' }}>{title}</p>
         {icon && (
-          <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-red-50 text-red-600">
+          <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600">
             {icon}
           </span>
         )}
       </div>
-      <div className="px-4 pb-3 pt-1.5">
-        <div className="text-2xl font-black tabular-nums" style={{ color: 'var(--brand)' }}>{value}</div>
+      <div className="px-4 pb-2.5 pt-1">
+        <div className={`${compactValueClass} font-extrabold leading-tight tabular-nums text-slate-800 ${isCurrencyValue ? 'whitespace-nowrap tracking-[-0.02em]' : ''} ${valueClassName ?? ''}`}>
+          {value}
+        </div>
         {subtitle && (
           <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>{subtitle}</div>
         )}
@@ -224,17 +245,21 @@ function PeopleListCard({
           <div className="overflow-x-auto">
             <table className="w-full min-w-[520px] text-sm">
               <thead>
-                <tr className="border-b text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
-                  <th className="px-3 py-2">Associate</th>
-                  <th className="px-3 py-2">Team</th>
-                  <th className="px-3 py-2">Mobile</th>
-                  {showAnniversaryYears && <th className="px-3 py-2">Anniversary</th>}
-                  {showDate && <th className="px-3 py-2">Date</th>}
+                <tr className="sticky top-0 z-10 border-b bg-slate-50 text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+                  <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em]">Associate</th>
+                  <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em]">Team</th>
+                  <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em]">Mobile</th>
+                  {showAnniversaryYears && <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em]">Anniversary</th>}
+                  {showDate && <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em]">Date</th>}
                 </tr>
               </thead>
               <tbody>
-                {visible.map((person) => (
-                  <tr key={person.associate_id} className="border-b hover:bg-slate-50" style={{ borderColor: 'var(--border-soft)' }}>
+                {visible.map((person, rowIndex) => (
+                  <tr
+                    key={person.associate_id}
+                    className={`border-b transition-colors hover:bg-slate-100/70 ${rowIndex % 2 === 0 ? 'bg-white' : 'bg-slate-50/35'}`}
+                    style={{ borderColor: 'var(--border-soft)' }}
+                  >
                     <td className="px-3 py-2 font-medium text-slate-800">{person.associate_name}</td>
                     <td className="px-3 py-2">{person.team_name}</td>
                     <td className="px-3 py-2">{person.mobile_number ? <a href={`tel:${person.mobile_number}`} className="text-red-700 hover:underline">{person.mobile_number}</a> : '—'}</td>
@@ -362,24 +387,24 @@ export default function MCDashboardTab({
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* ── Hero Card ─────────────────────────────────────────── */}
-      <section className="overflow-hidden rounded-2xl border shadow-sm" style={{ borderColor: 'var(--border-soft)' }}>
+      <section className="overflow-hidden rounded-2xl border shadow-md" style={{ borderColor: 'var(--border-soft)' }}>
         {/* Gradient header */}
         <div
-          className="px-5 py-5"
-          style={{ background: 'linear-gradient(135deg, #4a0e11 0%, #6d1418 50%, #8f1b20 100%)' }}
+          className="px-5 py-6"
+          style={{ background: 'linear-gradient(135deg, #5a1216 0%, #7b1a1f 45%, #9b252b 100%)' }}
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-[22px] font-bold leading-snug tracking-tight text-white">
                 Welcome back, {userName?.trim() ? userName.split(' ')[0] : 'Admin'}
               </h2>
-              <p className="mt-0.5 text-[13px] font-medium text-white/85">
+              <p className="mt-0.5 text-[13px] font-medium text-white/90">
                 Here is your {marketCenterLabel} admin snapshot for today.
               </p>
               <p className="mt-1.5 max-w-lg text-xs leading-relaxed text-white/60">
-                Monitor your Market Centre, manage admin tasks, track key dates and keep daily operations moving.
+                Monitor operations, manage admin tasks, and track key daily outcomes in one place.
               </p>
             </div>
             <div className="shrink-0 self-end sm:self-center">
@@ -399,18 +424,18 @@ export default function MCDashboardTab({
         </div>
         {/* Meta strip — bottom of hero */}
         {data && (
-          <div className="flex flex-col border-t border-slate-200 bg-slate-50/60 sm:flex-row xl:grid xl:grid-cols-4">
-            <div className="flex-1 border-b border-slate-200 px-4 py-3 sm:border-b-0 sm:border-r xl:border-b-0">
+          <div className="grid grid-cols-1 divide-y divide-slate-200 border-t border-slate-200 bg-slate-50/70 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4">
+            <div className="px-4 py-3">
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Period</p>
               <p className="mt-0.5 text-sm font-semibold text-slate-800">
                 {formatDate(data.period.date_from)} – {formatDate(data.period.date_to)}
               </p>
             </div>
-            <div className="flex-1 border-b border-slate-200 px-4 py-3 sm:border-b-0 sm:border-r xl:border-b-0">
+            <div className="px-4 py-3">
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Last Refreshed</p>
               <p className="mt-0.5 text-sm font-semibold text-slate-800">{formatTimestamp(data.refreshed_at)}</p>
             </div>
-            <div className="flex-1 border-b border-slate-200 px-4 py-3 sm:border-b-0 sm:border-r xl:border-b-0">
+            <div className="px-4 py-3">
               {isRegionalAdmin ? (
                 <>
                   <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Market Centre</label>
@@ -431,7 +456,7 @@ export default function MCDashboardTab({
                 </>
               )}
             </div>
-            <div className="flex-1 px-4 py-3">
+            <div className="px-4 py-3">
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Snapshot Date</p>
               <p className="mt-0.5 text-sm font-semibold text-slate-800">{formatDate(data.snapshot_date)}</p>
             </div>
@@ -457,7 +482,7 @@ export default function MCDashboardTab({
         <>
           {/* ── Today's Focus strip ──────────────────────────────── */}
           <section className="overflow-hidden rounded-2xl border bg-white shadow-sm" style={{ borderColor: 'var(--border-soft)' }}>
-            <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-2.5">
+            <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3">
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 shrink-0 text-red-600" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.7"/>
                 <path d="M12 7v5l3 3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/>
@@ -465,7 +490,7 @@ export default function MCDashboardTab({
               <h3 className="text-sm font-semibold text-slate-800">Today's Focus</h3>
               <span className="ml-auto text-[11px] text-slate-400">{formatDate(data.snapshot_date)}</span>
             </div>
-            <div className="flex overflow-x-auto">
+            <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0">
               {(
                 [
                   { label: "Today's Birthdays", value: formatNumber(data.metrics.birthdays_today), kind: 'birthday' as const, accent: data.metrics.birthdays_today > 0 },
@@ -474,18 +499,18 @@ export default function MCDashboardTab({
                   { label: 'Contracts (MTD)', value: formatNumber(data.metrics.registered_contracts), kind: 'contracts' as const, accent: false },
                   { label: 'GCI (MTD)', value: formatMoney(data.metrics.registered_gci), kind: 'currency' as const, accent: false },
                 ]
-              ).map((item, i, arr) => (
+              ).map((item) => (
                 <div
                   key={item.label}
-                  className={`flex min-w-[120px] flex-1 flex-col px-4 py-3${i < arr.length - 1 ? ' border-r border-slate-100' : ''}`}
+                  className="flex min-w-[120px] flex-col px-4 py-3"
                 >
                   <div className="flex items-center gap-1">
                     <span className={item.accent ? 'text-red-600' : 'text-slate-400'}>
                       <UiIcon kind={item.kind} />
                     </span>
-                    <p className="text-[10px] font-semibold uppercase leading-tight tracking-wide text-slate-400">{item.label}</p>
+                    <p className="text-[10px] font-semibold uppercase leading-tight tracking-[0.08em] text-slate-400">{item.label}</p>
                   </div>
-                  <p className={`mt-1 text-lg font-black leading-none tabular-nums${item.accent ? ' text-red-700' : ' text-slate-800'}`}>{item.value}</p>
+                  <p className={`mt-1 text-xl font-extrabold leading-none tabular-nums${item.accent ? ' text-red-700' : ' text-slate-800'}`}>{item.value}</p>
                 </div>
               ))}
             </div>
@@ -499,7 +524,7 @@ export default function MCDashboardTab({
               </svg>
               <h3 className="text-sm font-semibold text-slate-800">Quick Actions</h3>
             </div>
-            <div className="flex flex-wrap gap-2 px-4 py-3">
+            <div className="grid grid-cols-2 gap-2 px-4 py-3 sm:flex sm:flex-wrap">
               {(
                 [
                   {
@@ -533,7 +558,7 @@ export default function MCDashboardTab({
                   key={action.label}
                   type="button"
                   onClick={() => onQuickAction?.(action.tab)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 sm:w-auto sm:justify-start sm:px-3 sm:py-1.5 sm:text-xs"
                 >
                   {action.icon}
                   {action.label}
@@ -542,20 +567,61 @@ export default function MCDashboardTab({
             </div>
           </section>
 
-          <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-            <KpiCard title="Today's Birthdays" value={formatNumber(data.metrics.birthdays_today)} icon={<UiIcon kind="birthday" />} />
-            <KpiCard title="This Month Anniversaries" value={formatNumber(data.metrics.anniversaries_this_month)} icon={<UiIcon kind="anniversary" />} />
-            <KpiCard title="New Agents (MTD)" value={formatNumber(data.metrics.new_agents_this_month)} icon={<UiIcon kind="new-agent" />} />
-            <KpiCard title="Active Agents" value={formatNumber(data.metrics.active_agents)} icon={<UiIcon kind="active-agent" />} />
-            <KpiCard title="Active Listings" value={formatNumber(data.metrics.active_listings)} icon={<UiIcon kind="listing" />} />
-            <KpiCard title="Registered GCI (MTD)" value={formatMoney(data.metrics.registered_gci)} icon={<UiIcon kind="currency" />} />
-            <KpiCard title="Registered CO$ (MTD)" value={formatMoney(data.metrics.registered_co_dollars)} icon={<UiIcon kind="currency" />} />
-            <KpiCard title="Registered Units (MTD)" value={formatNumber(data.metrics.registered_units)} icon={<UiIcon kind="units" />} />
-            <KpiCard title="Registered Contracts" value={formatNumber(data.metrics.registered_contracts)} icon={<UiIcon kind="contracts" />} />
-            <KpiCard title="Avg GCI Per Unit" value={formatMoney(data.metrics.avg_gci_per_unit)} icon={<UiIcon kind="avg" />} />
+          <section className="grid grid-cols-1 gap-3 xl:grid-cols-12">
+            <div className="surface-card p-3 xl:col-span-4">
+              <div className="mb-3 border-b border-slate-100 pb-2">
+                <h4 className="text-sm font-semibold text-slate-800">People Snapshot</h4>
+                <p className="mt-0.5 text-xs text-slate-500">Agent population and key lifecycle metrics.</p>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <KpiCard title="Today's Birthdays" value={formatNumber(data.metrics.birthdays_today)} icon={<UiIcon kind="birthday" />} />
+                <KpiCard title="This Month Anniversaries" value={formatNumber(data.metrics.anniversaries_this_month)} icon={<UiIcon kind="anniversary" />} />
+                <KpiCard title="New Agents (MTD)" value={formatNumber(data.metrics.new_agents_this_month)} icon={<UiIcon kind="new-agent" />} />
+                <KpiCard title="Active Agents" value={formatNumber(data.metrics.active_agents)} icon={<UiIcon kind="active-agent" />} />
+              </div>
+            </div>
+
+            <div className="surface-card p-3 xl:col-span-4">
+              <div className="mb-3 border-b border-slate-100 pb-2">
+                <h4 className="text-sm font-semibold text-slate-800">Pipeline Snapshot</h4>
+                <p className="mt-0.5 text-xs text-slate-500">Listing and contract throughput across the current period.</p>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <KpiCard title="Active Listings" value={formatNumber(data.metrics.active_listings)} icon={<UiIcon kind="listing" />} />
+                <KpiCard title="Registered Contracts" value={formatNumber(data.metrics.registered_contracts)} icon={<UiIcon kind="contracts" />} />
+                <KpiCard title="Registered Units (MTD)" value={formatNumber(data.metrics.registered_units)} icon={<UiIcon kind="units" />} />
+              </div>
+            </div>
+
+            <div className="surface-card p-3 xl:col-span-4">
+              <div className="mb-3 border-b border-slate-100 pb-2">
+                <h4 className="text-sm font-semibold text-slate-800">Revenue Snapshot</h4>
+                <p className="mt-0.5 text-xs text-slate-500">Core financial output for the current month-to-date period.</p>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <KpiCard
+                  title="Registered GCI (MTD)"
+                  value={formatMoney(data.metrics.registered_gci)}
+                  icon={<UiIcon kind="currency" />}
+                  valueClassName="text-[22px] sm:text-[24px] whitespace-nowrap tracking-[-0.02em]"
+                />
+                <KpiCard
+                  title="Registered CO$ (MTD)"
+                  value={formatMoney(data.metrics.registered_co_dollars)}
+                  icon={<UiIcon kind="currency" />}
+                  valueClassName="text-[22px] sm:text-[24px] whitespace-nowrap tracking-[-0.02em]"
+                />
+                <KpiCard
+                  title="Avg GCI Per Unit"
+                  value={formatMoney(data.metrics.avg_gci_per_unit)}
+                  icon={<UiIcon kind="avg" />}
+                  valueClassName="text-[22px] sm:text-[24px] whitespace-nowrap tracking-[-0.02em]"
+                />
+              </div>
+            </div>
           </section>
 
-          <section className="surface-card p-5">
+          <section className="surface-card p-4">
             <div className="mb-3">
               <h3 className="text-base font-semibold text-slate-800">Tools & Resources</h3>
               <p className="text-xs text-slate-500 mt-0.5">Quick links for everyday Market Centre admin operations.</p>
@@ -594,7 +660,7 @@ export default function MCDashboardTab({
             </div>
           </section>
 
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <section className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             <PeopleListCard
               title="Today's Birthdays"
               emptyText="No birthdays in this market centre today."
@@ -610,20 +676,21 @@ export default function MCDashboardTab({
             />
           </section>
 
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <section className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             <div className="surface-card overflow-hidden">
               <div className="border-b px-4 py-3" style={{ borderColor: 'var(--border-soft)' }}>
                 <h4 className="text-sm font-semibold text-slate-800">Top Performing Agents (MTD)</h4>
+                <p className="mt-0.5 text-xs text-slate-500">Ranked by registered GCI, with units as a tie-breaker.</p>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[560px] text-sm">
                   <thead>
-                    <tr className="border-b text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
-                      <th className="px-3 py-2">Rank</th>
-                      <th className="px-3 py-2">Agent</th>
-                      <th className="px-3 py-2">Team</th>
-                      <th className="px-3 py-2 text-right">Units</th>
-                      <th className="px-3 py-2 text-right">Registered GCI</th>
+                    <tr className="sticky top-0 z-10 border-b bg-slate-50 text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+                      <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em]">Rank</th>
+                      <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em]">Agent</th>
+                      <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em]">Team</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-[0.08em]">Units</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-[0.08em]">Registered GCI</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -634,7 +701,11 @@ export default function MCDashboardTab({
                         </td>
                       </tr>
                     ) : data.top_performers.agents.map((agent, index) => (
-                      <tr key={agent.associate_id} className="border-b hover:bg-slate-50" style={{ borderColor: 'var(--border-soft)' }}>
+                      <tr
+                        key={agent.associate_id}
+                        className={`border-b transition-colors hover:bg-slate-100/70 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/35'}`}
+                        style={{ borderColor: 'var(--border-soft)' }}
+                      >
                         <td className="px-3 py-2 font-semibold text-slate-700">#{index + 1}</td>
                         <td className="px-3 py-2 font-medium text-slate-800">{agent.associate_name}</td>
                         <td className="px-3 py-2">{agent.team_name}</td>
@@ -650,16 +721,17 @@ export default function MCDashboardTab({
             <div className="surface-card overflow-hidden">
               <div className="border-b px-4 py-3" style={{ borderColor: 'var(--border-soft)' }}>
                 <h4 className="text-sm font-semibold text-slate-800">Top Performing Teams (MTD)</h4>
+                <p className="mt-0.5 text-xs text-slate-500">Team-level performance for active agents, units and GCI.</p>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[560px] text-sm">
                   <thead>
-                    <tr className="border-b text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
-                      <th className="px-3 py-2">Rank</th>
-                      <th className="px-3 py-2">Team</th>
-                      <th className="px-3 py-2 text-right">Active Agents</th>
-                      <th className="px-3 py-2 text-right">Units</th>
-                      <th className="px-3 py-2 text-right">Registered GCI</th>
+                    <tr className="sticky top-0 z-10 border-b bg-slate-50 text-left" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+                      <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em]">Rank</th>
+                      <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em]">Team</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-[0.08em]">Active Agents</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-[0.08em]">Units</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-[0.08em]">Registered GCI</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -670,7 +742,11 @@ export default function MCDashboardTab({
                         </td>
                       </tr>
                     ) : data.top_performers.teams.map((team, index) => (
-                      <tr key={team.team_id} className="border-b hover:bg-slate-50" style={{ borderColor: 'var(--border-soft)' }}>
+                      <tr
+                        key={team.team_id}
+                        className={`border-b transition-colors hover:bg-slate-100/70 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/35'}`}
+                        style={{ borderColor: 'var(--border-soft)' }}
+                      >
                         <td className="px-3 py-2 font-semibold text-slate-700">#{index + 1}</td>
                         <td className="px-3 py-2 font-medium text-slate-800">{team.team_name}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{formatNumber(team.active_agents)}</td>

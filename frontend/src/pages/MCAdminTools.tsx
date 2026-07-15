@@ -17,6 +17,7 @@ type MCAgent = {
   email: string | null;
   mobile_number: string | null;
   image_url: string | null;
+  market_center_name?: string | null;
   active_listing_count: string;
 };
 
@@ -90,6 +91,64 @@ type TransferLogRow = {
   transferred_at: string;
 };
 
+type AgentTransferMarketCenter = {
+  source_market_center_id: string;
+  name: string;
+};
+
+type AgentTransferAgent = {
+  associate_id: string;
+  full_name: string | null;
+  email: string | null;
+  mobile_number: string | null;
+  image_url: string | null;
+  market_center_name: string | null;
+  source_market_center_id: string | null;
+  active_listing_count: string;
+};
+
+type AgentTransferListingResult = {
+  listingId: string;
+  listingNumber: string | null;
+  address: string | null;
+  portals: { portal: string; publishOk: boolean | null; publishError: string | null }[];
+  error: string | null;
+};
+
+type AgentTransferJob = {
+  id: string;
+  status: 'pending' | 'running' | 'done' | 'failed';
+  associateId: string;
+  associateName: string;
+  fromMarketCenterSourceId: string;
+  fromMarketCenterName: string | null;
+  toMarketCenterSourceId: string;
+  toMarketCenterName: string | null;
+  totalListings: number;
+  completedListings: number;
+  listingsUpdated: number;
+  results: AgentTransferListingResult[];
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+  requestedBy: string;
+};
+
+type AgentTransferHistoryRow = {
+  id: string;
+  job_id: string;
+  associate_id: string;
+  associate_name: string | null;
+  from_source_market_center_id: string | null;
+  from_market_center_name: string | null;
+  to_source_market_center_id: string | null;
+  to_market_center_name: string | null;
+  listings_updated: number;
+  requested_by: string | null;
+  transfer_error: string | null;
+  transferred_at: string;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,10 +186,14 @@ function ListingTransferTab() {
   const { token, activeContext, isRegionalAdmin, isOfficeAdmin } = useAuth();
 
   const mcSourceId = activeContext?.marketCenterId ?? null;
+  const agentScopeMcId = isRegionalAdmin ? '__all__' : mcSourceId;
 
   const [agents, setAgents] = useState<MCAgent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [agentsError, setAgentsError] = useState<string | null>(null);
+  const [sourceAgentSearch, setSourceAgentSearch] = useState('');
+  const [targetAgentSearch, setTargetAgentSearch] = useState('');
+  const [listingSearch, setListingSearch] = useState('');
 
   const [fromAgentId, setFromAgentId] = useState('');
   const [listings, setListings] = useState<AgentListing[]>([]);
@@ -162,10 +225,10 @@ function ListingTransferTab() {
 
   // Load agents for this MC
   useEffect(() => {
-    if (!mcSourceId) return;
+    if (!agentScopeMcId) return;
     setAgentsLoading(true);
     setAgentsError(null);
-    fetch(`/api/listing-transfer/mc-agents/${encodeURIComponent(mcSourceId)}`, {
+    fetch(`/api/listing-transfer/mc-agents/${encodeURIComponent(agentScopeMcId)}`, {
       headers: authHeaders(),
     })
       .then((r) => r.json())
@@ -175,7 +238,7 @@ function ListingTransferTab() {
       })
       .catch((err: unknown) => setAgentsError(err instanceof Error ? err.message : String(err)))
       .finally(() => setAgentsLoading(false));
-  }, [mcSourceId, authHeaders]);
+  }, [agentScopeMcId, authHeaders]);
 
   // Load listings when fromAgentId changes
   useEffect(() => {
@@ -218,6 +281,47 @@ function ListingTransferTab() {
   const toAgent = agents.find((a) => a.associate_id === toAgentId);
   const selectedCount = selectedIds.size;
   const canTransfer = selectedCount > 0 && !!toAgentId && toAgentId !== fromAgentId;
+
+  const filteredSourceAgents = useMemo(() => {
+    const q = sourceAgentSearch.trim().toLowerCase();
+    if (!q) return agents;
+    return agents.filter((agent) => {
+      return [
+        agent.full_name,
+        agent.email,
+        agent.mobile_number,
+        agent.market_center_name,
+      ].some((value) => String(value ?? '').toLowerCase().includes(q));
+    });
+  }, [agents, sourceAgentSearch]);
+
+  const filteredTargetAgents = useMemo(() => {
+    const q = targetAgentSearch.trim().toLowerCase();
+    return agents
+      .filter((agent) => agent.associate_id !== fromAgentId)
+      .filter((agent) => {
+        if (!q) return true;
+        return [
+          agent.full_name,
+          agent.email,
+          agent.mobile_number,
+          agent.market_center_name,
+        ].some((value) => String(value ?? '').toLowerCase().includes(q));
+      });
+  }, [agents, fromAgentId, targetAgentSearch]);
+
+  const visibleListings = useMemo(() => {
+    const q = listingSearch.trim().toLowerCase();
+    if (!q) return listings;
+    return listings.filter((listing) => [
+      listing.listing_number,
+      listing.address,
+      listing.suburb,
+      listing.city,
+      listing.property_type,
+      listing.property_sub_type,
+    ].some((value) => String(value ?? '').toLowerCase().includes(q)));
+  }, [listings, listingSearch]);
 
   async function startTransfer() {
     setShowConfirm(false);
@@ -265,8 +369,8 @@ function ListingTransferTab() {
           scheduleJobPoll(jobId);
         } else {
           // Refresh agents + listings after completion
-          if (mcSourceId) {
-            fetch(`/api/listing-transfer/mc-agents/${encodeURIComponent(mcSourceId)}`, { headers: authHeaders() })
+          if (agentScopeMcId) {
+            fetch(`/api/listing-transfer/mc-agents/${encodeURIComponent(agentScopeMcId)}`, { headers: authHeaders() })
               .then((r2) => r2.json())
               .then((d: { agents?: MCAgent[] }) => { if (d.agents) setAgents(d.agents); })
               .catch(() => undefined);
@@ -372,6 +476,18 @@ function ListingTransferTab() {
           )}
         </div>
 
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <input
+            value={sourceAgentSearch}
+            onChange={(event) => setSourceAgentSearch(event.target.value)}
+            placeholder={isRegionalAdmin ? 'Search agents across all market centres...' : 'Search agents in this market centre...'}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-100"
+          />
+          {isRegionalAdmin && (
+            <span className="text-xs text-slate-500">Region scope: all market centres</span>
+          )}
+        </div>
+
         {agentsLoading && (
           <div className="flex items-center gap-2 py-4 text-sm text-slate-500">
             <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
@@ -383,10 +499,10 @@ function ListingTransferTab() {
         )}
 
         {!agentsLoading && !agentsError && (
-          agents.length === 0
+          filteredSourceAgents.length === 0
             ? <p className="text-sm text-slate-500 py-2">No active agents found in this market centre.</p>
             : <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
-                {agents.map((agent) => {
+                {filteredSourceAgents.map((agent) => {
                   const isSelected = fromAgentId === agent.associate_id;
                   const count = Number(agent.active_listing_count);
                   return (
@@ -413,6 +529,9 @@ function ListingTransferTab() {
                       )}
                       <div className="w-full min-w-0">
                         <p className="truncate text-xs font-semibold text-slate-800 leading-4">{agent.full_name ?? 'Unknown'}</p>
+                        {isRegionalAdmin && agent.market_center_name && (
+                          <p className="mt-0.5 truncate text-[10px] text-slate-400">{agent.market_center_name}</p>
+                        )}
                         <p className={clsx(
                           'mt-0.5 text-[11px] font-medium',
                           count > 0 ? (isSelected ? 'text-red-600' : 'text-slate-500') : 'text-slate-300'
@@ -453,6 +572,13 @@ function ListingTransferTab() {
             )}
           </div>
 
+          <input
+            value={listingSearch}
+            onChange={(event) => setListingSearch(event.target.value)}
+            placeholder="Search selected agent listings by number, address, suburb, city, or property type..."
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-100"
+          />
+
           {listingsLoading && (
             <div className="flex items-center gap-2 py-4 text-sm text-slate-500">
               <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
@@ -463,13 +589,13 @@ function ListingTransferTab() {
             <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{listingsError}</div>
           )}
 
-          {!listingsLoading && !listingsError && listings.length === 0 && (
+          {!listingsLoading && !listingsError && visibleListings.length === 0 && (
             <div className="rounded-lg bg-slate-50 border border-slate-200 px-4 py-6 text-sm text-slate-500 text-center">
-              This agent has no active listings.
+              {listings.length === 0 ? 'This agent has no active listings.' : 'No listings match your search.'}
             </div>
           )}
 
-          {!listingsLoading && listings.length > 0 && (
+          {!listingsLoading && visibleListings.length > 0 && (
             <div className="overflow-x-auto rounded-lg border border-slate-200">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-xs font-semibold text-slate-600 uppercase tracking-wide">
@@ -490,7 +616,7 @@ function ListingTransferTab() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {listings.map((listing) => (
+                  {visibleListings.map((listing) => (
                     <tr
                       key={listing.id}
                       onClick={() => toggleOne(listing.id)}
@@ -562,10 +688,15 @@ function ListingTransferTab() {
             )}
           </div>
 
+          <input
+            value={targetAgentSearch}
+            onChange={(event) => setTargetAgentSearch(event.target.value)}
+            placeholder={isRegionalAdmin ? 'Search target agents across all market centres...' : 'Search target agents...'}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:border-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+          />
+
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
-            {agents
-              .filter((a) => a.associate_id !== fromAgentId)
-              .map((agent) => {
+            {filteredTargetAgents.map((agent) => {
                 const isSelected = toAgentId === agent.associate_id;
                 const count = Number(agent.active_listing_count);
                 return (
@@ -592,6 +723,9 @@ function ListingTransferTab() {
                     )}
                     <div className="w-full min-w-0">
                       <p className="truncate text-xs font-semibold text-slate-800 leading-4">{agent.full_name ?? 'Unknown'}</p>
+                      {isRegionalAdmin && agent.market_center_name && (
+                        <p className="mt-0.5 truncate text-[10px] text-slate-400">{agent.market_center_name}</p>
+                      )}
                       <p className={clsx(
                         'mt-0.5 text-[11px] font-medium',
                         count > 0 ? (isSelected ? 'text-emerald-600' : 'text-slate-500') : 'text-slate-300'
@@ -813,6 +947,461 @@ function ListingTransferTab() {
   );
 }
 
+function AgentTransferTab() {
+  const { token, activeContext, isRegionalAdmin } = useAuth();
+
+  const [agents, setAgents] = useState<AgentTransferAgent[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(false);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
+  const [agentSearch, setAgentSearch] = useState('');
+
+  const [marketCenters, setMarketCenters] = useState<AgentTransferMarketCenter[]>([]);
+  const [marketCentersLoading, setMarketCentersLoading] = useState(false);
+  const [targetSearch, setTargetSearch] = useState('');
+
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [targetMcSourceId, setTargetMcSourceId] = useState('');
+
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [activeJob, setActiveJob] = useState<AgentTransferJob | null>(null);
+  const [showProgress, setShowProgress] = useState(false);
+  const jobPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyRows, setHistoryRows] = useState<AgentTransferHistoryRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const authHeaders = useCallback((): Record<string, string> => {
+    const h: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) h['Authorization'] = `Bearer ${token}`;
+    if (activeContext?.id) h['x-active-context'] = activeContext.id;
+    return h;
+  }, [token, activeContext]);
+
+  useEffect(() => {
+    if (!isRegionalAdmin) return;
+    setAgentsLoading(true);
+    setAgentsError(null);
+    fetch('/api/agent-transfer/mc-agents/__all__', { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((data: { agents?: AgentTransferAgent[]; error?: string }) => {
+        if (data.error) throw new Error(data.error);
+        setAgents(data.agents ?? []);
+      })
+      .catch((err: unknown) => setAgentsError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setAgentsLoading(false));
+  }, [isRegionalAdmin, authHeaders]);
+
+  useEffect(() => {
+    if (!isRegionalAdmin) return;
+    setMarketCentersLoading(true);
+    fetch('/api/market-centers?limit=500&offset=0&status=Active', { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((data: { items?: AgentTransferMarketCenter[] }) => setMarketCenters(data.items ?? []))
+      .catch(() => setMarketCenters([]))
+      .finally(() => setMarketCentersLoading(false));
+  }, [isRegionalAdmin, authHeaders]);
+
+  const selectedAgent = agents.find((agent) => agent.associate_id === selectedAgentId) ?? null;
+  const selectedTargetMc = marketCenters.find((mc) => mc.source_market_center_id === targetMcSourceId) ?? null;
+
+  const visibleAgents = useMemo(() => {
+    const q = agentSearch.trim().toLowerCase();
+    if (!q) return agents;
+    return agents.filter((agent) => [
+      agent.full_name,
+      agent.email,
+      agent.mobile_number,
+      agent.market_center_name,
+      agent.source_market_center_id,
+    ].some((value) => String(value ?? '').toLowerCase().includes(q)));
+  }, [agents, agentSearch]);
+
+  const visibleTargetMcs = useMemo(() => {
+    const q = targetSearch.trim().toLowerCase();
+    return marketCenters
+      .filter((mc) => mc.source_market_center_id !== selectedAgent?.source_market_center_id)
+      .filter((mc) => {
+        if (!q) return true;
+        return [mc.name, mc.source_market_center_id].some((value) => String(value ?? '').toLowerCase().includes(q));
+      });
+  }, [marketCenters, targetSearch, selectedAgent?.source_market_center_id]);
+
+  const canTransfer = Boolean(selectedAgent && selectedTargetMc && selectedAgent.source_market_center_id !== selectedTargetMc.source_market_center_id);
+
+  function scheduleJobPoll(jobId: string) {
+    if (jobPollRef.current) clearTimeout(jobPollRef.current);
+    jobPollRef.current = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/agent-transfer/jobs/${jobId}`, { headers: authHeaders() });
+        const job = await response.json() as AgentTransferJob;
+        setActiveJob(job);
+        if (job.status === 'running' || job.status === 'pending') {
+          scheduleJobPoll(jobId);
+          return;
+        }
+
+        fetch('/api/agent-transfer/mc-agents/__all__', { headers: authHeaders() })
+          .then((r) => r.json())
+          .then((data: { agents?: AgentTransferAgent[] }) => {
+            if (data.agents) setAgents(data.agents);
+          })
+          .catch(() => undefined);
+      } catch {
+        scheduleJobPoll(jobId);
+      }
+    }, 1500);
+  }
+
+  async function startTransfer() {
+    if (!selectedAgent || !selectedTargetMc) return;
+    setShowConfirm(false);
+
+    const response = await fetch('/api/agent-transfer/jobs', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        associateId: Number(selectedAgent.associate_id),
+        toMarketCenterSourceId: selectedTargetMc.source_market_center_id,
+        activeContext: activeContext?.id ?? null,
+      }),
+    });
+    const data = await response.json() as { jobId?: string; error?: string };
+    if (!response.ok || !data.jobId) {
+      alert(`Failed to start transfer: ${data.error ?? 'Unknown error'}`);
+      return;
+    }
+
+    setActiveJob({
+      id: data.jobId,
+      status: 'pending',
+      associateId: selectedAgent.associate_id,
+      associateName: selectedAgent.full_name ?? 'Unknown',
+      fromMarketCenterSourceId: selectedAgent.source_market_center_id ?? '',
+      fromMarketCenterName: selectedAgent.market_center_name,
+      toMarketCenterSourceId: selectedTargetMc.source_market_center_id,
+      toMarketCenterName: selectedTargetMc.name,
+      totalListings: Number(selectedAgent.active_listing_count || 0),
+      completedListings: 0,
+      listingsUpdated: 0,
+      results: [],
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      error: null,
+      requestedBy: '',
+    });
+    setShowProgress(true);
+    scheduleJobPoll(data.jobId);
+  }
+
+  function loadHistory() {
+    setHistoryLoading(true);
+    const params = selectedAgentId ? `?associateId=${encodeURIComponent(selectedAgentId)}` : '';
+    fetch(`/api/agent-transfer/history${params}`, { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((data: { log?: AgentTransferHistoryRow[] }) => setHistoryRows(data.log ?? []))
+      .catch(() => setHistoryRows([]))
+      .finally(() => setHistoryLoading(false));
+  }
+
+  if (!isRegionalAdmin) {
+    return (
+      <div className="text-slate-500 text-sm py-8 text-center">
+        Agent Transfer is only available to Regional Admin users.
+      </div>
+    );
+  }
+
+  const progressPct = activeJob
+    ? Math.round((activeJob.completedListings / Math.max(activeJob.totalListings, 1)) * 100)
+    : 0;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-800">Agent Transfer</h2>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Transfer an active agent to a new market centre. Agent profile and primary listings move to the new market centre, while historical transactions remain unchanged.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => { setShowHistory(true); loadHistory(); }}
+          className="shrink-0 ml-4 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-red-300 hover:text-red-700 transition-colors shadow-sm"
+        >
+          Transfer History
+        </button>
+      </div>
+
+      <div className="surface-card p-5 space-y-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Step 1</p>
+          <h3 className="text-base font-semibold text-slate-800 mt-0.5">Select source agent</h3>
+        </div>
+
+        <input
+          value={agentSearch}
+          onChange={(event) => setAgentSearch(event.target.value)}
+          placeholder="Search agents by name, email, phone, or market centre..."
+          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-100"
+        />
+
+        {agentsLoading && <p className="text-sm text-slate-500">Loading agents…</p>}
+        {agentsError && <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{agentsError}</div>}
+
+        {!agentsLoading && !agentsError && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
+            {visibleAgents.map((agent) => {
+              const isSelected = selectedAgentId === agent.associate_id;
+              return (
+                <button
+                  key={agent.associate_id}
+                  type="button"
+                  onClick={() => { setSelectedAgentId(agent.associate_id); setTargetMcSourceId(''); }}
+                  className={clsx(
+                    'flex flex-col items-center gap-2 rounded-xl border p-3 text-center transition-all duration-150',
+                    isSelected
+                      ? 'border-red-400 bg-red-50 ring-2 ring-red-300 shadow-sm'
+                      : 'border-slate-200 bg-white hover:border-red-200 hover:bg-red-50/40 hover:shadow-sm'
+                  )}
+                >
+                  {agent.image_url ? (
+                    <img src={agent.image_url} alt="" className="h-12 w-12 rounded-full object-cover ring-2 ring-white shadow" />
+                  ) : (
+                    <div className={clsx('h-12 w-12 rounded-full flex items-center justify-center text-base font-bold ring-2 ring-white shadow', isSelected ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-500')}>
+                      {(agent.full_name ?? '?')[0].toUpperCase()}
+                    </div>
+                  )}
+                  <div className="w-full min-w-0">
+                    <p className="truncate text-xs font-semibold text-slate-800 leading-4">{agent.full_name ?? 'Unknown'}</p>
+                    <p className="mt-0.5 truncate text-[10px] text-slate-400">{agent.market_center_name ?? agent.source_market_center_id ?? '—'}</p>
+                    <p className="mt-0.5 text-[11px] font-medium text-slate-500">{Number(agent.active_listing_count)} active listings</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {selectedAgent && (
+        <div className="surface-card p-5 space-y-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Step 2</p>
+            <h3 className="text-base font-semibold text-slate-800 mt-0.5">Select target market centre</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Current market centre: <span className="font-semibold text-slate-700">{selectedAgent.market_center_name ?? selectedAgent.source_market_center_id ?? '—'}</span>
+            </p>
+          </div>
+
+          <input
+            value={targetSearch}
+            onChange={(event) => setTargetSearch(event.target.value)}
+            placeholder="Search target market centres..."
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:border-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+          />
+
+          {marketCentersLoading ? (
+            <p className="text-sm text-slate-500">Loading market centres…</p>
+          ) : (
+            <div className="max-h-64 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-100">
+              {visibleTargetMcs.map((mc) => {
+                const isSelected = targetMcSourceId === mc.source_market_center_id;
+                return (
+                  <button
+                    key={mc.source_market_center_id}
+                    type="button"
+                    onClick={() => setTargetMcSourceId(mc.source_market_center_id)}
+                    className={clsx(
+                      'w-full px-3 py-2.5 text-left text-sm transition-colors',
+                      isSelected ? 'bg-emerald-50 text-emerald-700' : 'hover:bg-slate-50 text-slate-700'
+                    )}
+                  >
+                    <p className="font-semibold">{mc.name}</p>
+                    <p className="text-xs text-slate-500">{mc.source_market_center_id}</p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {canTransfer && (
+        <div className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 px-5 py-4 shadow-sm">
+          <div>
+            <p className="text-sm font-semibold text-slate-800">Ready to transfer agent</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              <span className="font-medium">{selectedAgent?.full_name}</span> from <span className="font-medium">{selectedAgent?.market_center_name ?? selectedAgent?.source_market_center_id}</span> to <span className="font-medium">{selectedTargetMc?.name}</span>
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowConfirm(true)}
+            className="primary-btn"
+          >
+            Transfer Agent
+          </button>
+        </div>
+      )}
+
+      {showConfirm && selectedAgent && selectedTargetMc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="text-lg font-bold text-slate-800">Confirm Agent Transfer</h3>
+            <p className="mt-3 text-sm text-slate-600 leading-relaxed">
+              Transfer <strong>{selectedAgent.full_name}</strong> from <strong>{selectedAgent.market_center_name ?? selectedAgent.source_market_center_id}</strong> to <strong>{selectedTargetMc.name}</strong>.
+            </p>
+            <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 leading-relaxed">
+              The associate profile and primary listings will move to the new market centre. Existing transactions will keep their current historical market centre context.
+            </div>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowConfirm(false)}
+                className="rounded-lg border border-slate-300 px-5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={startTransfer}
+                className="rounded-lg bg-red-600 px-5 py-2 text-sm font-semibold text-white hover:bg-red-700"
+              >
+                Yes, Transfer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showProgress && activeJob && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-800">Transferring Agent…</h3>
+              {(activeJob.status === 'done' || activeJob.status === 'failed') && (
+                <button
+                  type="button"
+                  onClick={() => setShowProgress(false)}
+                  className="text-slate-400 hover:text-slate-600 text-xl leading-none"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs text-slate-500 mb-1">
+                <span>{activeJob.associateName}</span>
+                <span>{activeJob.completedListings} / {activeJob.totalListings}</span>
+              </div>
+              <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden">
+                <div
+                  className={clsx(
+                    'h-full rounded-full transition-all duration-500',
+                    activeJob.status === 'done' ? 'bg-emerald-500' : activeJob.status === 'failed' ? 'bg-red-500' : 'bg-red-600'
+                  )}
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+            </div>
+
+            {activeJob.status === 'running' || activeJob.status === 'pending' ? (
+              <p className="text-sm text-slate-600 animate-pulse">Processing transfer… please wait.</p>
+            ) : activeJob.status === 'done' ? (
+              <p className="text-sm text-emerald-700 font-medium">✓ Agent transfer complete!</p>
+            ) : (
+              <p className="text-sm text-red-700 font-medium">Transfer failed: {activeJob.error}</p>
+            )}
+
+            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600">
+              <p><span className="font-semibold">Listings updated:</span> {activeJob.listingsUpdated}</p>
+              <p><span className="font-semibold">From:</span> {activeJob.fromMarketCenterName ?? activeJob.fromMarketCenterSourceId}</p>
+              <p><span className="font-semibold">To:</span> {activeJob.toMarketCenterName ?? activeJob.toMarketCenterSourceId}</p>
+            </div>
+
+            {activeJob.results.length > 0 && (
+              <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-100 text-xs">
+                {activeJob.results.map((row) => (
+                  <div key={row.listingId} className={clsx('px-3 py-2', row.error ? 'bg-red-50' : 'bg-white')}>
+                    <p className="font-medium text-slate-800">{row.listingNumber ?? `#${row.listingId}`} — {row.address ?? 'No address'}</p>
+                    {row.error && <p className="text-red-600 mt-0.5">Error: {row.error}</p>}
+                    {!row.error && row.portals.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {row.portals.map((portal) => (
+                          <span
+                            key={portal.portal}
+                            className={clsx('text-[10px] px-1.5 py-0.5 rounded font-medium', portal.publishOk ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600')}
+                          >
+                            {portal.portal}: {portal.publishOk ? '✓' : '✗'}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showHistory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-5xl rounded-2xl bg-white p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between flex-shrink-0">
+              <h3 className="text-lg font-bold text-slate-800">Agent Transfer History</h3>
+              <button type="button" onClick={() => setShowHistory(false)} className="text-slate-400 hover:text-slate-600 text-xl">✕</button>
+            </div>
+
+            {historyLoading && <p className="text-sm text-slate-500">Loading…</p>}
+            {!historyLoading && historyRows.length === 0 && <p className="text-sm text-slate-500">No transfers recorded yet.</p>}
+
+            {!historyLoading && historyRows.length > 0 && (
+              <div className="overflow-y-auto flex-1 rounded-lg border border-slate-200">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 sticky top-0 text-slate-600 uppercase tracking-wide font-semibold">
+                    <tr>
+                      <th className="px-3 py-2.5 text-left">Date</th>
+                      <th className="px-3 py-2.5 text-left">Associate</th>
+                      <th className="px-3 py-2.5 text-left">From MC</th>
+                      <th className="px-3 py-2.5 text-left">To MC</th>
+                      <th className="px-3 py-2.5 text-left">Listings Updated</th>
+                      <th className="px-3 py-2.5 text-left">Done By</th>
+                      <th className="px-3 py-2.5 text-left">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {historyRows.map((row) => (
+                      <tr key={row.id} className="hover:bg-slate-50">
+                        <td className="px-3 py-2 whitespace-nowrap text-slate-500">{new Date(row.transferred_at).toLocaleString('en-ZA', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                        <td className="px-3 py-2 text-slate-700 font-medium">{row.associate_name ?? row.associate_id}</td>
+                        <td className="px-3 py-2 text-slate-600">{row.from_market_center_name ?? row.from_source_market_center_id ?? '—'}</td>
+                        <td className="px-3 py-2 text-slate-600">{row.to_market_center_name ?? row.to_source_market_center_id ?? '—'}</td>
+                        <td className="px-3 py-2 text-slate-600">{row.listings_updated}</td>
+                        <td className="px-3 py-2 text-slate-500">{row.requested_by ?? '—'}</td>
+                        <td className="px-3 py-2">
+                          {row.transfer_error ? (
+                            <span className="text-red-600 font-medium">Failed</span>
+                          ) : (
+                            <span className="text-emerald-600 font-medium">Success</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Sub-tab: Agent Deregistration
 // ─────────────────────────────────────────────────────────────────────────────
@@ -823,6 +1412,7 @@ type DeregAgent = {
   email: string | null;
   mobile_number: string | null;
   image_url: string | null;
+  market_center_name?: string | null;
   total_listing_count: string;
   primary_listing_count: string;
 };
@@ -899,11 +1489,14 @@ type DeregStep =
 function AgentDeregistrationTab() {
   const { token, activeContext, isOfficeAdmin, isRegionalAdmin } = useAuth();
   const mcSourceId = activeContext?.marketCenterId ?? null;
+  const agentScopeMcId = isRegionalAdmin ? '__all__' : mcSourceId;
 
   // Agent list
   const [agents, setAgents] = useState<DeregAgent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [agentsError, setAgentsError] = useState<string | null>(null);
+  const [selectAgentSearch, setSelectAgentSearch] = useState('');
+  const [transferTargetSearch, setTransferTargetSearch] = useState('');
 
   // Flow state
   const [step, setStep] = useState<DeregStep>('select-agent');
@@ -936,10 +1529,10 @@ function AgentDeregistrationTab() {
 
   // Load agents
   useEffect(() => {
-    if (!mcSourceId) return;
+    if (!agentScopeMcId) return;
     setAgentsLoading(true);
     setAgentsError(null);
-    fetch(`/api/agent-deregistration/mc-agents/${encodeURIComponent(mcSourceId)}`, {
+    fetch(`/api/agent-deregistration/mc-agents/${encodeURIComponent(agentScopeMcId)}`, {
       headers: authHeaders(),
     })
       .then((r) => r.json())
@@ -949,7 +1542,7 @@ function AgentDeregistrationTab() {
       })
       .catch((err: unknown) => setAgentsError(err instanceof Error ? err.message : String(err)))
       .finally(() => setAgentsLoading(false));
-  }, [mcSourceId, authHeaders]);
+  }, [agentScopeMcId, authHeaders]);
 
   function resetFlow() {
     setStep('select-agent');
@@ -989,6 +1582,32 @@ function AgentDeregistrationTab() {
   const primaryListings = allListings.filter((l) => l.is_primary);
   const secondaryListings = allListings.filter((l) => !l.is_primary);
   const toAgent = agents.find((a) => a.associate_id === toAgentId);
+
+  const visibleDeregAgents = useMemo(() => {
+    const q = selectAgentSearch.trim().toLowerCase();
+    if (!q) return agents;
+    return agents.filter((agent) => [
+      agent.full_name,
+      agent.email,
+      agent.mobile_number,
+      agent.market_center_name,
+    ].some((value) => String(value ?? '').toLowerCase().includes(q)));
+  }, [agents, selectAgentSearch]);
+
+  const visibleTransferTargets = useMemo(() => {
+    const q = transferTargetSearch.trim().toLowerCase();
+    return agents
+      .filter((agent) => agent.associate_id !== selectedAgent?.associate_id)
+      .filter((agent) => {
+        if (!q) return true;
+        return [
+          agent.full_name,
+          agent.email,
+          agent.mobile_number,
+          agent.market_center_name,
+        ].some((value) => String(value ?? '').toLowerCase().includes(q));
+      });
+  }, [agents, selectedAgent?.associate_id, transferTargetSearch]);
 
   async function startTransfer() {
     if (!selectedAgent || !toAgentId) return;
@@ -1150,8 +1769,8 @@ function AgentDeregistrationTab() {
   }
 
   function reloadAgents() {
-    if (!mcSourceId) return;
-    fetch(`/api/agent-deregistration/mc-agents/${encodeURIComponent(mcSourceId)}`, { headers: authHeaders() })
+    if (!agentScopeMcId) return;
+    fetch(`/api/agent-deregistration/mc-agents/${encodeURIComponent(agentScopeMcId)}`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data: { agents?: DeregAgent[] }) => { if (data.agents) setAgents(data.agents); })
       .catch(() => undefined);
@@ -1238,6 +1857,16 @@ function AgentDeregistrationTab() {
         <div className="surface-card p-5 space-y-4">
           <p className="text-sm font-medium text-slate-600">Select the agent to deregister:</p>
 
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <input
+              value={selectAgentSearch}
+              onChange={(event) => setSelectAgentSearch(event.target.value)}
+              placeholder={isRegionalAdmin ? 'Search agents across all market centres...' : 'Search agents in this market centre...'}
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-100"
+            />
+            {isRegionalAdmin && <span className="text-xs text-slate-500">Region scope: all market centres</span>}
+          </div>
+
           {agentsLoading && (
             <div className="flex items-center gap-2 py-4 text-sm text-slate-500">
               <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -1250,12 +1879,12 @@ function AgentDeregistrationTab() {
           {agentsError && (
             <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{agentsError}</div>
           )}
-          {!agentsLoading && !agentsError && agents.length === 0 && (
+          {!agentsLoading && !agentsError && visibleDeregAgents.length === 0 && (
             <p className="text-sm text-slate-500 py-2">No active agents found in this market centre.</p>
           )}
-          {!agentsLoading && !agentsError && agents.length > 0 && (
+          {!agentsLoading && !agentsError && visibleDeregAgents.length > 0 && (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
-              {agents.map((agent) => {
+              {visibleDeregAgents.map((agent) => {
                 const total = Number(agent.total_listing_count);
                 return (
                   <button
@@ -1274,6 +1903,9 @@ function AgentDeregistrationTab() {
                     )}
                     <div className="w-full min-w-0">
                       <p className="truncate text-xs font-semibold text-slate-800 leading-4">{agent.full_name ?? 'Unknown'}</p>
+                      {isRegionalAdmin && agent.market_center_name && (
+                        <p className="mt-0.5 truncate text-[10px] text-slate-400">{agent.market_center_name}</p>
+                      )}
                       <p className={clsx('mt-0.5 text-[11px] font-medium', total > 0 ? 'text-slate-500' : 'text-slate-300')}>
                         {total} {total === 1 ? 'listing' : 'listings'}
                       </p>
@@ -1388,10 +2020,15 @@ function AgentDeregistrationTab() {
             <button type="button" onClick={resetFlow} className="text-slate-400 hover:text-slate-600 text-xl ml-4">✕</button>
           </div>
 
+          <input
+            value={transferTargetSearch}
+            onChange={(event) => setTransferTargetSearch(event.target.value)}
+            placeholder={isRegionalAdmin ? 'Search target agents across all market centres...' : 'Search target agents...'}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:border-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+          />
+
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
-            {agents
-              .filter((a) => a.associate_id !== selectedAgent.associate_id)
-              .map((agent) => {
+            {visibleTransferTargets.map((agent) => {
                 const isSelected = toAgentId === agent.associate_id;
                 const count = Number(agent.total_listing_count);
                 return (
@@ -1418,6 +2055,9 @@ function AgentDeregistrationTab() {
                     )}
                     <div className="w-full min-w-0">
                       <p className="truncate text-xs font-semibold text-slate-800 leading-4">{agent.full_name ?? 'Unknown'}</p>
+                      {isRegionalAdmin && agent.market_center_name && (
+                        <p className="mt-0.5 truncate text-[10px] text-slate-400">{agent.market_center_name}</p>
+                      )}
                       <p className={clsx('mt-0.5 text-[11px] font-medium', count > 0 ? (isSelected ? 'text-emerald-600' : 'text-slate-500') : 'text-slate-300')}>
                         {count} {count === 1 ? 'listing' : 'listings'}
                       </p>
@@ -3174,9 +3814,10 @@ function LoginActivityTab() {
   );
 }
 
-type SubTab = 'mc-dashboard' | 'rentals' | 'listing-transfer' | 'agent-deregistration' | 'agent-reactivation' | 'mc-document-hub' | 'support-tickets' | 'login-activity' | 'portal-recovery';
+type SubTab = 'mc-dashboard' | 'rentals' | 'listing-transfer' | 'agent-transfer' | 'agent-deregistration' | 'agent-reactivation' | 'mc-document-hub' | 'support-tickets' | 'login-activity' | 'portal-recovery';
 
 const COMMUNICATIONS_CONSOLE_ENABLED = String(import.meta.env.VITE_COMMUNICATIONS_CONSOLE_ENABLED ?? 'false').toLowerCase() === 'true';
+const LEGACY_COMMUNICATIONS_TAB_ENABLED = String(import.meta.env.VITE_LEGACY_COMMUNICATIONS_TAB_ENABLED ?? 'false').toLowerCase() === 'true';
 const PORTAL_RECOVERY_ENABLED = String(import.meta.env.VITE_PORTAL_RECOVERY_ENABLED ?? 'false').toLowerCase() === 'true';
 
 type CommunicationsStatus = {
@@ -4930,10 +5571,13 @@ const BASE_SUB_TABS: { id: BaseSubTab; label: string }[] = [
   { id: 'mc-dashboard', label: 'MC Dashboard' },
   { id: 'rentals', label: 'Rentals' },
   { id: 'listing-transfer', label: 'Listing Transfer' },
+  { id: 'agent-transfer', label: 'Agent Transfer' },
   { id: 'agent-deregistration', label: 'Agent Deregistration' },
   { id: 'agent-reactivation', label: 'Agent Reactivation' },
   { id: 'mc-document-hub', label: 'MC Document Hub' },
-  ...(COMMUNICATIONS_CONSOLE_ENABLED ? [{ id: 'communications' as const, label: 'Communications' }] : []),
+  ...(COMMUNICATIONS_CONSOLE_ENABLED && LEGACY_COMMUNICATIONS_TAB_ENABLED
+    ? [{ id: 'communications' as const, label: 'Communications (Legacy)' }]
+    : []),
 ];
 
 export default function MCAdminToolsPage() {
@@ -4950,7 +5594,12 @@ export default function MCAdminToolsPage() {
 
   useEffect(() => {
     const requestedTab = searchParams.get('tab');
-    if (requestedTab === 'communications' && COMMUNICATIONS_CONSOLE_ENABLED && isRegionalAdmin) {
+    if (
+      requestedTab === 'communications'
+      && COMMUNICATIONS_CONSOLE_ENABLED
+      && LEGACY_COMMUNICATIONS_TAB_ENABLED
+      && isRegionalAdmin
+    ) {
       setActiveSubTab('communications');
       return;
     }
@@ -5019,10 +5668,11 @@ export default function MCAdminToolsPage() {
       {activeSubTab === 'rentals' && <RentalsPage />}
       {activeSubTab === 'support-tickets' && <SupportTicketsTab />}
       {activeSubTab === 'listing-transfer' && <ListingTransferTab />}
+      {activeSubTab === 'agent-transfer' && <AgentTransferTab />}
       {activeSubTab === 'agent-deregistration' && <AgentDeregistrationTab />}
       {activeSubTab === 'agent-reactivation' && <AgentReactivationTab />}
       {activeSubTab === 'mc-document-hub' && <MCDocumentHubTab />}
-      {activeSubTab === 'communications' && isRegionalAdmin && COMMUNICATIONS_CONSOLE_ENABLED && <CommunicationsTab />}
+      {activeSubTab === 'communications' && isRegionalAdmin && COMMUNICATIONS_CONSOLE_ENABLED && LEGACY_COMMUNICATIONS_TAB_ENABLED && <CommunicationsTab />}
       {activeSubTab === 'login-activity' && isRegionalAdmin && <LoginActivityTab />}
       {activeSubTab === 'portal-recovery' && isRegionalAdmin && PORTAL_RECOVERY_ENABLED && <PortalRecoveryTab />}
     </div>

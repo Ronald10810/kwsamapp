@@ -2655,14 +2655,15 @@ export default function TransactionsPage() {
 
       {/* Transaction Workspace Modal */}
       {isFormOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 p-2 backdrop-blur-sm md:p-4">
-          <div className="mx-auto flex h-[calc(100vh-1rem)] max-w-[1800px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl md:h-[calc(100vh-2rem)]">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 p-0 backdrop-blur-sm sm:p-2 md:p-4">
+          <div className="mx-auto flex h-[100dvh] max-w-[1800px] flex-col overflow-hidden rounded-none border-0 bg-white shadow-2xl sm:h-[calc(100vh-1rem)] sm:rounded-2xl sm:border sm:border-slate-200 md:h-[calc(100vh-2rem)]">
 
             {/* Modal Header */}
-            <div className="border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
-              <div>
+            <div className="shrink-0 border-b border-slate-200 px-3 py-3 sm:px-4 sm:py-3 md:px-6 md:py-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
                 <p className="text-xs uppercase tracking-wide text-slate-500">Transaction Workspace</p>
-                <h2 className="text-2xl font-semibold text-slate-900 flex items-center gap-3">
+                <h2 className="flex flex-wrap items-center gap-2 text-xl font-semibold text-slate-900 sm:text-2xl">
                   {form.transaction_number ? (
                     <span className="rounded-md bg-red-50 px-2 py-0.5 text-base font-bold text-red-700 border border-red-200">{form.transaction_number}</span>
                   ) : (
@@ -2674,22 +2675,27 @@ export default function TransactionsPage() {
                   <span className="mt-0.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{form.transaction_status}</span>
                 )}
               </div>
-              <div className="flex items-center gap-2">
-                <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" type="button" onClick={() => setIsFormOpen(false)}>Cancel</button>
-                <button className="rounded-lg border border-slate-300 px-4 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50" type="button">
-                  Feed to Frontdoor
-                </button>
-                <button className="primary-btn" type="button" onClick={() => void saveTransaction()} disabled={isSaving}>
+              <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+                <button className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm sm:flex-none sm:py-1.5" type="button" onClick={() => setIsFormOpen(false)}>Cancel</button>
+                {isRegionalAdmin && (
+                  <button className="flex-1 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 sm:flex-none sm:py-1.5" type="button">
+                    Feed to Frontdoor
+                  </button>
+                )}
+                <button className="primary-btn flex-1 sm:flex-none" type="button" onClick={() => void saveTransaction()} disabled={isSaving}>
                   {isSaving ? 'Saving...' : 'Save'}
                 </button>
+              </div>
               </div>
             </div>
 
             {/* Body: sidebar + content */}
-            <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 flex-1 flex-col md:flex-row">
 
               {/* Sidebar Navigation */}
-              <aside className="w-56 border-r border-slate-200 bg-slate-50 p-3 space-y-1 shrink-0">
+              <aside className="w-full shrink-0 border-b border-slate-200 bg-slate-50 p-2 md:w-56 md:border-b-0 md:border-r md:p-3">
+                <div className="overflow-x-auto md:overflow-visible">
+                <div className="flex min-w-max gap-1 md:block md:min-w-0 md:space-y-1">
                 {([
                   ['details', 'Transaction Details'],
                   ['parties', 'Transaction Parties'],
@@ -2702,15 +2708,17 @@ export default function TransactionsPage() {
                     key={key}
                     type="button"
                     onClick={() => setEditTab(key)}
-                    className={`w-full rounded-lg px-3 py-2 text-left text-sm font-medium ${editTab === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'}`}
+                    className={`rounded-lg px-3 py-2 text-left text-sm font-medium whitespace-nowrap md:w-full ${editTab === key ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-white'}`}
                   >
                     {label}
                   </button>
                 ))}
+                </div>
+                </div>
               </aside>
 
               {/* Content Panel */}
-              <div className="flex-1 overflow-auto p-6 space-y-6">
+              <div className="flex-1 overflow-auto p-3 space-y-4 sm:p-4 md:p-6 md:space-y-6">
                 {formError && <p className="text-sm text-amber-700 rounded-lg bg-amber-50 p-3 border border-amber-200">{formError}</p>}
 
                 {editTab === 'details' && (
@@ -2913,7 +2921,7 @@ export default function TransactionsPage() {
                           })()}
                           {form.agents.map((agent, idx) => (
                             <div key={idx} className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
-                              <div className="flex items-end gap-2">
+                              <div className="flex flex-col gap-2 md:flex-row md:items-end">
                                 <label className="flex-1 flex flex-col gap-1">
                                   <span className="text-xs font-medium text-slate-600">Role</span>
                                   <select
@@ -2944,17 +2952,17 @@ export default function TransactionsPage() {
                                     </select>
                                   </label>
                                 )}
-                                <label className="w-28 flex flex-col gap-1">
+                                <label className="w-full md:w-28 flex flex-col gap-1">
                                   <span className="text-xs font-medium text-slate-600">Split %</span>
                                   <input type="number" step="0.01" min="0" max="100" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="0.00" value={agent.split_percentage} onChange={(e) => updateAgent(idx, 'split_percentage', e.target.value)} />
                                 </label>
-                                <button type="button" onClick={() => removeAgent(idx)} className="rounded-lg bg-red-50 px-2 py-2 text-sm font-medium text-red-600 hover:bg-red-100">
+                                <button type="button" onClick={() => removeAgent(idx)} className="w-full rounded-lg bg-red-50 px-2 py-2 text-sm font-medium text-red-600 hover:bg-red-100 md:w-auto">
                                   Remove
                                 </button>
                               </div>
                               {isOutsideAgentRole(agent.agent_role) && (
-                                <div className="grid grid-cols-2 gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3">
-                                  <p className="col-span-2 text-xs font-semibold text-amber-900">Outside Agent Details</p>
+                                <div className="grid grid-cols-1 gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 sm:grid-cols-2">
+                                  <p className="text-xs font-semibold text-amber-900 sm:col-span-2">Outside Agent Details</p>
                                   <input className="rounded-lg border border-amber-300 px-3 py-2 text-sm" placeholder="First Name" value={agent.outside_agency.first_name} onChange={(e) => updateOutsideAgency(idx, 'first_name', e.target.value)} />
                                   <input className="rounded-lg border border-amber-300 px-3 py-2 text-sm" placeholder="Last Name" value={agent.outside_agency.last_name} onChange={(e) => updateOutsideAgency(idx, 'last_name', e.target.value)} />
                                   <input className="rounded-lg border border-amber-300 px-3 py-2 text-sm" placeholder="Email" type="email" value={agent.outside_agency.email} onChange={(e) => updateOutsideAgency(idx, 'email', e.target.value)} />
@@ -3207,7 +3215,7 @@ export default function TransactionsPage() {
                             created_at: doc.created_at,
                             updated_at: doc.created_at,
                           }))).map((doc) => (
-                            <div key={doc.id} className="flex items-center justify-between gap-3 p-4">
+                            <div key={doc.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                               <div>
                                 <p className="text-sm font-semibold text-slate-900">{doc.file_name || 'Document'}</p>
                                 <p className="text-xs text-slate-500">
@@ -3215,13 +3223,13 @@ export default function TransactionsPage() {
                                   {!editingId ? ' • Staged' : doc.id.startsWith('staging:') ? ' • Legacy source' : ''}
                                 </p>
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex w-full items-center gap-2 sm:w-auto">
                                 {doc.document_url && (
                                   <a
                                     href={doc.document_url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                    className="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-center text-xs font-medium text-slate-700 hover:bg-slate-50 sm:flex-none"
                                   >
                                     Open
                                   </a>
@@ -3236,7 +3244,7 @@ export default function TransactionsPage() {
                                     }
                                     void deleteTransactionDocument(doc.id);
                                   }}
-                                  className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="flex-1 rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
                                 >
                                   {editingId ? 'Delete' : 'Remove'}
                                 </button>

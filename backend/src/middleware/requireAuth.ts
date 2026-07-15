@@ -40,6 +40,19 @@ declare global {
 }
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const internalJobToken = String(req.headers['x-internal-job-token'] ?? '').trim();
+  if (env.automation.jobToken && internalJobToken && internalJobToken === env.automation.jobToken) {
+    req.user = {
+      userId: 0,
+      email: 'automation@kwsa.local',
+      name: 'Automation Job',
+      picture: null,
+      role: 'SYSTEM_INTERNAL',
+    };
+    next();
+    return;
+  }
+
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Unauthorised' });
@@ -107,6 +120,19 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
  * (e.g., LOOM, public APIs). Just validates JWT.
  */
 export async function requireAuthNoAssociate(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const internalJobToken = String(req.headers['x-internal-job-token'] ?? '').trim();
+  if (env.automation.jobToken && internalJobToken && internalJobToken === env.automation.jobToken) {
+    req.user = {
+      userId: 0,
+      email: 'automation@kwsa.local',
+      name: 'Automation Job',
+      picture: null,
+      role: 'SYSTEM_INTERNAL',
+    };
+    next();
+    return;
+  }
+
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Unauthorised' });

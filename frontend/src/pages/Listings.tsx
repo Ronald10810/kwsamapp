@@ -3153,7 +3153,13 @@ export default function Listings() {
       if (anyPortalEnabled && savedId) {
         await Promise.all([
           form.feed_to_property24
-            ? fetch(`/api/listings/${savedId}/publish-to-property24`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+            ? fetch(`/api/listings/${savedId}/publish-to-property24`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  occupation_date: effectiveForm.occupation_date,
+                }),
+              })
                 .then(async (r) => {
                   const body = (await r.json().catch(() => ({}))) as { success?: boolean; message?: string; property24_reference_id?: string | null; error?: string; details?: unknown };
                   if (r.ok && body.success) {
@@ -4223,54 +4229,123 @@ export default function Listings() {
                       </label>
                       {sel('For Sale or Rent', 'sale_or_rent', options?.sale_or_rent_types ?? [])}
                       {inp('Expiry Date', 'expiry_date', { type: 'date' })}
-                      {sel('Listing Status', 'status_name', options?.listing_statuses ?? ['Active', 'Inactive', 'Draft'])}
                       {(() => {
                         const isRental = (form.sale_or_rent ?? '').toLowerCase().includes('rent');
+                        const todayDateInput = new Date();
+                        todayDateInput.setMinutes(todayDateInput.getMinutes() - todayDateInput.getTimezoneOffset());
+                        const todayIso = todayDateInput.toISOString().slice(0, 10);
                         // Portal mapping hints - vary by sale vs rental
-                        const STATUS_TAG_HINTS: Record<string, string> = isRental ? {
-                          'To Rent':           'P24: Active (To Let) | KWW: For Rent | PP: To Let',
-                          'For Sale':          'P24: Active (To Let) | KWW: For Rent | PP: To Let',
-                          'Reduced':           'P24: Reduced banner | KWW: For Rent | PP: To Let',
-                          'Under Offer':       'P24: Pending banner | KWW: Pending | PP: Pending Offer',
-                          'Sold':              'P24: Sold | KWW: Sold | PP: Sold',
-                          'Withdrawn':         'P24: Withdrawn (delisted) | KWW: Withdrawn | PP: Inactive',
-                          'Expired':           'P24: Expired (delisted) | KWW: Expired',
-                          'Pending Approval':  'Internal only - not sent to portals until approved',
-                          'Approval Declined': 'Internal only - listing blocked from publishing',
-                        } : {
-                          'For Sale':          'P24: Active | KWW: For Sale | PP: For Sale',
-                          'Reduced':           'P24: Reduced banner | KWW: For Sale | PP: For Sale',
-                          'Under Offer':       'P24: Pending banner | KWW: Pending | PP: Pending Offer',
-                          'Sold':              'P24: Sold | KWW: Sold | PP: Sold',
-                          'Withdrawn':         'P24: Withdrawn (delisted) | KWW: Withdrawn | PP: Inactive',
-                          'Expired':           'P24: Expired (delisted) | KWW: Expired',
-                          'Pending Approval':  'Internal only - not sent to portals until approved',
-                          'Approval Declined': 'Internal only - listing blocked from publishing',
-                        };
-                        const currentHint = STATUS_TAG_HINTS[form.listing_status_tag] ?? null;
-                        const baseTagChoices = options?.listing_status_tags ?? ['For Sale', 'To Rent', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'];
+                        const baseTagChoices = options?.listing_status_tags ?? ['For Sale', 'To Rent', 'Rented', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'];
                         // For rental listings: show To Rent + non-sale tags; hide For Sale as primary choice
                         const tagChoices = isRental
                           ? baseTagChoices.filter((t) => t !== 'For Sale')
-                          : baseTagChoices.filter((t) => t !== 'To Rent');
+                          : baseTagChoices.filter((t) => t !== 'To Rent' && t !== 'Rented');
+                        const quickActions: Array<{
+                          label: string;
+                          status_name: string;
+                          listing_status_tag: string;
+                          style: 'neutral' | 'success' | 'warning' | 'danger';
+                        }> = isRental
+                          ? [
+                              { label: 'Mark Rented', status_name: 'Inactive', listing_status_tag: 'Rented', style: 'success' },
+                              { label: 'Withdraw Listing', status_name: 'Inactive', listing_status_tag: 'Withdrawn', style: 'danger' },
+                            ]
+                          : [
+                              { label: 'Under Offer', status_name: 'Active', listing_status_tag: 'Under Offer', style: 'warning' },
+                              { label: 'Reduce Price', status_name: 'Active', listing_status_tag: 'Reduced', style: 'neutral' },
+                              { label: 'SOLD', status_name: 'Inactive', listing_status_tag: 'Sold', style: 'success' },
+                              { label: 'Withdraw Listing', status_name: 'Inactive', listing_status_tag: 'Withdrawn', style: 'danger' },
+                            ];
+
+                        const hasPublishedReference = Boolean(
+                          form.property24_ref1
+                          || form.private_property_ref1
+                          || form.kww_ref1
+                          || form.entegral_reference_id,
+                        );
+                        const showQuickActions = Boolean(form.is_published) || hasPublishedReference;
+                        const canOverridePublishedStatus = isRegionalAdmin || isOfficeAdmin;
+                        const useReadOnlyPublishedStatus = showQuickActions && !canOverridePublishedStatus;
+
+                        const actionButtonClass = (style: 'neutral' | 'success' | 'warning' | 'danger', isActive: boolean): string => {
+                          if (isActive) {
+                            if (style === 'success') return 'border-emerald-500 bg-emerald-100 text-emerald-800 shadow-sm';
+                            if (style === 'warning') return 'border-amber-500 bg-amber-100 text-amber-800 shadow-sm';
+                            if (style === 'danger') return 'border-rose-500 bg-rose-100 text-rose-800 shadow-sm';
+                            return 'border-slate-500 bg-slate-100 text-slate-800 shadow-sm';
+                          }
+                          if (style === 'success') return 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50';
+                          if (style === 'warning') return 'border-amber-300 bg-white text-amber-700 hover:bg-amber-50';
+                          if (style === 'danger') return 'border-rose-300 bg-white text-rose-700 hover:bg-rose-50';
+                          return 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50';
+                        };
+
                         return (
-                          <label className="flex flex-col gap-1">
-                            <span className="text-xs font-medium text-slate-600">Listing Status Tag</span>
-                            <select
-                              className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
-                              value={form.listing_status_tag}
-                              onChange={(e) => setForm((p) => ({ ...p, listing_status_tag: e.target.value }))}
-                            >
-                              <option value="">-- Select --</option>
-                              {tagChoices.map((c) => <option key={c} value={c}>{c}</option>)}
-                            </select>
-                            {currentHint && (
-                              <span className="text-xs text-slate-500 leading-tight">{currentHint}</span>
+                          <>
+                            {useReadOnlyPublishedStatus ? (
+                              <label className="flex flex-col gap-1">
+                                <span className="text-xs font-medium text-slate-600">Listing Status</span>
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 min-h-[42px] flex items-center">
+                                  {form.status_name || 'Not set'}
+                                </div>
+                              </label>
+                            ) : (
+                              sel('Listing Status', 'status_name', options?.listing_statuses ?? ['Active', 'Inactive', 'Draft'])
                             )}
-                          </label>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-xs font-medium text-slate-600">Listing Status Tag</span>
+                              {useReadOnlyPublishedStatus ? (
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 min-h-[42px] flex items-center">
+                                  {form.listing_status_tag || 'Not set'}
+                                </div>
+                              ) : (
+                                <select
+                                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
+                                  value={form.listing_status_tag}
+                                  onChange={(e) => setForm((p) => ({ ...p, listing_status_tag: e.target.value }))}
+                                >
+                                  <option value="">-- Select --</option>
+                                  {tagChoices.map((c) => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              )}
+                            </label>
+                            {sel('Ownership Type', 'ownership_type', options?.ownership_types ?? [])}
+                            {showQuickActions ? (
+                              <div className="md:col-span-3 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2.5">
+                                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 px-1">Quick Status Actions</div>
+                                <div
+                                  className={`grid gap-2 ${quickActions.length === 4 ? 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-4' : quickActions.length === 3 ? 'grid-cols-3' : quickActions.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}
+                                >
+                                  {quickActions.map((action) => {
+                                    const isActiveAction =
+                                      (form.status_name ?? '').toLowerCase().trim() === action.status_name.toLowerCase()
+                                      && (form.listing_status_tag ?? '').toLowerCase().trim() === action.listing_status_tag.toLowerCase();
+                                    return (
+                                      <button
+                                        key={action.label}
+                                        type="button"
+                                        className={`h-9 w-full rounded-md border px-3 text-sm font-semibold transition-colors ${actionButtonClass(action.style, isActiveAction)}`}
+                                        onClick={() => setForm((p) => ({
+                                          ...p,
+                                          status_name: action.status_name,
+                                          listing_status_tag: action.listing_status_tag,
+                                          reduced_date: action.listing_status_tag === 'Reduced' && !p.reduced_date ? todayIso : p.reduced_date,
+                                        }))}
+                                      >
+                                        {action.label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="md:col-span-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 min-h-[72px] flex items-center">
+                                <span className="text-xs text-slate-500">Quick status actions become available after the first successful publish.</span>
+                              </div>
+                            )}
+                          </>
                         );
                       })()}
-                      {sel('Ownership Type', 'ownership_type', options?.ownership_types ?? [])}
                     </div>
 
                     <h4 className="text-base font-semibold text-slate-800 border-t pt-4">Listing Price</h4>

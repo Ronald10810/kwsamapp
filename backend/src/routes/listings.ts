@@ -202,8 +202,6 @@ function deriveApprovedListingStatusTag(
   preSubmitTagRaw?: unknown,
 ): string {
   const saleOrRent = (toText(saleOrRentRaw) ?? '').toLowerCase().trim();
-  if (saleOrRent.includes('rent')) return 'To Rent';
-  if (saleOrRent.includes('sale')) return 'For Sale';
 
   const blockedTags = new Set([
     'pending approval',
@@ -219,10 +217,14 @@ function deriveApprovedListingStatusTag(
     if (!value) continue;
     const normalized = value.toLowerCase();
     if (blockedTags.has(normalized)) continue;
+    if (saleOrRent.includes('rent') && normalized === 'rented') return 'Rented';
     if (normalized.includes('rent')) return 'To Rent';
     if (normalized.includes('sale')) return 'For Sale';
     return value;
   }
+
+  if (saleOrRent.includes('rent')) return 'To Rent';
+  if (saleOrRent.includes('sale')) return 'For Sale';
 
   return 'For Sale';
 }
@@ -330,6 +332,34 @@ function toDateValue(value: unknown): string | null {
   const month = parts.find((part) => part.type === 'month')?.value ?? '01';
   const day = parts.find((part) => part.type === 'day')?.value ?? '01';
   return `${year}-${month}-${day}`;
+}
+
+function extractLegacyOccupationDate(listingPayload: unknown): string | null {
+  if (!listingPayload || typeof listingPayload !== 'object') return null;
+  const payload = listingPayload as Record<string, unknown>;
+
+  const nestedRentalInfo = payload.rentalInfo;
+  const rentalInfo = nestedRentalInfo && typeof nestedRentalInfo === 'object'
+    ? (nestedRentalInfo as Record<string, unknown>)
+    : null;
+
+  const candidates: unknown[] = [
+    payload.occupation_date,
+    payload.occupationDate,
+    payload.available_from,
+    payload.availableFrom,
+    payload.available_date,
+    payload.availableDate,
+    rentalInfo?.occupationDate,
+    rentalInfo?.availableFrom,
+  ];
+
+  for (const candidate of candidates) {
+    const parsed = toDateValue(candidate);
+    if (parsed) return parsed;
+  }
+
+  return null;
 }
 
 function toDateTimeValue(value: unknown): string | null {
@@ -1224,7 +1254,7 @@ function isCanonicalKwlListingNumber(value: string | null | undefined): value is
 router.get('/options', async (_req, res) => {
   const base = {
     listing_statuses: ['Active', 'Inactive', 'Draft'],
-    listing_status_tags: ['For Sale', 'To Rent', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'],
+    listing_status_tags: ['For Sale', 'To Rent', 'Rented', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'],
     ownership_types: ['Full Title', 'Sectional Title', 'Fractional', 'Leasehold', 'Share Block', 'Time Share'],
     sale_or_rent_types: ['For Sale', 'Procurement Rental', 'Management Rental'],
     property_types: ['Residential', 'Commercial', 'Industrial', 'Business', 'Farm'],
@@ -3286,7 +3316,9 @@ function buildRentalRateCandidatesForProperty24(value: unknown): Array<string | 
 
   const fromIndex = (index: number): Array<string | number> => {
     const safeIndex = Math.max(0, Math.min(index, enumNames.length - 1));
-    return [enumNames[safeIndex], safeIndex, String(safeIndex)];
+    // Property24 is strict about rentalRate enum conversion in some environments.
+    // Prefer numeric enum-code representations first, then keep enum-name fallback.
+    return [String(safeIndex), safeIndex, enumNames[safeIndex]];
   };
 
   if (/^[0-4]$/.test(text)) return fromIndex(Number(text));
@@ -3304,7 +3336,7 @@ function buildRentalRateCandidatesForProperty24(value: unknown): Array<string | 
     case 'persquaremetre':
     case 'sqm':
     case 'm2':
-      return ['PerSquareMeter', 'PerSquareMetre', 4, '4', 'Per Square Meter', 'Per Square Metre', null];
+      return ['4', 4, 'PerSquareMeter', 'PerSquareMetre', 'Per Square Meter', 'Per Square Metre', null];
     default:
       return [text, null];
   }
@@ -3928,6 +3960,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
   };
 
   try {
+    const publishBody = (req.body ?? {}) as Record<string, unknown>;
     // Load the full listing row
     const listingResult = await pool.query(
       `SELECT
@@ -3966,6 +3999,26 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     }
 
     const listing = listingResult.rows[0] as Record<string, unknown>;
+    const marketingUrlsResult = await pool.query<{
+      url: string | null;
+      url_type: string | null;
+      display_name: string | null;
+      sort_order: number | null;
+    }>(
+      `SELECT url, url_type, display_name, sort_order
+       FROM migration.listing_marketing_urls
+       WHERE listing_id = $1
+       ORDER BY sort_order ASC NULLS LAST, id ASC`,
+      [id],
+    );
+    const marketingUrls = marketingUrlsResult.rows
+      .map((row) => normalizeMarketingUrlRecord(row as Record<string, unknown>))
+      .map((row) => ({
+        url: typeof row.url === 'string' ? row.url.trim() : '',
+        url_type: typeof row.url_type === 'string' ? row.url_type.trim() : '',
+      }))
+      .filter((row) => row.url.length > 0);
+    const portalMedia = pickPortalMediaFromMarketingUrls(marketingUrls);
 
     const agentResult = await pool.query(
             `SELECT a.id AS associate_id, a.market_center_id, a.source_market_center_id, a.source_team_id,
@@ -4075,26 +4128,6 @@ router.post('/:id/publish-to-property24', async (req, res) => {
 
     // Load image URLs (fallback to listing_images table when legacy json cache is empty)
     const imageUrls = await resolveListingImageUrls(pool, id, listing.listing_images_json);
-    const marketingUrlsResult = await pool.query<{
-      url: string | null;
-      url_type: string | null;
-      display_name: string | null;
-      sort_order: number | null;
-    }>(
-      `SELECT url, url_type, display_name, sort_order
-       FROM migration.listing_marketing_urls
-       WHERE listing_id = $1
-       ORDER BY sort_order ASC NULLS LAST, id ASC`,
-      [id],
-    );
-    const marketingUrls = marketingUrlsResult.rows
-      .map((row) => normalizeMarketingUrlRecord(row as Record<string, unknown>))
-      .map((row) => ({
-        url: typeof row.url === 'string' ? row.url.trim() : '',
-        url_type: typeof row.url_type === 'string' ? row.url_type.trim() : '',
-      }))
-      .filter((row) => row.url.length > 0);
-    const portalMedia = pickPortalMediaFromMarketingUrls(marketingUrls);
 
     // Determine existing reference and whether this is a withdraw action
     const existingRef = toText(listing.property24_ref1) ?? toText(listing.property24_ref2);
@@ -4106,25 +4139,26 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     //   Reduced        → "Reduced"
     //   Under Offer    → "Pending"   (P24 uses "Pending" for under-offer/pending-sale)
     //   Sold           → "Sold"
+    //   Rented         → "Rented"
     //   Withdrawn      → "Withdrawn"
     //   Expired        → "Expired"
     //   everything else → "Active"
     let p24Status: string;
-    if (statusTag === 'withdrawn' || statusTag === 'withdraw' || statusName === 'withdrawn' || statusName === 'inactive') {
-      p24Status = 'Withdrawn';
-    } else if (statusTag === 'sold' || statusName === 'sold') {
+    if (statusTag === 'sold' || statusName === 'sold') {
       p24Status = 'Sold';
+    } else if (statusTag === 'rented' || statusName === 'rented') {
+      p24Status = 'Rented';
     } else if (statusTag === 'under offer' || statusTag === 'pending' || statusTag.includes('offer')) {
       p24Status = 'Pending';
     } else if (statusTag === 'reduced') {
       p24Status = 'Reduced';
     } else if (statusTag === 'expired') {
       p24Status = 'Expired';
+    } else if (statusTag === 'withdrawn' || statusTag === 'withdraw' || statusName === 'withdrawn' || statusName === 'inactive') {
+      p24Status = 'Withdrawn';
     } else {
       p24Status = 'Active';
     }
-    const isWithdraw = p24Status === 'Withdrawn';
-
     const listingType = mapListingTypeToProperty24(listing.sale_or_rent);
     const description = toText(listing.property_description) ?? toText(listing.short_description) ?? '';
     const descriptionWithShowWindows = appendShowWindowSummary(description, showWindows);
@@ -4559,6 +4593,10 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     const expiryDateValue =
       toDateValue(listing.expiry_date) ??
       new Date(Date.now() + (90 * 24 * 60 * 60 * 1000)).toISOString().slice(0, 10);
+    const occupationDateValue =
+      toDateValue(listing.occupation_date)
+      ?? toDateValue(publishBody.occupation_date)
+      ?? extractLegacyOccupationDate(listing.listing_payload);
 
     const propertyTypeId = mapPropertyTypeIdForProperty24(listing.property_type, listing.property_sub_type);
     const resolvedLatitude =
@@ -4575,6 +4613,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     if (contactAgentIds.length === 0) missingFields.push('contactAgentIds');
     if (!description.trim()) missingFields.push('description');
     if (!expiryDateValue) missingFields.push('expiryDate');
+    if (listingType === 'Rental' && !occupationDateValue) missingFields.push('occupation_date (required for P24 Available Date)');
     if (!resolvedSuburbId) missingFields.push('propertyInfo.suburbId');
     if (!marketCenter && !toText(listing.market_center_id)) missingFields.push('listing.market_center_id');
 
@@ -4640,7 +4679,6 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     // free-form `Other.tags` strings for this payload shape with HTTP 400 conversion errors.
 
     const initialRentalRate = rentalRateCandidates[0] ?? null;
-    const occupationDateValue = toDateValue(listing.occupation_date);
 
     const p24Payload: Record<string, unknown> = {
       agencyId: Number(resolvedAgencyId),
@@ -4812,7 +4850,18 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         || (fallbackText.includes('status') && fallbackText.includes('could not be converted'));
     };
 
+    const hasRentedStatusRejection = (body: Record<string, unknown>, rawText: string): boolean => {
+      const text = `${JSON.stringify(body)} ${rawText}`.toLowerCase();
+      if (!text.includes('rented')) return false;
+      return text.includes('could not be converted')
+        || text.includes('invalid')
+        || text.includes('not supported')
+        || text.includes('unknown')
+        || text.includes('enum');
+    };
+
     let publishedStatus = p24Status;
+    let statusFallbackApplied: { from: string; to: string; reason: string } | null = null;
     let p24Response = await fetchWithRetries(
       apiUrl,
       {
@@ -4897,6 +4946,44 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       }
     }
 
+    const rentedFallbackStatus = statusName === 'inactive' ? 'Withdrawn' : 'Active';
+    const canRetryWithRentedFallback =
+      !p24Response.ok
+      && p24Status === 'Rented'
+      && p24Response.status === 400
+      && (hasStatusConversionError(responseBody, responseText) || hasRentedStatusRejection(responseBody, responseText));
+
+    if (canRetryWithRentedFallback) {
+      const rentedFallbackPayload = { ...p24Payload, status: rentedFallbackStatus };
+      console.warn(
+        `[P24] Retrying listing ${String(listing.listing_number)} with status ${rentedFallbackStatus} after Rented status rejection`,
+      );
+
+      p24Response = await fetchWithRetries(
+        apiUrl,
+        {
+          method: apiMethod,
+          headers: p24Headers,
+          body: JSON.stringify(rentedFallbackPayload),
+        },
+        { attempts: 2, timeoutMs: 30000 },
+      );
+
+      responseText = await p24Response.text();
+      responseBody = parseP24ResponseBody(responseText);
+      if (p24Response.ok) {
+        publishedStatus = rentedFallbackStatus;
+        statusFallbackApplied = {
+          from: 'Rented',
+          to: rentedFallbackStatus,
+          reason: 'Property24 rejected Rented status value',
+        };
+        console.info(
+          `[P24] Applied status fallback for listing ${String(listing.listing_number)}: Rented -> ${rentedFallbackStatus}`,
+        );
+      }
+    }
+
     console.info(`[P24] Response HTTP ${p24Response.status}: ${JSON.stringify(responseBody).slice(0, 500)}`);
 
     if (!p24Response.ok) {
@@ -4933,7 +5020,8 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       existingRef
     );
 
-    const syncStatus = `${publishedStatus === 'Withdrawn' ? 'Withdrawn' : 'Published'} ${new Date().toISOString().slice(0, 10)}`;
+    const finalIsWithdraw = publishedStatus === 'Withdrawn';
+    const syncStatus = `${finalIsWithdraw ? 'Withdrawn' : 'Published'} ${new Date().toISOString().slice(0, 10)}`;
 
     await pool.query(
       `UPDATE migration.core_listings
@@ -4944,7 +5032,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
            is_draft = false,
            updated_at = NOW()
        WHERE id = $1`,
-      [id, returnedRef, syncStatus, !isWithdraw]
+      [id, returnedRef, syncStatus, !finalIsWithdraw]
     );
 
     console.info(`[P24] ${publishedStatus} successfully: listing=${String(listing.listing_number)} ref=${returnedRef ?? 'n/a'}`);
@@ -4955,13 +5043,17 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     const warningSummary = p24PhotoSelection.skippedCount > 0
       ? ` ${p24PhotoSelection.skippedCount} image${p24PhotoSelection.skippedCount === 1 ? '' : 's'} skipped due size/payload limits.`
       : '';
+    const fallbackSummary = statusFallbackApplied
+      ? ` Status fallback applied: ${statusFallbackApplied.from} -> ${statusFallbackApplied.to}.`
+      : '';
 
     return res.json({
       success: true,
       property24_reference_id: returnedRef,
-      message: `${publishedStatus === 'Withdrawn' ? 'Withdrawn from' : 'Published to'} Property24 successfully${returnedRef ? ` (ref: ${returnedRef})` : ''}.${photoSummary}${warningSummary}`,
+      message: `${publishedStatus === 'Withdrawn' ? 'Withdrawn from' : 'Published to'} Property24 successfully${returnedRef ? ` (ref: ${returnedRef})` : ''}.${photoSummary}${warningSummary}${fallbackSummary}`,
       details: {
         property24: responseBody,
+        status_fallback: statusFallbackApplied,
         photo_selection: {
           source_count: p24PhotoSelection.sourceCount,
           selected_count: p24PhotoSelection.selectedCount,
@@ -5036,12 +5128,14 @@ function normalizeEmailAlias(value: string | null): string | null {
 }
 
 function mapPpHomeType(subType: string): string {
-  const s = subType.toLowerCase();
-  if (['house', 'cluster', 'simplex', 'georgian', 'duet'].some((v) => s.includes(v))) return 'House';
-  if (s.includes('townhouse')) return 'Townhouse';
-  if (['apartment', 'flat', 'bachelor', 'loft', 'penthouse', 'studio'].some((v) => s.includes(v))) return 'Apartment';
-  if (s.includes('duplex')) return 'Duplex';
-  if (s.includes('cottage')) return 'Garden Cottage';
+  const normalized = ` ${subType.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+  const hasToken = (value: string): boolean => normalized.includes(` ${value} `);
+
+  if (hasToken('townhouse') || hasToken('town house')) return 'Townhouse';
+  if (['house', 'cluster', 'simplex', 'georgian', 'duet'].some((v) => hasToken(v))) return 'House';
+  if (['apartment', 'flat', 'bachelor', 'loft', 'penthouse', 'studio'].some((v) => hasToken(v))) return 'Apartment';
+  if (hasToken('duplex')) return 'Duplex';
+  if (hasToken('cottage')) return 'Garden Cottage';
   return 'House';
 }
 
@@ -5275,7 +5369,26 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     }
 
     const listing = listingResult.rows[0] as Record<string, unknown>;
-
+    const marketingUrlsResult = await pool.query<{
+      url: string | null;
+      url_type: string | null;
+      display_name: string | null;
+      sort_order: number | null;
+    }>(
+      `SELECT url, url_type, display_name, sort_order
+       FROM migration.listing_marketing_urls
+       WHERE listing_id = $1
+       ORDER BY sort_order ASC NULLS LAST, id ASC`,
+      [id],
+    );
+    const marketingUrls = marketingUrlsResult.rows
+      .map((row) => normalizeMarketingUrlRecord(row as Record<string, unknown>))
+      .map((row) => ({
+        url: typeof row.url === 'string' ? row.url.trim() : '',
+        url_type: typeof row.url_type === 'string' ? row.url_type.trim() : '',
+      }))
+      .filter((row) => row.url.length > 0);
+    const portalMedia = pickPortalMediaFromMarketingUrls(marketingUrls);
     const agentResult = await pool.query(
       `SELECT la.associate_id::text, la.is_primary, la.sort_order,
               a.market_center_id::text AS market_center_id,
@@ -5325,27 +5438,34 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     void toText(listing.market_center_id);
     void toText(primaryAgent?.market_center_id);
 
+    const buildPpAgentMatchCandidates = (agent: PpPublishAgentRow): string[] => {
+      const candidates: string[] = [];
+      const kwsaEmail = toText(agent.kwsa_email);
+      const publicEmail = toText(agent.email);
+      const privateEmail = toText(agent.private_email);
+      const values = [
+        toText(agent.associate_id),
+        toText(agent.source_associate_id),
+        kwsaEmail,
+        normalizeEmailAlias(kwsaEmail),
+        publicEmail,
+        normalizeEmailAlias(publicEmail),
+        privateEmail,
+        normalizeEmailAlias(privateEmail),
+      ];
+      for (const value of values) {
+        if (value && !candidates.includes(value)) {
+          candidates.push(value);
+        }
+      }
+      return candidates;
+    };
+
     const buildAgentCandidates = (): string[] => {
       const candidates: string[] = [];
       for (const agent of listingAgents) {
-        const kwsaEmail = toText(agent.kwsa_email);
-        const publicEmail = toText(agent.email);
-        const privateEmail = toText(agent.private_email);
-        const kwsaEmailNoAlias = normalizeEmailAlias(kwsaEmail);
-        const publicEmailNoAlias = normalizeEmailAlias(publicEmail);
-        const privateEmailNoAlias = normalizeEmailAlias(privateEmail);
-        const values = [
-          toText(agent.associate_id),
-          toText(agent.source_associate_id),
-          kwsaEmail,
-          kwsaEmailNoAlias,
-          publicEmail,
-          publicEmailNoAlias,
-          privateEmail,
-          privateEmailNoAlias,
-        ];
-        for (const value of values) {
-          if (value && !candidates.includes(value)) {
+        for (const value of buildPpAgentMatchCandidates(agent)) {
+          if (!candidates.includes(value)) {
             candidates.push(value);
           }
         }
@@ -5393,6 +5513,8 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     let ppShowdaySync: 'skipped' | 'no-windows' | 'success' | 'partial' | 'fault' | 'error' = 'skipped';
     let ppShowdaySyncDetail = '';
     let ppShowdaySyncedCount = 0;
+    let ppVideoSync: 'skipped' | 'no-media' | 'success' | 'fault' | 'error' = 'skipped';
+    let ppVideoSyncDetail = '';
 
     const statusTag = (toText(listing.listing_status_tag) ?? '').toLowerCase().trim();
     const statusName = (toText(listing.status_name) ?? '').toLowerCase().trim();
@@ -5413,6 +5535,9 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     let soapXml: string;
     let soapAction: string;
     let selectedBusinessType: string | null = null;
+    let desiredPropertyStatus = listingType === 'Rental' ? 'ToLet' : 'ForSale';
+    let updateListingPropertyStatus = desiredPropertyStatus;
+    const isLikelyNewPpListing = !existingRefUsable;
 
     if (isWithdraw && existingRef) {
       // PP ListingStatusUpdate uses our unique listing id (KWLM...), not PP ref (T...).
@@ -5441,9 +5566,15 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       const rawDescriptiveFeature = (toText(listing.descriptive_feature) ?? '').toLowerCase();
       const category = mapPpCategory(rawPropertyType, rawSubType, rawDescriptiveFeature);
 
-      let propertyStatus = listingType === 'Rental' ? 'ToLet' : 'ForSale';
-      if (statusTag.includes('sold') || statusName.includes('sold')) propertyStatus = 'Sold';
-      else if (statusTag.includes('pending') || statusTag.includes('offer')) propertyStatus = 'PendingOffer';
+      desiredPropertyStatus = listingType === 'Rental' ? 'ToLet' : 'ForSale';
+      if (statusTag.includes('sold') || statusName.includes('sold')) desiredPropertyStatus = 'Sold';
+      else if (statusTag.includes('pending') || statusTag.includes('offer')) desiredPropertyStatus = 'PendingOffer';
+
+      // PP rejects create flow when initial status is not ForSale/ToLet (e.g. PP1005 for PendingOffer).
+      // For first-time publishes (no existing PP ref), create with base status first,
+      // then apply the desired business status via ListingStatusUpdate.
+      const baseCreatePropertyStatus = listingType === 'Rental' ? 'ToLet' : 'ForSale';
+      updateListingPropertyStatus = isLikelyNewPpListing ? baseCreatePropertyStatus : desiredPropertyStatus;
 
       const rawMandate = (toText(listing.mandate_type) ?? '').toLowerCase();
       const mandateType = (rawMandate.includes('sole') || rawMandate.includes('exclusive')) ? 'FullMandate' : 'OpenMandate';
@@ -5518,7 +5649,14 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       // Ensure the agent exists in PP before publishing the listing.
       // This mirrors the legacy EnsureAgentsExistAsync() step.
       if (agentIdStr) {
+        const primaryAgentRow = primaryAgent;
+        if (!primaryAgentRow) {
+          throw new Error('Primary listing agent data is missing for Private Property publish.');
+        }
         const agentEmail = toText(primaryAgent?.kwsa_email) ?? toText(primaryAgent?.email) ?? toText(primaryAgent?.private_email) ?? '';
+        const agentEmailLower = agentEmail.toLowerCase();
+        const agentEmailAliasLower = normalizeEmailAlias(agentEmail)?.toLowerCase() ?? null;
+        const agentCandidates = buildPpAgentMatchCandidates(primaryAgentRow);
         const agentFirstName = toText(primaryAgent?.first_name) ?? '';
         const agentLastName = toText(primaryAgent?.last_name) ?? '';
         const agentPhone = toText(primaryAgent?.mobile_number) ?? '';
@@ -5559,11 +5697,17 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
           while ((agentMatch = agentRegex.exec(getAgentsText)) !== null) {
             const block = agentMatch[1];
             const ppAgentId = block.match(/<PrivatePropertyAgentId[^>]*>([^<]*)<\/PrivatePropertyAgentId>/i)?.[1]?.trim();
-            const ppEmail = block.match(/<Email[^>]*>([^<]*)<\/Email>/i)?.[1]?.trim()?.toLowerCase();
+            const ppEmail = block.match(/<Email[^>]*>([^<]*)<\/Email>/i)?.[1]?.trim() ?? '';
+            const ppEmailLower = ppEmail.toLowerCase();
+            const ppEmailAliasLower = normalizeEmailAlias(ppEmail)?.toLowerCase() ?? null;
             const ppAgentCustomId = block.match(/<AgentId[^>]*>([^<]*)<\/AgentId>/i)?.[1]?.trim();
-            const emailMatches = agentEmail && ppEmail === agentEmail.toLowerCase();
+            const idMatches = Boolean(ppAgentCustomId && agentCandidates.includes(ppAgentCustomId));
+            const emailMatches = Boolean(
+              (agentEmailLower && (ppEmailLower === agentEmailLower || ppEmailAliasLower === agentEmailLower)) ||
+              (agentEmailAliasLower && (ppEmailLower === agentEmailAliasLower || ppEmailAliasLower === agentEmailAliasLower))
+            );
             const alreadyLinked = ppAgentCustomId === agentIdStr;
-            if (ppAgentId && emailMatches && !alreadyLinked) {
+            if (ppAgentId && (emailMatches || idMatches) && !alreadyLinked) {
               // Link PP's internal ID to our numeric associate_id
               const linkToken = buildPpToken(ppUsername, ppPassword);
               const linkSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateUniqueAgentID xmlns="http://tempuri.org/"><PrivatePropertyAgentId>${xmlEscape(ppAgentId)}</PrivatePropertyAgentId><AgentId>${xmlEscape(agentIdStr)}</AgentId>${buildPpTokenXml(linkToken)}</UpdateUniqueAgentID></soap:Body></soap:Envelope>`;
@@ -5692,7 +5836,9 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
           console.log(`[PP] Secondary UpdateAgent error for agent ${secondaryAgentId}: ${errorMsg}`);
         }
 
-        if (!secondaryAgentEmail) continue;
+        const secondaryEmailLower = secondaryAgentEmail.toLowerCase();
+        const secondaryEmailAliasLower = normalizeEmailAlias(secondaryAgentEmail)?.toLowerCase() ?? null;
+        const secondaryCandidates = buildPpAgentMatchCandidates(secondaryAgent);
 
         try {
           const getAgentsToken = buildPpToken(ppUsername, ppPassword);
@@ -5711,12 +5857,18 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
           while ((agentMatch = agentRegex.exec(getAgentsText)) !== null) {
             const block = agentMatch[1];
             const ppAgentId = block.match(/<PrivatePropertyAgentId[^>]*>([^<]*)<\/PrivatePropertyAgentId>/i)?.[1]?.trim();
-            const ppEmail = block.match(/<Email[^>]*>([^<]*)<\/Email>/i)?.[1]?.trim()?.toLowerCase();
+            const ppEmail = block.match(/<Email[^>]*>([^<]*)<\/Email>/i)?.[1]?.trim() ?? '';
+            const ppEmailLower = ppEmail.toLowerCase();
+            const ppEmailAliasLower = normalizeEmailAlias(ppEmail)?.toLowerCase() ?? null;
             const ppAgentCustomId = block.match(/<AgentId[^>]*>([^<]*)<\/AgentId>/i)?.[1]?.trim();
             const alreadyLinked = ppAgentCustomId === secondaryAgentId;
-            const emailMatches = ppEmail === secondaryAgentEmail.toLowerCase();
+            const idMatches = Boolean(ppAgentCustomId && secondaryCandidates.includes(ppAgentCustomId));
+            const emailMatches = Boolean(
+              (secondaryEmailLower && (ppEmailLower === secondaryEmailLower || ppEmailAliasLower === secondaryEmailLower)) ||
+              (secondaryEmailAliasLower && (ppEmailLower === secondaryEmailAliasLower || ppEmailAliasLower === secondaryEmailAliasLower))
+            );
 
-            if (ppAgentId && emailMatches && !alreadyLinked) {
+            if (ppAgentId && (emailMatches || idMatches) && !alreadyLinked) {
               const linkToken = buildPpToken(ppUsername, ppPassword);
               const linkSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateUniqueAgentID xmlns="http://tempuri.org/"><PrivatePropertyAgentId>${xmlEscape(ppAgentId)}</PrivatePropertyAgentId><AgentId>${xmlEscape(secondaryAgentId)}</AgentId>${buildPpTokenXml(linkToken)}</UpdateUniqueAgentID></soap:Body></soap:Envelope>`;
               const linkResp = await fetchWithRetries(ppBaseUrl, {
@@ -5751,7 +5903,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       const hideAddress = !toBool(listing.display_address_on_website ?? false);
 
       soapAction = 'UpdateListing';
-      soapXml = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateListing xmlns="http://tempuri.org/"><ListingImport><PropertyId>${xmlEscape(propertyId)}</PropertyId><BranchId>${branchGuid}</BranchId><Category><Category>${category}</Category></Category><MandateType>${mandateType}</MandateType><StreetName>${xmlEscape(toText(listing.street_name) ?? '')}</StreetName><StreetNumber>${xmlEscape(toText(listing.street_number) ?? '')}</StreetNumber><ComplexName>${xmlEscape(toText(listing.estate_name) ?? '')}</ComplexName><UnitNumber>${xmlEscape(toText(listing.unit_number) ?? '')}</UnitNumber>${addressHierarchyXml}<Headline>${headline}</Headline><Description><![CDATA[${descriptionWithShowWindows}]]></Description><Price>${price}</Price><SalesPricePresentation>${pricePresentation}</SalesPricePresentation>${depositXml}<ListingDate>${new Date().toISOString().slice(0, 10)}</ListingDate>${availableFromXml}<AgentId>${xmlEscape(listingAgentIdValue)}</AgentId><PhotoUrls>${photoUrlsXml}</PhotoUrls>${xCoordXml}${yCoordXml}<ListingType>${listingType}</ListingType><PropertyStatus>${propertyStatus}</PropertyStatus>${showdayEventsXml}<Attributes>${attributesXml}</Attributes><HideStreetName>${hideAddress}</HideStreetName><HideStreetNo>${hideAddress}</HideStreetNo><HideComplexName>${hideAddress}</HideComplexName><HideUnitNumber>${hideAddress}</HideUnitNumber></ListingImport>${tokenXml}</UpdateListing></soap:Body></soap:Envelope>`;
+      soapXml = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateListing xmlns="http://tempuri.org/"><ListingImport><PropertyId>${xmlEscape(propertyId)}</PropertyId><BranchId>${branchGuid}</BranchId><Category><Category>${category}</Category></Category><MandateType>${mandateType}</MandateType><StreetName>${xmlEscape(toText(listing.street_name) ?? '')}</StreetName><StreetNumber>${xmlEscape(toText(listing.street_number) ?? '')}</StreetNumber><ComplexName>${xmlEscape(toText(listing.estate_name) ?? '')}</ComplexName><UnitNumber>${xmlEscape(toText(listing.unit_number) ?? '')}</UnitNumber>${addressHierarchyXml}<Headline>${headline}</Headline><Description><![CDATA[${descriptionWithShowWindows}]]></Description><Price>${price}</Price><SalesPricePresentation>${pricePresentation}</SalesPricePresentation>${depositXml}<ListingDate>${new Date().toISOString().slice(0, 10)}</ListingDate>${availableFromXml}<AgentId>${xmlEscape(listingAgentIdValue)}</AgentId><PhotoUrls>${photoUrlsXml}</PhotoUrls>${xCoordXml}${yCoordXml}<ListingType>${listingType}</ListingType><PropertyStatus>${updateListingPropertyStatus}</PropertyStatus>${showdayEventsXml}<Attributes>${attributesXml}</Attributes><HideStreetName>${hideAddress}</HideStreetName><HideStreetNo>${hideAddress}</HideStreetNo><HideComplexName>${hideAddress}</HideComplexName><HideUnitNumber>${hideAddress}</HideUnitNumber></ListingImport>${tokenXml}</UpdateListing></soap:Body></soap:Envelope>`;
     }
 
     // Send SOAP request
@@ -5834,7 +5986,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     let referenceLookupAttempts = 0;
     let persistedReference: string | null = null;
 
-    const callPpStatusUpdate = async (propertyStatus: 'Inactive' | 'Archived'): Promise<{ ok: boolean; result: string; fault: string; text: string }> => {
+    const callPpStatusUpdate = async (propertyStatus: string): Promise<{ ok: boolean; result: string; fault: string; text: string }> => {
       const statusToken = buildPpToken(ppUsername, activePpPassword);
       const statusSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ListingStatusUpdate xmlns="http://tempuri.org/"><BranchId>${branchGuid}</BranchId><PropertyId>${xmlEscape(propertyId)}</PropertyId><ListingType>${listingType}</ListingType><PropertyStatus>${propertyStatus}</PropertyStatus>${buildPpTokenXml(statusToken)}</ListingStatusUpdate></soap:Body></soap:Envelope>`;
       const statusResponse = await fetchWithRetries(activePpUrl, {
@@ -5881,6 +6033,31 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       const explicitFailure = /error|fault|not found|does not exist|invalid/.test(lowered);
       const ok = !showdayFault && !explicitFailure && (lowered.includes('success') || showdayResult === '' || showdayResponse.ok);
       return { ok, result: showdayResult, fault: showdayFault, text: showdayText };
+    };
+
+    const callPpVideoOrMatterportUpdate = async (
+      targetBranchGuid: string,
+      targetPropertyId: string,
+      matterportId: string | null,
+      youtubeVideoId: string | null,
+    ): Promise<{ ok: boolean; result: string; fault: string; text: string }> => {
+      const videoToken = buildPpToken(ppUsername, activePpPassword);
+      const videoSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateListingVideoOrMatterport xmlns="http://tempuri.org/"><BranchId>${targetBranchGuid}</BranchId><UniqueListingId>${xmlEscape(targetPropertyId)}</UniqueListingId>${matterportId ? `<MatterportId>${xmlEscape(matterportId)}</MatterportId>` : '<MatterportId />'}${youtubeVideoId ? `<YoutubeVideoId>${xmlEscape(youtubeVideoId)}</YoutubeVideoId>` : '<YoutubeVideoId />'}<ListingType>${listingType}</ListingType>${buildPpTokenXml(videoToken)}</UpdateListingVideoOrMatterport></soap:Body></soap:Envelope>`;
+      const videoResponse = await fetchWithRetries(activePpUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/xml; charset=utf-8',
+          'SOAPAction': 'http://tempuri.org/UpdateListingVideoOrMatterport',
+        },
+        body: videoSoap,
+      }, { attempts: 2, timeoutMs: 30000 });
+      const videoText = await videoResponse.text();
+      const videoResult = videoText.match(/<UpdateListingVideoOrMatterportResult[^>]*>([\s\S]*?)<\/UpdateListingVideoOrMatterportResult>/i)?.[1]?.trim() ?? '';
+      const videoFault = videoText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i)?.[1]?.trim() ?? '';
+      const lowered = videoResult.toLowerCase();
+      const explicitFailure = /error|fault|not found|does not exist|invalid|failed/.test(lowered);
+      const ok = !videoFault && !explicitFailure && (lowered.includes('success') || videoResult === '' || videoResponse.ok);
+      return { ok, result: videoResult, fault: videoFault, text: videoText };
     };
 
     const faultMatch = responseText.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i);
@@ -5961,6 +6138,22 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       } else {
         message = faultText || result;
         success = false;
+      }
+    }
+
+    // For new listings created with base status (ForSale/ToLet), apply the real status afterwards
+    // so states like PendingOffer remain accurate without breaking create flow.
+    if (
+      success &&
+      !isWithdraw &&
+      updateListingPropertyStatus !== desiredPropertyStatus
+    ) {
+      const postCreateStatusUpdate = await callPpStatusUpdate(desiredPropertyStatus);
+      if (!postCreateStatusUpdate.ok) {
+        success = false;
+        message = postCreateStatusUpdate.fault || postCreateStatusUpdate.result || `PP status update to ${desiredPropertyStatus} failed after create.`;
+      } else {
+        message = message || `Published successfully (status ${desiredPropertyStatus}).`;
       }
     }
 
@@ -6307,6 +6500,57 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
           }
         }
 
+        const ppYoutubeVideoId = portalMedia.youTubeVideoId;
+        const ppMatterportId = portalMedia.matterportSpaceId;
+        if (!ppYoutubeVideoId && !ppMatterportId) {
+          ppVideoSync = 'no-media';
+          ppVideoSyncDetail = 'No YouTube or Matterport marketing URL found';
+        } else {
+          const videoPropertyCandidates = [
+            propertyId,
+            persistedReference,
+            ppRef,
+            extractPpReference(responseText),
+            existingRefUsable,
+          ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
+          const videoBranchCandidates = [branchGuid, ppDefaultBranchGuid]
+            .filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
+
+          let videoLastError = '';
+          let videoSynced = false;
+
+          for (const candidateBranchGuid of videoBranchCandidates) {
+            for (const candidatePropertyId of videoPropertyCandidates) {
+              try {
+                const update = await callPpVideoOrMatterportUpdate(
+                  candidateBranchGuid,
+                  candidatePropertyId,
+                  ppMatterportId,
+                  ppYoutubeVideoId,
+                );
+                if (update.ok) {
+                  ppVideoSync = 'success';
+                  ppVideoSyncDetail = update.result || 'UpdateListingVideoOrMatterport succeeded';
+                  videoSynced = true;
+                  break;
+                }
+                videoLastError = update.fault || update.result || 'Unknown video sync failure';
+              } catch (videoErr) {
+                videoLastError = videoErr instanceof Error ? videoErr.message : String(videoErr);
+              }
+            }
+
+            if (videoSynced) {
+              break;
+            }
+          }
+
+          if (!videoSynced) {
+            ppVideoSync = videoLastError ? 'fault' : 'error';
+            ppVideoSyncDetail = (videoLastError || 'Failed to sync PP video/matterport').slice(0, 300);
+          }
+        }
+
         await pool.query(
           `UPDATE migration.core_listings
            SET private_property_ref1 = COALESCE($1, private_property_ref1), private_property_sync_status = 'Active', updated_at = NOW()
@@ -6344,6 +6588,10 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
         showdaySyncedCount: ppShowdaySyncedCount,
         agentImageSync: ppAgentImageSync,
         agentImageSyncDetail: ppAgentImageSyncDetail,
+        videoSync: ppVideoSync,
+        videoSyncDetail: ppVideoSyncDetail,
+        videoYouTubeId: portalMedia.youTubeVideoId,
+        videoMatterportId: portalMedia.matterportSpaceId,
       },
     });
   } catch (err) {
@@ -6402,6 +6650,41 @@ router.post('/:id/publish-to-kww', async (req, res) => {
     }
 
     const listing = listingResult.rows[0] as Record<string, unknown>;
+    const marketingUrlsResult = await pool.query<{
+      url: string | null;
+      url_type: string | null;
+      display_name: string | null;
+      sort_order: number | null;
+    }>(
+      `SELECT url, url_type, display_name, sort_order
+       FROM migration.listing_marketing_urls
+       WHERE listing_id = $1
+       ORDER BY sort_order ASC NULLS LAST, id ASC`,
+      [id],
+    );
+    const marketingUrls = marketingUrlsResult.rows
+      .map((row) => normalizeMarketingUrlRecord(row as Record<string, unknown>))
+      .map((row) => ({
+        url: typeof row.url === 'string' ? row.url.trim() : '',
+        url_type: typeof row.url_type === 'string' ? row.url_type.trim() : '',
+      }))
+      .filter((row) => row.url.length > 0);
+    const portalMedia = pickPortalMediaFromMarketingUrls(marketingUrls);
+    const youtubeUrl = portalMedia.youTubeVideoId
+      ? `https://www.youtube.com/watch?v=${portalMedia.youTubeVideoId}`
+      : null;
+    const matterportUrl = marketingUrls.find((row) => {
+      const type = row.url_type.trim().toLowerCase();
+      return type === 'matterport' || type === '2';
+    })?.url ?? null;
+    const eyeSpy360Url = marketingUrls.find((row) => {
+      const type = row.url_type.trim().toLowerCase();
+      return type === 'eyespy360' || type === '3';
+    })?.url ?? null;
+    const virtualTourUrl = marketingUrls.find((row) => {
+      const type = row.url_type.trim().toLowerCase();
+      return type === 'virtual tours' || type === '4';
+    })?.url ?? eyeSpy360Url ?? matterportUrl ?? youtubeUrl;
 
     const agentResult = await pool.query(
       `SELECT la.associate_id::text, la.is_primary, la.sort_order,
@@ -6661,6 +6944,14 @@ router.post('/:id/publish-to-kww', async (req, res) => {
       listId: string | null;
     };
 
+    type KwwRemoteMediaSnapshot = {
+      listId: string | null;
+      listUuid: string | null;
+      listKey: string | null;
+      mediaKeys: string[];
+      mediaValues: Record<string, unknown>;
+    };
+
     const extractKwwIdentifiers = (rawJson: unknown): KwwIdentifiers | null => {
       if (!rawJson || typeof rawJson !== 'object') return null;
 
@@ -6733,8 +7024,71 @@ router.post('/:id/publish-to-kww', async (req, res) => {
       return null;
     };
 
+    const fetchRemoteKwwMediaSnapshot = async (): Promise<KwwRemoteMediaSnapshot | null> => {
+      const baseUrl = kwwBaseUrl.replace(/\/$/, '');
+      const candidateUrls: string[] = [];
+      if (listUuid) {
+        candidateUrls.push(`${baseUrl}/${encodeURIComponent(listUuid)}`);
+      }
+      candidateUrls.push(`${baseUrl}?filter[list_key][is]=${encodeURIComponent(`KWW_KWZA-${listingNumber}`)}`);
+
+      for (const url of candidateUrls) {
+        try {
+          const response = await fetchWithRetries(url, {
+            method: 'GET',
+            headers: kwwHeaders,
+          }, { attempts: 1, timeoutMs: 30000 });
+
+          const text = await response.text();
+          let parsed: Record<string, unknown> | null = null;
+          try {
+            parsed = JSON.parse(text) as Record<string, unknown>;
+          } catch {
+            parsed = null;
+          }
+
+          const directData = parsed?.data;
+          const sourceFromData = (directData && typeof directData === 'object')
+            ? (directData as Record<string, unknown>)
+            : null;
+          const sourceFromHits = ((((parsed?.hits as Record<string, unknown> | undefined)?.hits as unknown[] | undefined)?.[0] as Record<string, unknown> | undefined)?._source as Record<string, unknown> | undefined) ?? null;
+          const source = sourceFromData ?? sourceFromHits;
+
+          if (!source || typeof source !== 'object') {
+            continue;
+          }
+
+          const mediaKeys = Object.keys(source)
+            .filter((key) => /(video|youtube|tour|virtual|matter|eye)/i.test(key))
+            .sort();
+          const mediaValues: Record<string, unknown> = {};
+          for (const key of mediaKeys) {
+            mediaValues[key] = source[key];
+          }
+
+          return {
+            listId: toText(source.list_id) ?? listId,
+            listUuid: toText(source.list_uuid) ?? listUuid,
+            listKey: toText(source.list_key) ?? listKey,
+            mediaKeys,
+            mediaValues,
+          };
+        } catch {
+          continue;
+        }
+      }
+
+      return null;
+    };
+
     let attemptedListTypes: string[] = [String((payload as Record<string, unknown>).list_type ?? '')].filter(Boolean);
     const attemptedRequests: Array<{ method: string; url: string }> = [];
+    let kwwMediaSync: 'skipped' | 'no-media' | 'no-list-uuid' | 'success' | 'fault' | 'error' = 'skipped';
+    let kwwMediaSyncDetail = '';
+    let kwwMediaSyncedPayload: string | null = null;
+    let kwwMediaTargetListUuid: string | null = null;
+    let kwwRemoteMediaSnapshot: KwwRemoteMediaSnapshot | null = null;
+    const kwwMediaAttemptResults: Array<{ name: string; status: number | null; message: string }> = [];
 
     attemptedRequests.push({ method: requestMethod, url: requestUrl });
     let kwwResponse = await fetchWithRetries(requestUrl, {
@@ -6912,6 +7266,189 @@ router.post('/:id/publish-to-kww', async (req, res) => {
         }
       : undefined;
 
+    if (success && !isWithdraw) {
+      const mediaTargetListUuid = listUuid ?? existingListUuid ?? null;
+      kwwMediaTargetListUuid = mediaTargetListUuid;
+
+      if (!youtubeUrl && !matterportUrl && !eyeSpy360Url && !virtualTourUrl) {
+        kwwMediaSync = 'no-media';
+        kwwMediaSyncDetail = 'No marketing video/tour URL found';
+      } else if (!mediaTargetListUuid) {
+        kwwMediaSync = 'no-list-uuid';
+        kwwMediaSyncDetail = 'KWW list_uuid unavailable for media patch';
+      } else {
+        const mediaPatchUrl = `${kwwBaseUrl.replace(/\/$/, '')}/${encodeURIComponent(mediaTargetListUuid)}`;
+        const virtualTourItems = [
+          ...(youtubeUrl ? [{ vt_url: youtubeUrl, vt_short_desc: 'YouTube Video', vt_url_branded: true }] : []),
+          ...(virtualTourUrl && virtualTourUrl !== youtubeUrl ? [{ vt_url: virtualTourUrl, vt_short_desc: 'Virtual Tour', vt_url_branded: true }] : []),
+          ...(matterportUrl ? [{ vt_url: matterportUrl, vt_short_desc: 'Matterport', vt_url_branded: true }] : []),
+          ...(eyeSpy360Url ? [{ vt_url: eyeSpy360Url, vt_short_desc: 'EyeSpy360', vt_url_branded: true }] : []),
+        ];
+        const mediaPayloadCandidates: Array<{ name: string; payload: Record<string, unknown> }> = [
+          {
+            name: 'virtual_tours_array',
+            payload: {
+              ...(virtualTourItems.length > 0 ? { virtual_tours: virtualTourItems, virtual_tours_lock: false } : {}),
+            },
+          },
+          {
+            name: 'snake_case_media',
+            payload: {
+              ...(youtubeUrl ? { youtube_url: youtubeUrl } : {}),
+              ...(youtubeUrl || virtualTourUrl ? { video_url: youtubeUrl ?? virtualTourUrl } : {}),
+              ...(virtualTourUrl ? { virtual_tour_url: virtualTourUrl } : {}),
+              ...(matterportUrl ? { matterport_url: matterportUrl } : {}),
+              ...(eyeSpy360Url ? { eyespy360_url: eyeSpy360Url } : {}),
+            },
+          },
+          {
+            name: 'camel_case_media',
+            payload: {
+              ...(youtubeUrl ? { youtubeUrl } : {}),
+              ...(youtubeUrl || virtualTourUrl ? { videoUrl: youtubeUrl ?? virtualTourUrl } : {}),
+              ...(virtualTourUrl ? { virtualTourUrl } : {}),
+              ...(matterportUrl ? { matterportUrl } : {}),
+              ...(eyeSpy360Url ? { eyeSpy360Url } : {}),
+            },
+          },
+          {
+            name: 'single_video_url_snake',
+            payload: {
+              ...(youtubeUrl || virtualTourUrl ? { video_url: youtubeUrl ?? virtualTourUrl } : {}),
+            },
+          },
+          {
+            name: 'single_video_url_camel',
+            payload: {
+              ...(youtubeUrl || virtualTourUrl ? { videoUrl: youtubeUrl ?? virtualTourUrl } : {}),
+            },
+          },
+          {
+            name: 'single_youtube_url_snake',
+            payload: {
+              ...(youtubeUrl ? { youtube_url: youtubeUrl } : {}),
+            },
+          },
+          {
+            name: 'single_youtube_url_camel',
+            payload: {
+              ...(youtubeUrl ? { youtubeUrl } : {}),
+            },
+          },
+          {
+            name: 'video_object_array',
+            payload: {
+              ...(youtubeUrl ? { videos: [{ url: youtubeUrl, type: 'youtube' }] } : {}),
+            },
+          },
+          {
+            name: 'media_object_array',
+            payload: {
+              ...(youtubeUrl ? { media: [{ url: youtubeUrl, media_type: 'video', source: 'youtube' }] } : {}),
+            },
+          },
+          {
+            name: 'virtual_tour_only_snake',
+            payload: {
+              ...(virtualTourUrl ? { virtual_tour_url: virtualTourUrl } : {}),
+            },
+          },
+          {
+            name: 'virtual_tour_only_camel',
+            payload: {
+              ...(virtualTourUrl ? { virtualTourUrl } : {}),
+            },
+          },
+          {
+            name: 'single_virtual_tour_no_suffix',
+            payload: {
+              ...(virtualTourUrl ? { virtual_tour: virtualTourUrl } : {}),
+            },
+          },
+          {
+            name: 'single_tour_url_snake',
+            payload: {
+              ...(virtualTourUrl ? { tour_url: virtualTourUrl } : {}),
+            },
+          },
+          {
+            name: 'single_tour_url_camel',
+            payload: {
+              ...(virtualTourUrl ? { tourUrl: virtualTourUrl } : {}),
+            },
+          },
+          {
+            name: 'single_video_no_suffix',
+            payload: {
+              ...(youtubeUrl || virtualTourUrl ? { video: youtubeUrl ?? virtualTourUrl } : {}),
+            },
+          },
+          {
+            name: 'single_youtube_no_suffix',
+            payload: {
+              ...(youtubeUrl ? { youtube: youtubeUrl } : {}),
+            },
+          },
+          {
+            name: 'links_virtual_tour_snake',
+            payload: {
+              ...(virtualTourUrl ? { links: { virtual_tour_url: virtualTourUrl } } : {}),
+            },
+          },
+          {
+            name: 'links_video_url_snake',
+            payload: {
+              ...(youtubeUrl || virtualTourUrl ? { links: { video_url: youtubeUrl ?? virtualTourUrl } } : {}),
+            },
+          },
+        ].filter((candidate) => Object.keys(candidate.payload).length > 0);
+
+        let mediaLastError = '';
+        for (const candidate of mediaPayloadCandidates) {
+          try {
+            attemptedRequests.push({ method: 'PATCH', url: mediaPatchUrl });
+            const mediaResp = await fetchWithRetries(mediaPatchUrl, {
+              method: 'PATCH',
+              headers: kwwHeaders,
+              body: JSON.stringify(candidate.payload),
+            }, { attempts: 2, timeoutMs: 30000 });
+            const mediaText = await mediaResp.text();
+            const mediaJson = parseKwwResponse(mediaText);
+            const mediaMessage = mediaJson?.message
+              ?? mediaJson?.error
+              ?? (mediaText ? mediaText.slice(0, 300) : `HTTP ${mediaResp.status}`);
+            kwwMediaAttemptResults.push({
+              name: candidate.name,
+              status: mediaResp.status,
+              message: mediaMessage,
+            });
+            if (isKwwAcceptedResponse(mediaResp, mediaJson)) {
+              kwwMediaSync = 'success';
+              kwwMediaSyncedPayload = candidate.name;
+              kwwMediaSyncDetail = mediaJson?.message ?? 'KWW media patch accepted';
+              break;
+            }
+
+            mediaLastError = mediaMessage;
+          } catch (mediaErr) {
+            mediaLastError = mediaErr instanceof Error ? mediaErr.message : String(mediaErr);
+            kwwMediaAttemptResults.push({
+              name: candidate.name,
+              status: null,
+              message: mediaLastError,
+            });
+          }
+        }
+
+        if (kwwMediaSync !== 'success') {
+          kwwMediaSync = mediaLastError ? 'fault' : 'error';
+          kwwMediaSyncDetail = (mediaLastError || 'KWW media patch failed').slice(0, 300);
+        }
+      }
+
+      kwwRemoteMediaSnapshot = await fetchRemoteKwwMediaSnapshot();
+    }
+
     // Update DB
     if (success) {
       if (isWithdraw) {
@@ -6942,6 +7479,20 @@ router.post('/:id/publish-to-kww', async (req, res) => {
       reference_uuid: listUuid ?? existingListUuid ?? null,
       reference_key: listKey,
       portal: 'KWW',
+      debug: {
+        mediaSync: kwwMediaSync,
+        mediaSyncDetail: kwwMediaSyncDetail,
+        mediaSyncedPayload: kwwMediaSyncedPayload,
+        mediaTargetListUuid: kwwMediaTargetListUuid,
+        mediaAttemptResults: kwwMediaAttemptResults,
+        remoteMediaSnapshot: kwwRemoteMediaSnapshot,
+        youtubeVideoId: portalMedia.youTubeVideoId,
+        matterportSpaceId: portalMedia.matterportSpaceId,
+        eyeSpy360Url: portalMedia.eyeSpy360Url,
+        youtubeUrl,
+        matterportUrl,
+        virtualTourUrl,
+      },
       ...(rawKwwResponse ? { rawResponse: rawKwwResponse } : {}),
       ...(failureDetails ? { details: failureDetails } : {}),
     });

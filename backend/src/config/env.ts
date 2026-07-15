@@ -240,6 +240,9 @@ export const env = {
   trainingHub: {
     enabled: trainingHubEnabled,
   },
+  automation: {
+    jobToken: normalizeString(process.env.AUTOMATION_JOB_TOKEN),
+  },
 } as const;
 
 export function getRequiredDatabaseUrl(): string {
