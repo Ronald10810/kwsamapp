@@ -202,8 +202,6 @@ function deriveApprovedListingStatusTag(
   preSubmitTagRaw?: unknown,
 ): string {
   const saleOrRent = (toText(saleOrRentRaw) ?? '').toLowerCase().trim();
-  if (saleOrRent.includes('rent')) return 'To Rent';
-  if (saleOrRent.includes('sale')) return 'For Sale';
 
   const blockedTags = new Set([
     'pending approval',
@@ -219,10 +217,14 @@ function deriveApprovedListingStatusTag(
     if (!value) continue;
     const normalized = value.toLowerCase();
     if (blockedTags.has(normalized)) continue;
+    if (saleOrRent.includes('rent') && normalized === 'rented') return 'Rented';
     if (normalized.includes('rent')) return 'To Rent';
     if (normalized.includes('sale')) return 'For Sale';
     return value;
   }
+
+  if (saleOrRent.includes('rent')) return 'To Rent';
+  if (saleOrRent.includes('sale')) return 'For Sale';
 
   return 'For Sale';
 }
@@ -330,6 +332,34 @@ function toDateValue(value: unknown): string | null {
   const month = parts.find((part) => part.type === 'month')?.value ?? '01';
   const day = parts.find((part) => part.type === 'day')?.value ?? '01';
   return `${year}-${month}-${day}`;
+}
+
+function extractLegacyOccupationDate(listingPayload: unknown): string | null {
+  if (!listingPayload || typeof listingPayload !== 'object') return null;
+  const payload = listingPayload as Record<string, unknown>;
+
+  const nestedRentalInfo = payload.rentalInfo;
+  const rentalInfo = nestedRentalInfo && typeof nestedRentalInfo === 'object'
+    ? (nestedRentalInfo as Record<string, unknown>)
+    : null;
+
+  const candidates: unknown[] = [
+    payload.occupation_date,
+    payload.occupationDate,
+    payload.available_from,
+    payload.availableFrom,
+    payload.available_date,
+    payload.availableDate,
+    rentalInfo?.occupationDate,
+    rentalInfo?.availableFrom,
+  ];
+
+  for (const candidate of candidates) {
+    const parsed = toDateValue(candidate);
+    if (parsed) return parsed;
+  }
+
+  return null;
 }
 
 function toDateTimeValue(value: unknown): string | null {
@@ -1224,7 +1254,7 @@ function isCanonicalKwlListingNumber(value: string | null | undefined): value is
 router.get('/options', async (_req, res) => {
   const base = {
     listing_statuses: ['Active', 'Inactive', 'Draft'],
-    listing_status_tags: ['For Sale', 'To Rent', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'],
+    listing_status_tags: ['For Sale', 'To Rent', 'Rented', 'Reduced', 'Under Offer', 'Sold', 'Withdrawn', 'Expired', 'Pending Approval', 'Approval Declined'],
     ownership_types: ['Full Title', 'Sectional Title', 'Fractional', 'Leasehold', 'Share Block', 'Time Share'],
     sale_or_rent_types: ['For Sale', 'Procurement Rental', 'Management Rental'],
     property_types: ['Residential', 'Commercial', 'Industrial', 'Business', 'Farm'],
@@ -3286,7 +3316,9 @@ function buildRentalRateCandidatesForProperty24(value: unknown): Array<string | 
 
   const fromIndex = (index: number): Array<string | number> => {
     const safeIndex = Math.max(0, Math.min(index, enumNames.length - 1));
-    return [enumNames[safeIndex], safeIndex, String(safeIndex)];
+    // Property24 is strict about rentalRate enum conversion in some environments.
+    // Prefer numeric enum-code representations first, then keep enum-name fallback.
+    return [String(safeIndex), safeIndex, enumNames[safeIndex]];
   };
 
   if (/^[0-4]$/.test(text)) return fromIndex(Number(text));
@@ -3304,7 +3336,7 @@ function buildRentalRateCandidatesForProperty24(value: unknown): Array<string | 
     case 'persquaremetre':
     case 'sqm':
     case 'm2':
-      return ['PerSquareMeter', 'PerSquareMetre', 4, '4', 'Per Square Meter', 'Per Square Metre', null];
+      return ['4', 4, 'PerSquareMeter', 'PerSquareMetre', 'Per Square Meter', 'Per Square Metre', null];
     default:
       return [text, null];
   }
@@ -3928,6 +3960,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
   };
 
   try {
+    const publishBody = (req.body ?? {}) as Record<string, unknown>;
     // Load the full listing row
     const listingResult = await pool.query(
       `SELECT
@@ -4106,25 +4139,26 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     //   Reduced        → "Reduced"
     //   Under Offer    → "Pending"   (P24 uses "Pending" for under-offer/pending-sale)
     //   Sold           → "Sold"
+    //   Rented         → "Rented"
     //   Withdrawn      → "Withdrawn"
     //   Expired        → "Expired"
     //   everything else → "Active"
     let p24Status: string;
-    if (statusTag === 'withdrawn' || statusTag === 'withdraw' || statusName === 'withdrawn' || statusName === 'inactive') {
-      p24Status = 'Withdrawn';
-    } else if (statusTag === 'sold' || statusName === 'sold') {
+    if (statusTag === 'sold' || statusName === 'sold') {
       p24Status = 'Sold';
+    } else if (statusTag === 'rented' || statusName === 'rented') {
+      p24Status = 'Rented';
     } else if (statusTag === 'under offer' || statusTag === 'pending' || statusTag.includes('offer')) {
       p24Status = 'Pending';
     } else if (statusTag === 'reduced') {
       p24Status = 'Reduced';
     } else if (statusTag === 'expired') {
       p24Status = 'Expired';
+    } else if (statusTag === 'withdrawn' || statusTag === 'withdraw' || statusName === 'withdrawn' || statusName === 'inactive') {
+      p24Status = 'Withdrawn';
     } else {
       p24Status = 'Active';
     }
-    const isWithdraw = p24Status === 'Withdrawn';
-
     const listingType = mapListingTypeToProperty24(listing.sale_or_rent);
     const description = toText(listing.property_description) ?? toText(listing.short_description) ?? '';
     const descriptionWithShowWindows = appendShowWindowSummary(description, showWindows);
@@ -4559,6 +4593,10 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     const expiryDateValue =
       toDateValue(listing.expiry_date) ??
       new Date(Date.now() + (90 * 24 * 60 * 60 * 1000)).toISOString().slice(0, 10);
+    const occupationDateValue =
+      toDateValue(listing.occupation_date)
+      ?? toDateValue(publishBody.occupation_date)
+      ?? extractLegacyOccupationDate(listing.listing_payload);
 
     const propertyTypeId = mapPropertyTypeIdForProperty24(listing.property_type, listing.property_sub_type);
     const resolvedLatitude =
@@ -4575,6 +4613,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     if (contactAgentIds.length === 0) missingFields.push('contactAgentIds');
     if (!description.trim()) missingFields.push('description');
     if (!expiryDateValue) missingFields.push('expiryDate');
+    if (listingType === 'Rental' && !occupationDateValue) missingFields.push('occupation_date (required for P24 Available Date)');
     if (!resolvedSuburbId) missingFields.push('propertyInfo.suburbId');
     if (!marketCenter && !toText(listing.market_center_id)) missingFields.push('listing.market_center_id');
 
@@ -4640,7 +4679,6 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     // free-form `Other.tags` strings for this payload shape with HTTP 400 conversion errors.
 
     const initialRentalRate = rentalRateCandidates[0] ?? null;
-    const occupationDateValue = toDateValue(listing.occupation_date);
 
     const p24Payload: Record<string, unknown> = {
       agencyId: Number(resolvedAgencyId),
@@ -4812,7 +4850,18 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         || (fallbackText.includes('status') && fallbackText.includes('could not be converted'));
     };
 
+    const hasRentedStatusRejection = (body: Record<string, unknown>, rawText: string): boolean => {
+      const text = `${JSON.stringify(body)} ${rawText}`.toLowerCase();
+      if (!text.includes('rented')) return false;
+      return text.includes('could not be converted')
+        || text.includes('invalid')
+        || text.includes('not supported')
+        || text.includes('unknown')
+        || text.includes('enum');
+    };
+
     let publishedStatus = p24Status;
+    let statusFallbackApplied: { from: string; to: string; reason: string } | null = null;
     let p24Response = await fetchWithRetries(
       apiUrl,
       {
@@ -4897,6 +4946,44 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       }
     }
 
+    const rentedFallbackStatus = statusName === 'inactive' ? 'Withdrawn' : 'Active';
+    const canRetryWithRentedFallback =
+      !p24Response.ok
+      && p24Status === 'Rented'
+      && p24Response.status === 400
+      && (hasStatusConversionError(responseBody, responseText) || hasRentedStatusRejection(responseBody, responseText));
+
+    if (canRetryWithRentedFallback) {
+      const rentedFallbackPayload = { ...p24Payload, status: rentedFallbackStatus };
+      console.warn(
+        `[P24] Retrying listing ${String(listing.listing_number)} with status ${rentedFallbackStatus} after Rented status rejection`,
+      );
+
+      p24Response = await fetchWithRetries(
+        apiUrl,
+        {
+          method: apiMethod,
+          headers: p24Headers,
+          body: JSON.stringify(rentedFallbackPayload),
+        },
+        { attempts: 2, timeoutMs: 30000 },
+      );
+
+      responseText = await p24Response.text();
+      responseBody = parseP24ResponseBody(responseText);
+      if (p24Response.ok) {
+        publishedStatus = rentedFallbackStatus;
+        statusFallbackApplied = {
+          from: 'Rented',
+          to: rentedFallbackStatus,
+          reason: 'Property24 rejected Rented status value',
+        };
+        console.info(
+          `[P24] Applied status fallback for listing ${String(listing.listing_number)}: Rented -> ${rentedFallbackStatus}`,
+        );
+      }
+    }
+
     console.info(`[P24] Response HTTP ${p24Response.status}: ${JSON.stringify(responseBody).slice(0, 500)}`);
 
     if (!p24Response.ok) {
@@ -4918,6 +5005,53 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       });
     }
 
+    const parseBooleanFlag = (value: unknown): boolean | null => {
+      if (typeof value === 'boolean') return value;
+      if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'true') return true;
+        if (normalized === 'false') return false;
+      }
+      if (typeof value === 'number') {
+        if (value === 1) return true;
+        if (value === 0) return false;
+      }
+      return null;
+    };
+
+    const isOnPortal = parseBooleanFlag(
+      responseBody.isOnPortal
+      ?? responseBody.inOnPortal
+      ?? responseBody.onPortal
+      ?? responseBody.IsOnPortal,
+    );
+    const rawReasons = responseBody.reasons ?? responseBody.Reasons;
+    const reasons = Array.isArray(rawReasons)
+      ? rawReasons.map((entry) => toText(entry)).filter((entry): entry is string => Boolean(entry))
+      : (toText(rawReasons) ? [toText(rawReasons) as string] : []);
+
+    if (isOnPortal === false) {
+      const reasonsText = reasons.length > 0 ? `: ${reasons.join('; ')}` : '';
+      const failureMessage = `Property24 did not publish this listing${reasonsText}`;
+      await pool.query(
+        `UPDATE migration.core_listings
+         SET property24_sync_status = $2, updated_at = NOW()
+         WHERE id = $1`,
+        [id, failureMessage.slice(0, 490)],
+      );
+
+      return res.status(422).json({
+        success: false,
+        message: failureMessage,
+        http_status: p24Response.status,
+        details: {
+          property24: responseBody,
+          reasons,
+          isOnPortal,
+        },
+      });
+    }
+
     // Extract reference ID from response (P24 returns { isOnPortal, listingNumber, reasons })
     // Note: listingNumber is an integer from P24, so convert to string before toText check
     const toRef = (v: unknown): string | null => {
@@ -4933,7 +5067,8 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       existingRef
     );
 
-    const syncStatus = `${publishedStatus === 'Withdrawn' ? 'Withdrawn' : 'Published'} ${new Date().toISOString().slice(0, 10)}`;
+    const finalIsWithdraw = publishedStatus === 'Withdrawn';
+    const syncStatus = `${finalIsWithdraw ? 'Withdrawn' : 'Published'} ${new Date().toISOString().slice(0, 10)}`;
 
     await pool.query(
       `UPDATE migration.core_listings
@@ -4944,7 +5079,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
            is_draft = false,
            updated_at = NOW()
        WHERE id = $1`,
-      [id, returnedRef, syncStatus, !isWithdraw]
+      [id, returnedRef, syncStatus, !finalIsWithdraw]
     );
 
     console.info(`[P24] ${publishedStatus} successfully: listing=${String(listing.listing_number)} ref=${returnedRef ?? 'n/a'}`);
@@ -4955,13 +5090,17 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     const warningSummary = p24PhotoSelection.skippedCount > 0
       ? ` ${p24PhotoSelection.skippedCount} image${p24PhotoSelection.skippedCount === 1 ? '' : 's'} skipped due size/payload limits.`
       : '';
+    const fallbackSummary = statusFallbackApplied
+      ? ` Status fallback applied: ${statusFallbackApplied.from} -> ${statusFallbackApplied.to}.`
+      : '';
 
     return res.json({
       success: true,
       property24_reference_id: returnedRef,
-      message: `${publishedStatus === 'Withdrawn' ? 'Withdrawn from' : 'Published to'} Property24 successfully${returnedRef ? ` (ref: ${returnedRef})` : ''}.${photoSummary}${warningSummary}`,
+      message: `${publishedStatus === 'Withdrawn' ? 'Withdrawn from' : 'Published to'} Property24 successfully${returnedRef ? ` (ref: ${returnedRef})` : ''}.${photoSummary}${warningSummary}${fallbackSummary}`,
       details: {
         property24: responseBody,
+        status_fallback: statusFallbackApplied,
         photo_selection: {
           source_count: p24PhotoSelection.sourceCount,
           selected_count: p24PhotoSelection.selectedCount,
@@ -5150,12 +5289,27 @@ function replacePpTokenXml(soapXml: string, token: { Digest: string; UserName: s
 
 function extractPpReference(raw: string): string | null {
   const text = raw ?? '';
-  const byUrl = text.match(/\/((?:T)\d{5,})\b/i)?.[1];
+  const byUrl = text.match(/\/((?:T|RR)\d{5,})\b/i)?.[1];
   if (byUrl) return byUrl.toUpperCase();
-  const byTag = text.match(/>(T\d{5,})</i)?.[1];
+  const byTag = text.match(/>((?:T|RR)\d{5,})</i)?.[1];
   if (byTag) return byTag.toUpperCase();
-  const byPlain = text.match(/\b(T\d{5,})\b/i)?.[1];
+  const byPlain = text.match(/\b((?:T|RR)\d{5,})\b/i)?.[1];
   return byPlain ? byPlain.toUpperCase() : null;
+}
+
+function extractPpReferenceFromListingPayload(listingPayload: unknown): string | null {
+  if (!listingPayload || typeof listingPayload !== 'object') return null;
+  const payload = listingPayload as Record<string, unknown>;
+  const candidateValues = [
+    toText(payload.private_property_ref1),
+    toText(payload.private_property_ref2),
+    toText(payload.private_property_reference),
+  ];
+  for (const candidate of candidateValues) {
+    const parsed = extractPpReference(candidate ?? '');
+    if (parsed) return parsed;
+  }
+  return null;
 }
 
 async function fetchPpReferenceByUniqueId(args: {
@@ -5183,7 +5337,7 @@ async function fetchPpReferenceByUniqueId(args: {
       const ppRef = block.match(/<PrivatePropertyRef[^>]*>([^<]*)<\/PrivatePropertyRef>/i)?.[1]?.trim();
       if (uniqueId && uniqueId.toLowerCase() === args.uniqueId.toLowerCase()) {
         const normalized = ppRef?.toUpperCase() ?? '';
-        return /^T\d{5,}$/i.test(normalized) ? normalized : null;
+        return /^(?:T|RR)\d{5,}$/i.test(normalized) ? normalized : null;
       }
     }
     return null;
@@ -5264,6 +5418,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
         cl.rates_and_taxes::text, cl.monthly_levy::text,
         cl.is_furnished, cl.pet_friendly, cl.has_flatlet,
         cl.feed_to_private_property, cl.private_property_ref1, cl.private_property_ref2,
+        cl.listing_payload,
         cl.display_address_on_website,
         cl.mandate_type, cl.listing_images_json
        FROM migration.core_listings cl WHERE cl.id = $1 LIMIT 1`,
@@ -5325,27 +5480,34 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
     void toText(listing.market_center_id);
     void toText(primaryAgent?.market_center_id);
 
+    const buildPpAgentMatchCandidates = (agent: PpPublishAgentRow): string[] => {
+      const candidates: string[] = [];
+      const kwsaEmail = toText(agent.kwsa_email);
+      const publicEmail = toText(agent.email);
+      const privateEmail = toText(agent.private_email);
+      const values = [
+        toText(agent.associate_id),
+        toText(agent.source_associate_id),
+        kwsaEmail,
+        normalizeEmailAlias(kwsaEmail),
+        publicEmail,
+        normalizeEmailAlias(publicEmail),
+        privateEmail,
+        normalizeEmailAlias(privateEmail),
+      ];
+      for (const value of values) {
+        if (value && !candidates.includes(value)) {
+          candidates.push(value);
+        }
+      }
+      return candidates;
+    };
+
     const buildAgentCandidates = (): string[] => {
       const candidates: string[] = [];
       for (const agent of listingAgents) {
-        const kwsaEmail = toText(agent.kwsa_email);
-        const publicEmail = toText(agent.email);
-        const privateEmail = toText(agent.private_email);
-        const kwsaEmailNoAlias = normalizeEmailAlias(kwsaEmail);
-        const publicEmailNoAlias = normalizeEmailAlias(publicEmail);
-        const privateEmailNoAlias = normalizeEmailAlias(privateEmail);
-        const values = [
-          toText(agent.associate_id),
-          toText(agent.source_associate_id),
-          kwsaEmail,
-          kwsaEmailNoAlias,
-          publicEmail,
-          publicEmailNoAlias,
-          privateEmail,
-          privateEmailNoAlias,
-        ];
-        for (const value of values) {
-          if (value && !candidates.includes(value)) {
+        for (const value of buildPpAgentMatchCandidates(agent)) {
+          if (!candidates.includes(value)) {
             candidates.push(value);
           }
         }
@@ -5400,9 +5562,12 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       statusTag === 'withdrawn' || statusTag === 'withdraw' ||
       statusName === 'withdrawn' || statusName === 'inactive';
 
-    const existingRef = toText(listing.private_property_ref1) ?? toText(listing.private_property_ref2);
+    const existingRef =
+      toText(listing.private_property_ref1)
+      ?? toText(listing.private_property_ref2)
+      ?? extractPpReferenceFromListingPayload(listing.listing_payload);
     const existingRefNormalized = (existingRef ?? '').trim();
-    const existingRefUsable = /^T\d{5,}$/i.test(existingRefNormalized) ? existingRefNormalized.toUpperCase() : null;
+    const existingRefUsable = /^(?:T|RR)\d{5,}$/i.test(existingRefNormalized) ? existingRefNormalized.toUpperCase() : null;
     const propertyId = toText(listing.listing_number) ?? id.toString();
     const listingType = mapListingTypeToProperty24(listing.sale_or_rent);
     let activePpPassword = ppPassword;
@@ -5518,7 +5683,14 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
       // Ensure the agent exists in PP before publishing the listing.
       // This mirrors the legacy EnsureAgentsExistAsync() step.
       if (agentIdStr) {
+        const primaryAgentRow = primaryAgent;
+        if (!primaryAgentRow) {
+          throw new Error('Primary listing agent data is missing for Private Property publish.');
+        }
         const agentEmail = toText(primaryAgent?.kwsa_email) ?? toText(primaryAgent?.email) ?? toText(primaryAgent?.private_email) ?? '';
+        const agentEmailLower = agentEmail.toLowerCase();
+        const agentEmailAliasLower = normalizeEmailAlias(agentEmail)?.toLowerCase() ?? null;
+        const agentCandidates = buildPpAgentMatchCandidates(primaryAgentRow);
         const agentFirstName = toText(primaryAgent?.first_name) ?? '';
         const agentLastName = toText(primaryAgent?.last_name) ?? '';
         const agentPhone = toText(primaryAgent?.mobile_number) ?? '';
@@ -5559,11 +5731,17 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
           while ((agentMatch = agentRegex.exec(getAgentsText)) !== null) {
             const block = agentMatch[1];
             const ppAgentId = block.match(/<PrivatePropertyAgentId[^>]*>([^<]*)<\/PrivatePropertyAgentId>/i)?.[1]?.trim();
-            const ppEmail = block.match(/<Email[^>]*>([^<]*)<\/Email>/i)?.[1]?.trim()?.toLowerCase();
+            const ppEmail = block.match(/<Email[^>]*>([^<]*)<\/Email>/i)?.[1]?.trim() ?? '';
+            const ppEmailLower = ppEmail.toLowerCase();
+            const ppEmailAliasLower = normalizeEmailAlias(ppEmail)?.toLowerCase() ?? null;
             const ppAgentCustomId = block.match(/<AgentId[^>]*>([^<]*)<\/AgentId>/i)?.[1]?.trim();
-            const emailMatches = agentEmail && ppEmail === agentEmail.toLowerCase();
+            const idMatches = Boolean(ppAgentCustomId && agentCandidates.includes(ppAgentCustomId));
+            const emailMatches = Boolean(
+              (agentEmailLower && (ppEmailLower === agentEmailLower || ppEmailAliasLower === agentEmailLower)) ||
+              (agentEmailAliasLower && (ppEmailLower === agentEmailAliasLower || ppEmailAliasLower === agentEmailAliasLower))
+            );
             const alreadyLinked = ppAgentCustomId === agentIdStr;
-            if (ppAgentId && emailMatches && !alreadyLinked) {
+            if (ppAgentId && (emailMatches || idMatches) && !alreadyLinked) {
               // Link PP's internal ID to our numeric associate_id
               const linkToken = buildPpToken(ppUsername, ppPassword);
               const linkSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateUniqueAgentID xmlns="http://tempuri.org/"><PrivatePropertyAgentId>${xmlEscape(ppAgentId)}</PrivatePropertyAgentId><AgentId>${xmlEscape(agentIdStr)}</AgentId>${buildPpTokenXml(linkToken)}</UpdateUniqueAgentID></soap:Body></soap:Envelope>`;
@@ -5692,7 +5870,9 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
           console.log(`[PP] Secondary UpdateAgent error for agent ${secondaryAgentId}: ${errorMsg}`);
         }
 
-        if (!secondaryAgentEmail) continue;
+        const secondaryEmailLower = secondaryAgentEmail.toLowerCase();
+        const secondaryEmailAliasLower = normalizeEmailAlias(secondaryAgentEmail)?.toLowerCase() ?? null;
+        const secondaryCandidates = buildPpAgentMatchCandidates(secondaryAgent);
 
         try {
           const getAgentsToken = buildPpToken(ppUsername, ppPassword);
@@ -5711,12 +5891,18 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
           while ((agentMatch = agentRegex.exec(getAgentsText)) !== null) {
             const block = agentMatch[1];
             const ppAgentId = block.match(/<PrivatePropertyAgentId[^>]*>([^<]*)<\/PrivatePropertyAgentId>/i)?.[1]?.trim();
-            const ppEmail = block.match(/<Email[^>]*>([^<]*)<\/Email>/i)?.[1]?.trim()?.toLowerCase();
+            const ppEmail = block.match(/<Email[^>]*>([^<]*)<\/Email>/i)?.[1]?.trim() ?? '';
+            const ppEmailLower = ppEmail.toLowerCase();
+            const ppEmailAliasLower = normalizeEmailAlias(ppEmail)?.toLowerCase() ?? null;
             const ppAgentCustomId = block.match(/<AgentId[^>]*>([^<]*)<\/AgentId>/i)?.[1]?.trim();
             const alreadyLinked = ppAgentCustomId === secondaryAgentId;
-            const emailMatches = ppEmail === secondaryAgentEmail.toLowerCase();
+            const idMatches = Boolean(ppAgentCustomId && secondaryCandidates.includes(ppAgentCustomId));
+            const emailMatches = Boolean(
+              (secondaryEmailLower && (ppEmailLower === secondaryEmailLower || ppEmailAliasLower === secondaryEmailLower)) ||
+              (secondaryEmailAliasLower && (ppEmailLower === secondaryEmailAliasLower || ppEmailAliasLower === secondaryEmailAliasLower))
+            );
 
-            if (ppAgentId && emailMatches && !alreadyLinked) {
+            if (ppAgentId && (emailMatches || idMatches) && !alreadyLinked) {
               const linkToken = buildPpToken(ppUsername, ppPassword);
               const linkSoap = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><UpdateUniqueAgentID xmlns="http://tempuri.org/"><PrivatePropertyAgentId>${xmlEscape(ppAgentId)}</PrivatePropertyAgentId><AgentId>${xmlEscape(secondaryAgentId)}</AgentId>${buildPpTokenXml(linkToken)}</UpdateUniqueAgentID></soap:Body></soap:Envelope>`;
               const linkResp = await fetchWithRetries(ppBaseUrl, {
@@ -6221,7 +6407,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
 
         // Fallback: PP sometimes returns only "Success" in UpdateListingResult.
         // In that case, query active listings for the branch and map by UniqueId=PropertyId (KWLM...).
-        if (!finalRef || !/^T\d{5,}$/i.test(finalRef)) {
+        if (!finalRef || !/^(?:T|RR)\d{5,}$/i.test(finalRef)) {
           referenceLookupTried = true;
           try {
             // PP can acknowledge UpdateListing before exposing PrivatePropertyRef in GetActiveListings.
@@ -6251,7 +6437,7 @@ router.post('/:id/publish-to-private-property', async (req, res) => {
           }
         }
 
-        persistedReference = finalRef && /^T\d{5,}$/i.test(finalRef) ? finalRef.toUpperCase() : null;
+        persistedReference = finalRef && /^(?:T|RR)\d{5,}$/i.test(finalRef) ? finalRef.toUpperCase() : null;
 
         if (showWindows.length === 0) {
           ppShowdaySync = 'no-windows';
