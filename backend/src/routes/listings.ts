@@ -5030,7 +5030,10 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       ? rawReasons.map((entry) => toText(entry)).filter((entry): entry is string => Boolean(entry))
       : (toText(rawReasons) ? [toText(rawReasons) as string] : []);
 
-    if (isOnPortal === false) {
+    // For withdrawal/terminal statuses, P24 correctly returns isOnPortal=false to confirm the
+    // listing is no longer live. Treat this as a success rather than a publish failure.
+    const isTerminalStatus = publishedStatus === 'Withdrawn' || publishedStatus === 'Sold' || publishedStatus === 'Expired';
+    if (isOnPortal === false && !isTerminalStatus) {
       const reasonsText = reasons.length > 0 ? `: ${reasons.join('; ')}` : '';
       const failureMessage = `Property24 did not publish this listing${reasonsText}`;
       await pool.query(
@@ -5067,7 +5070,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
       existingRef
     );
 
-    const finalIsWithdraw = publishedStatus === 'Withdrawn';
+    const finalIsWithdraw = publishedStatus === 'Withdrawn' || publishedStatus === 'Expired';
     const syncStatus = `${finalIsWithdraw ? 'Withdrawn' : 'Published'} ${new Date().toISOString().slice(0, 10)}`;
 
     await pool.query(
@@ -5093,11 +5096,21 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     const fallbackSummary = statusFallbackApplied
       ? ` Status fallback applied: ${statusFallbackApplied.from} -> ${statusFallbackApplied.to}.`
       : '';
+    // When P24 explicitly confirms the listing is not on portal (isOnPortal=false) for a terminal
+    // status, append a note so the user understands P24 acknowledged the inactive state.
+    const p24ConfirmedInactiveSummary = (isOnPortal === false && isTerminalStatus)
+      ? ` Property24 confirmed listing is inactive/not on portal${reasons.length > 0 ? ` (${reasons.join('; ')})` : ''}.`
+      : '';
+
+    const baseActionLabel = publishedStatus === 'Withdrawn' ? 'Withdrawn from'
+      : publishedStatus === 'Expired' ? 'Expired on'
+      : publishedStatus === 'Sold' ? 'Marked as sold on'
+      : 'Published to';
 
     return res.json({
       success: true,
       property24_reference_id: returnedRef,
-      message: `${publishedStatus === 'Withdrawn' ? 'Withdrawn from' : 'Published to'} Property24 successfully${returnedRef ? ` (ref: ${returnedRef})` : ''}.${photoSummary}${warningSummary}${fallbackSummary}`,
+      message: `${baseActionLabel} Property24 successfully${returnedRef ? ` (ref: ${returnedRef})` : ''}.${p24ConfirmedInactiveSummary}${photoSummary}${warningSummary}${fallbackSummary}`,
       details: {
         property24: responseBody,
         status_fallback: statusFallbackApplied,
