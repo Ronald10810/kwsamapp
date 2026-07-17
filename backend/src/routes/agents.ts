@@ -412,6 +412,10 @@ function buildManualAssociateId(): string {
 
 const HOME_TRANSACTION_STATUSES = ['Start', 'Working', 'Submitted', 'Pending', 'Registered'] as const;
 
+function buildRegisteredStatusSql(txAlias: string): string {
+  return `LOWER(TRIM(COALESCE(${txAlias}.transaction_status, ''))) = 'registered'`;
+}
+
 type MappAccessRow = {
   is_temporarily_suspended: boolean;
   suspended_reason: string | null;
@@ -941,8 +945,9 @@ router.get('/me/home', async (req, res) => {
               ) AS rn
             FROM migration.transaction_agent_calculations tac
             INNER JOIN cycle_windows cw ON cw.associate_id = tac.associate_id
+            INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
             WHERE tac.associate_id IS NOT NULL
-              AND tac.is_registered = true
+              AND ${buildRegisteredStatusSql('ct')}
               AND cw.next_cap_date IS NOT NULL
               AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
               AND tac.effective_reporting_date::date < cw.next_cap_date
@@ -1022,8 +1027,9 @@ router.get('/me/home', async (req, res) => {
             END AS period_end_date,
             COALESCE(ta.team_cap_achieved, '0') AS team_cap_achieved
           FROM team_base tb
+            INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
           LEFT JOIN team_achieved ta ON ta.team_id = tb.team_id
-          LIMIT 1
+              AND ${buildRegisteredStatusSql('ct')}
           `,
           [resolvedTeamDbId]
         ),
@@ -1676,7 +1682,7 @@ router.get('/:id/details', resolvePermissions, async (req, res) => {
       return res.status(404).json({ error: 'Associate not found.' });
     }
 
-    const [socialMedia, roles, jobTitles, serviceCommunities, adminMarketCenters, adminTeams, documents, notes] = await Promise.all([
+    const [socialMedia, roles, jobTitles, serviceCommunities, adminMarketCenters, adminTeams, documents, notes, transferHistory] = await Promise.all([
       pool.query<{ platform: string | null; url: string | null }>(
         `SELECT platform, url FROM migration.associate_social_media WHERE associate_id = $1 ORDER BY sort_order ASC, id ASC`,
         [id]
@@ -1729,6 +1735,39 @@ router.get('/:id/details', resolvePermissions, async (req, res) => {
         `,
         [id]
       ),
+      pool.query<{
+        id: string;
+        transferred_at: string;
+        from_source_market_center_id: string | null;
+        from_market_center_name: string | null;
+        to_source_market_center_id: string | null;
+        to_market_center_name: string | null;
+        requested_by: string | null;
+      }>(
+        `
+        SELECT
+          id::text,
+          transferred_at::text,
+          from_source_market_center_id,
+          from_market_center_name,
+          to_source_market_center_id,
+          to_market_center_name,
+          requested_by
+        FROM migration.agent_market_center_transfer_log
+        WHERE associate_id = $1
+        ORDER BY transferred_at DESC, id DESC
+        LIMIT 100
+        `,
+        [id]
+      ).catch(() => ({ rows: [] as Array<{
+        id: string;
+        transferred_at: string;
+        from_source_market_center_id: string | null;
+        from_market_center_name: string | null;
+        to_source_market_center_id: string | null;
+        to_market_center_name: string | null;
+        requested_by: string | null;
+      }> })),
     ]);
 
     const payload = base.rows[0] as Record<string, unknown>;
@@ -1750,6 +1789,7 @@ router.get('/:id/details', resolvePermissions, async (req, res) => {
       commission_notes: commissionNotes,
       date_notes: dateNotes,
       document_notes: documentNotes,
+      transfer_history: transferHistory.rows,
       mapp_access: mappAccess,
     });
   } catch (error) {
