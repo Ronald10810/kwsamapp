@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)
+  ?? '768625368107-oficd2i4fn505g3lf7dt6sjmlv77b109.apps.googleusercontent.com';
 const CONSOLE_LOGO_URL = 'https://static.wixstatic.com/media/cd2dff_661d95737ba4452d9c15f33d43643f72~mv2.png';
 
 const GSI_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
@@ -40,9 +41,25 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [scriptReady, setScriptReady] = useState(false);
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
+  const [devEmail, setDevEmail] = useState('');
   const proxyTarget = (import.meta.env.VITE_API_PROXY_TARGET as string | undefined)?.toLowerCase() ?? '';
   const isLocalBackendMode = proxyTarget.includes('localhost') || proxyTarget.includes('127.0.0.1');
   const canUseLocalDevLogin = import.meta.env.DEV && isLocalBackendMode;
+  const savedDevEmail = String(localStorage.getItem('kwsa_dev_login_email') ?? '').trim();
+  const envDevEmail = String(import.meta.env.VITE_DEV_LOGIN_EMAIL ?? '').trim();
+  const defaultDevEmail = savedDevEmail || envDevEmail || 'ronald.vanscheltema@kwsa.co.za';
+  const quickDevEmails = [
+    'ronald.vanscheltema@kwsa.co.za',
+    'davondb@gmail.com',
+    'd.vanrooyen@kwsa.co.za',
+    'rudolph.kriek@kwsa.co.za',
+  ];
+
+  useEffect(() => {
+    if (canUseLocalDevLogin && !devEmail) {
+      setDevEmail(defaultDevEmail);
+    }
+  }, [canUseLocalDevLogin, defaultDevEmail, devEmail]);
 
   useEffect(() => {
     if (user) {
@@ -111,36 +128,12 @@ export default function LoginPage() {
     setError(null);
     setIsDevLoginLoading(true);
     try {
-      const envDevEmail = String(import.meta.env.VITE_DEV_LOGIN_EMAIL ?? '').trim();
-      const cachedDevEmail = String(localStorage.getItem('kwsa_dev_login_email') ?? '').trim();
-      const candidateEmails = [
-        envDevEmail,
-        'ronald.vanscheltema@kwsa.co.za',
-        cachedDevEmail,
-        'dian.muller@kwsa.co.za',
-        'garth.mulder@kwsa.co.za',
-        '',
-      ].filter((value, index, array) => array.indexOf(value) === index);
-
-      let lastError: unknown = null;
-      let loggedIn = false;
-      for (const email of candidateEmails) {
-        try {
-          if (email) {
-            await loginAsDev({ email, name: 'Ronald' });
-            localStorage.setItem('kwsa_dev_login_email', email);
-          } else {
-            await loginAsDev();
-          }
-          loggedIn = true;
-          break;
-        } catch (err) {
-          lastError = err;
-        }
-      }
-
-      if (!loggedIn) {
-        throw (lastError instanceof Error ? lastError : new Error('Dev login failed'));
+      const selectedEmail = devEmail.trim().toLowerCase();
+      if (selectedEmail) {
+        await loginAsDev({ email: selectedEmail, name: 'Ronald' });
+        localStorage.setItem('kwsa_dev_login_email', selectedEmail);
+      } else {
+        await loginAsDev();
       }
 
       navigate('/', { replace: true });
@@ -183,15 +176,37 @@ export default function LoginPage() {
           <div className="rounded-2xl border border-white/18 bg-white/95 px-5 py-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
             <div ref={buttonRef} className="flex justify-center" />
             {canUseLocalDevLogin && (
-              <div className="mt-3 flex justify-center">
-                <button
-                  type="button"
-                  className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  onClick={handleDevLogin}
-                  disabled={isDevLoginLoading}
-                >
-                  {isDevLoginLoading ? 'Signing in...' : 'Local Dev Login'}
-                </button>
+              <div className="mt-3 space-y-2">
+                <label className="block text-center text-xs font-medium text-slate-700">Local Dev Email</label>
+                <input
+                  type="email"
+                  value={devEmail}
+                  onChange={(e) => setDevEmail(e.target.value)}
+                  placeholder="name@kwsa.co.za"
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
+                />
+                <div className="flex flex-wrap justify-center gap-2">
+                  {quickDevEmails.map((email) => (
+                    <button
+                      key={email}
+                      type="button"
+                      className="rounded-full border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                      onClick={() => setDevEmail(email)}
+                    >
+                      {email}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={handleDevLogin}
+                    disabled={isDevLoginLoading}
+                  >
+                    {isDevLoginLoading ? 'Signing in...' : 'Local Dev Login'}
+                  </button>
+                </div>
               </div>
             )}
             {!canUseLocalDevLogin && import.meta.env.DEV && (
