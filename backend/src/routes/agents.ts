@@ -1466,9 +1466,7 @@ router.get('/me/featured-listings/search', async (req, res) => {
             WHERE li.listing_id = cl.id
               AND COALESCE(TRIM(li.file_url), '') <> ''
             ORDER BY li.sort_order ASC, li.id ASC
-            INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
             LIMIT 1
-              AND ${buildRegisteredStatusSql('ct')}
           )
         END AS main_image_url,
         CASE WHEN afl.listing_id IS NULL THEN false ELSE true END AS selected
