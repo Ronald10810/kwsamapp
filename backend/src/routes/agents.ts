@@ -1003,7 +1003,8 @@ router.get('/me/home', async (req, res) => {
             FROM team_base tb
             INNER JOIN migration.core_associates ca ON ca.team_id = tb.team_id
             INNER JOIN migration.transaction_agent_calculations tac ON tac.associate_id = ca.id
-            WHERE tac.is_registered = true
+            INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
+            WHERE ${buildRegisteredStatusSql('ct')}
               AND (
                 tb.cap_date IS NULL
                 OR (
@@ -1027,9 +1028,7 @@ router.get('/me/home', async (req, res) => {
             END AS period_end_date,
             COALESCE(ta.team_cap_achieved, '0') AS team_cap_achieved
           FROM team_base tb
-            INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
           LEFT JOIN team_achieved ta ON ta.team_id = tb.team_id
-              AND ${buildRegisteredStatusSql('ct')}
           `,
           [resolvedTeamDbId]
         ),
@@ -1227,8 +1226,9 @@ router.get('/me/home', async (req, res) => {
             ) AS rn
           FROM migration.transaction_agent_calculations tac
           INNER JOIN cycle_windows cw ON cw.associate_id = tac.associate_id
+          INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
           WHERE tac.associate_id = $1
-            AND tac.is_registered = true
+            AND ${buildRegisteredStatusSql('ct')}
             AND cw.next_cap_date IS NOT NULL
             AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
             AND tac.effective_reporting_date::date < cw.next_cap_date
@@ -1242,11 +1242,11 @@ router.get('/me/home', async (req, res) => {
             WHEN cw.next_cap_date IS NULL THEN NULL
             ELSE (cw.next_cap_date - INTERVAL '1 day')::date::text
           END AS cap_cycle_end_date,
-          GREATEST(COALESCE(lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)::text AS cap_amount,
+          GREATEST(COALESCE(lrc.cap_amount, cw.associate_cap_amount, 0), 0)::text AS cap_amount,
           GREATEST(
             COALESCE(
               lrc.cap_remaining,
-              COALESCE(lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0)
+              COALESCE(lrc.cap_amount, cw.associate_cap_amount, 0)
             ),
             0
           )::text AS cap_remaining
@@ -1333,7 +1333,7 @@ router.get('/me/home', async (req, res) => {
         LEFT JOIN migration.transaction_agent_calculations tac ON tac.transaction_agent_id = ta.id
         WHERE ta.associate_id = $1
           AND COALESCE(ct.status_change_date::date, tac.effective_reporting_date::date, ct.transaction_date::date) >= date_trunc('month', CURRENT_DATE)::date
-          AND (tac.is_registered = true OR LOWER(TRIM(COALESCE(ct.transaction_status, ''))) = 'registered')
+          AND ${buildRegisteredStatusSql('ct')}
         `,
         [associateId]
       ),
@@ -1466,7 +1466,9 @@ router.get('/me/featured-listings/search', async (req, res) => {
             WHERE li.listing_id = cl.id
               AND COALESCE(TRIM(li.file_url), '') <> ''
             ORDER BY li.sort_order ASC, li.id ASC
+            INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
             LIMIT 1
+              AND ${buildRegisteredStatusSql('ct')}
           )
         END AS main_image_url,
         CASE WHEN afl.listing_id IS NULL THEN false ELSE true END AS selected
