@@ -237,6 +237,20 @@ export const env = {
   capRefresh: {
     enabled: parseBoolean(process.env.CAP_REFRESH_ENABLED, false),
   },
+  reporting: {
+    monthEndUnified: {
+      enabled: parseBoolean(process.env.MONTH_END_UNIFIED_ENABLED, nodeEnv === 'development'),
+      shadowCompareEnabled: parseBoolean(process.env.MONTH_END_UNIFIED_SHADOW_COMPARE_ENABLED, false),
+      transitionExceptionsEnabled: parseBoolean(process.env.MONTH_END_TRANSITION_EXCEPTIONS_ENABLED, true),
+      historicalEnabled: parseBoolean(process.env.MONTH_END_HISTORICAL_ENABLED, true),
+      liveEnabled: parseBoolean(process.env.MONTH_END_LIVE_ENABLED, true),
+    },
+    liveEvents: {
+      enabled: parseBoolean(process.env.LIVE_REPORTING_EVENTS_ENABLED, false),
+      shadowCompareEnabled: parseBoolean(process.env.LIVE_REPORTING_EVENTS_SHADOW_COMPARE_ENABLED, false),
+      backfillEnabled: parseBoolean(process.env.LIVE_REPORTING_EVENTS_BACKFILL_ENABLED, false),
+    },
+  },
   trainingHub: {
     enabled: trainingHubEnabled,
   },

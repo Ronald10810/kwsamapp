@@ -3050,7 +3050,7 @@ router.get('/access', resolvePermissions, async (req, res) => {
     const effectiveScope = await resolveEffectiveReportScope(req);
 
     Object.values(reports).forEach((report) => {
-      report.reportingScope = effectiveScope.reportingScope;
+      report.reportingScope = effectiveScope.reportingScope as typeof report.reportingScope;
       if (effectiveScope.reportingScope !== 'GLOBAL') {
         report.authorisedMarketCentreIds = effectiveScope.permittedMarketCentreIds;
         report.defaultMarketCentreId = effectiveScope.forcedMarketCentreId;
