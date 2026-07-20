@@ -4151,7 +4151,7 @@ router.post('/:id/publish-to-property24', async (req, res) => {
     } else if (statusTag === 'under offer' || statusTag === 'pending' || statusTag.includes('offer')) {
       p24Status = 'Pending';
     } else if (statusTag === 'reduced') {
-      p24Status = 'Reduced';
+      p24Status = 'ReducedPrice';
     } else if (statusTag === 'expired') {
       p24Status = 'Expired';
     } else if (statusTag === 'withdrawn' || statusTag === 'withdraw' || statusName === 'withdrawn' || statusName === 'inactive') {
@@ -4608,14 +4608,25 @@ router.post('/:id/publish-to-property24', async (req, res) => {
         ? toNumber(listing.override_display_longitude) ?? toNumber(listing.longitude)
         : toNumber(listing.longitude);
 
+    // Terminal statuses (Withdrawn, Sold, Expired) only require existing P24 reference number
+    // Active statuses require full schema (agency, agents, description, expiry date)
+    const isTerminalP24Status = p24Status === 'Withdrawn' || p24Status === 'Sold' || p24Status === 'Expired';
+    const existingRefNum = toNumber(existingRef);
+
     const missingFields: string[] = [];
-    if (!resolvedAgencyId) missingFields.push('agencyId');
-    if (contactAgentIds.length === 0) missingFields.push('contactAgentIds');
-    if (!description.trim()) missingFields.push('description');
-    if (!expiryDateValue) missingFields.push('expiryDate');
-    if (listingType === 'Rental' && !occupationDateValue) missingFields.push('occupation_date (required for P24 Available Date)');
-    if (!resolvedSuburbId) missingFields.push('propertyInfo.suburbId');
-    if (!marketCenter && !toText(listing.market_center_id)) missingFields.push('listing.market_center_id');
+    if (isTerminalP24Status) {
+      if (existingRefNum == null || existingRefNum <= 0) {
+        missingFields.push('listingNumber (Property24 reference)');
+      }
+    } else {
+      if (!resolvedAgencyId) missingFields.push('agencyId');
+      if (contactAgentIds.length === 0) missingFields.push('contactAgentIds');
+      if (!description.trim()) missingFields.push('description');
+      if (!expiryDateValue) missingFields.push('expiryDate');
+      if (listingType === 'Rental' && !occupationDateValue) missingFields.push('occupation_date (required for P24 Available Date)');
+      if (!resolvedSuburbId) missingFields.push('propertyInfo.suburbId');
+      if (!marketCenter && !toText(listing.market_center_id)) missingFields.push('listing.market_center_id');
+    }
 
     if (missingFields.length > 0) {
       const prerequisiteMessage = `Property24 publish prerequisites are missing: ${missingFields.join(', ')}`;
