@@ -312,6 +312,13 @@ function toIsoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+function buildSafeUtcDate(year: number, monthZeroBased: number, dayOfMonth: number): Date {
+  const monthStart = new Date(Date.UTC(year, monthZeroBased, 1));
+  const lastDay = new Date(Date.UTC(year, monthZeroBased + 1, 0)).getUTCDate();
+  const safeDay = Math.max(1, Math.min(dayOfMonth, lastDay));
+  return new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), safeDay));
+}
+
 function buildCapCycle(effectiveDate: Date, capStartDateRaw: string | null): { start: Date; end: Date } {
   const effective = startOfDay(effectiveDate);
 
@@ -331,9 +338,9 @@ function buildCapCycle(effectiveDate: Date, capStartDateRaw: string | null): { s
   const month = anchor.getUTCMonth();
   const day = anchor.getUTCDate();
 
-  let cycleStart = new Date(Date.UTC(effective.getUTCFullYear(), month, day));
+  let cycleStart = buildSafeUtcDate(effective.getUTCFullYear(), month, day);
   if (effective < cycleStart) {
-    cycleStart = new Date(Date.UTC(effective.getUTCFullYear() - 1, month, day));
+    cycleStart = buildSafeUtcDate(effective.getUTCFullYear() - 1, month, day);
   }
 
   const cycleEnd = addDays(addYears(cycleStart, 1), -1);
@@ -428,7 +435,7 @@ export async function fetchRawRows(db: Queryable): Promise<RawAgentRow[]> {
       ct.source_rental_id::text,
       ct.source_rental_payment_schedule_id::text,
       ca.team_id::text AS associate_team_id,
-      team_cycle.team_cap_date::text AS team_cap_date,
+      COALESCE(td.cap_date, member_cycle.team_cap_date)::text AS team_cap_date,
       team_cap.team_cap_amount::text AS team_cap_amount,
       team_cap.commission_split_to_team::text AS team_commission_split_to_team,
       ct.source_team_id AS transaction_source_team_id,
@@ -439,6 +446,7 @@ export async function fetchRawRows(db: Queryable): Promise<RawAgentRow[]> {
     FROM migration.transaction_agents ta
     JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
     LEFT JOIN migration.core_associates ca ON ca.id = ta.associate_id
+    LEFT JOIN migration.team_dates td ON td.team_id = ca.team_id
     LEFT JOIN LATERAL (
       SELECT
         GREATEST(COALESCE(tc.team_cap_amount, 0), 0)::numeric(18,2) AS team_cap_amount,
@@ -454,7 +462,7 @@ export async function fetchRawRows(db: Queryable): Promise<RawAgentRow[]> {
       WHERE ca.team_id IS NOT NULL
         AND ca_team.team_id = ca.team_id
         AND LOWER(TRIM(COALESCE(ca_team.status_name, ''))) IN ('active', '1')
-    ) team_cycle ON true
+    ) member_cycle ON true
     LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
     LEFT JOIN LATERAL (
       SELECT
@@ -475,6 +483,206 @@ export async function fetchRawRows(db: Queryable): Promise<RawAgentRow[]> {
     ) pay ON true
     ORDER BY ta.transaction_id ASC, ta.sort_order ASC, ta.id ASC
   `);
+
+  return result.rows;
+}
+
+export async function fetchRawRowsForTransactionIds(db: Queryable, transactionIds: number[]): Promise<RawAgentRow[]> {
+  if (transactionIds.length === 0) {
+    return [];
+  }
+
+  const result = await db.query<RawAgentRow>(`
+    SELECT
+      ta.id::text AS transaction_agent_id,
+      ta.transaction_id::text AS transaction_id,
+      ct.transaction_number,
+      ta.associate_id::text AS associate_id,
+      ta.source_associate_id,
+      COALESCE(ca.full_name, ca.first_name || ' ' || ca.last_name, ta.source_associate_id) AS associate_name,
+      COALESCE(mc.name, 'Unassigned / Unknown') AS office_name,
+      ta.agent_role,
+      ta.split_percentage::text,
+      ct.transaction_status,
+      ct.transaction_type,
+      COALESCE(NULLIF(TRIM(ct.transaction_type), ''), NULLIF(TRIM(ta.agent_role), ''), 'Unspecified') AS transaction_side,
+      ct.sales_price::text,
+      ct.list_price::text,
+      ct.gci_excl_vat::text,
+      ct.net_comm::text,
+      ct.total_gci::text,
+      ct.growth_share::text AS transaction_growth_share,
+      ct.production_royalties::text AS transaction_production_royalties,
+      ct.transaction_date::text,
+      ct.status_change_date::text,
+      ct.created_at::text,
+      ca.agent_split::text,
+      ca.cap::text,
+      ca.manual_cap,
+      ca.cap_date::text,
+      pay.split_percentage::text AS payment_split_percentage,
+      pay.gci_before_fees::text AS payment_gci_before_fees,
+      pay.production_royalties::text AS payment_production_royalties,
+      pay.growth_share::text AS payment_growth_share,
+      pay.gci_after_fees_excl_vat::text AS payment_gci_after_fees_excl_vat,
+      pay.cap_remaining::text AS payment_cap_remaining,
+      pay.associate_dollar::text AS payment_associate_dollar,
+      pay.team_dollar::text AS payment_team_dollar,
+      pay.mc_dollar::text AS payment_mc_dollar,
+      ct.transaction_category,
+      ct.source_type,
+      ct.source_rental_id::text,
+      ct.source_rental_payment_schedule_id::text,
+      ca.team_id::text AS associate_team_id,
+      COALESCE(td.cap_date, member_cycle.team_cap_date)::text AS team_cap_date,
+      team_cap.team_cap_amount::text AS team_cap_amount,
+      team_cap.commission_split_to_team::text AS team_commission_split_to_team,
+      ct.source_team_id AS transaction_source_team_id,
+      ct.current_source_team_id AS transaction_current_source_team_id,
+      ca.source_team_id AS associate_source_team_id,
+      ct.counts_toward_cap,
+      ct.manual_financial_override
+    FROM migration.transaction_agents ta
+    JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
+    LEFT JOIN migration.core_associates ca ON ca.id = ta.associate_id
+    LEFT JOIN migration.team_dates td ON td.team_id = ca.team_id
+    LEFT JOIN LATERAL (
+      SELECT
+        GREATEST(COALESCE(tc.team_cap_amount, 0), 0)::numeric(18,2) AS team_cap_amount,
+        GREATEST(COALESCE(tc.commission_split_to_team, 0), 0)::numeric(10,4) AS commission_split_to_team
+      FROM migration.team_caps tc
+      WHERE tc.team_id = ca.team_id
+      ORDER BY tc.cap_year DESC NULLS LAST, tc.id DESC
+      LIMIT 1
+    ) team_cap ON true
+    LEFT JOIN LATERAL (
+      SELECT MIN(ca_team.cap_date)::date AS team_cap_date
+      FROM migration.core_associates ca_team
+      WHERE ca.team_id IS NOT NULL
+        AND ca_team.team_id = ca.team_id
+        AND LOWER(TRIM(COALESCE(ca_team.status_name, ''))) IN ('active', '1')
+    ) member_cycle ON true
+    LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+    LEFT JOIN LATERAL (
+      SELECT
+        tapd.split_percentage,
+        tapd.gci_before_fees,
+        tapd.production_royalties,
+        tapd.growth_share,
+        tapd.gci_after_fees_excl_vat,
+        tapd.cap_remaining,
+        tapd.associate_dollar,
+        tapd.team_dollar,
+        tapd.mc_dollar
+      FROM staging.transaction_associate_payment_details tapd
+      WHERE tapd.source_transaction_id = ct.source_transaction_id
+        AND COALESCE(tapd.source_associate_id, '') = COALESCE(ta.source_associate_id, '')
+      ORDER BY tapd.source_transaction_associate_id DESC NULLS LAST, tapd.source_associate_id DESC NULLS LAST
+      LIMIT 1
+    ) pay ON true
+    WHERE ta.transaction_id = ANY($1::bigint[])
+    ORDER BY ta.transaction_id ASC, ta.sort_order ASC, ta.id ASC
+  `, [transactionIds]);
+
+  return result.rows;
+}
+
+export async function fetchRawRowsForAssociateIds(db: Queryable, associateIds: number[]): Promise<RawAgentRow[]> {
+  if (associateIds.length === 0) {
+    return [];
+  }
+
+  const result = await db.query<RawAgentRow>(`
+    SELECT
+      ta.id::text AS transaction_agent_id,
+      ta.transaction_id::text AS transaction_id,
+      ct.transaction_number,
+      ta.associate_id::text AS associate_id,
+      ta.source_associate_id,
+      COALESCE(ca.full_name, ca.first_name || ' ' || ca.last_name, ta.source_associate_id) AS associate_name,
+      COALESCE(mc.name, 'Unassigned / Unknown') AS office_name,
+      ta.agent_role,
+      ta.split_percentage::text,
+      ct.transaction_status,
+      ct.transaction_type,
+      COALESCE(NULLIF(TRIM(ct.transaction_type), ''), NULLIF(TRIM(ta.agent_role), ''), 'Unspecified') AS transaction_side,
+      ct.sales_price::text,
+      ct.list_price::text,
+      ct.gci_excl_vat::text,
+      ct.net_comm::text,
+      ct.total_gci::text,
+      ct.growth_share::text AS transaction_growth_share,
+      ct.production_royalties::text AS transaction_production_royalties,
+      ct.transaction_date::text,
+      ct.status_change_date::text,
+      ct.created_at::text,
+      ca.agent_split::text,
+      ca.cap::text,
+      ca.manual_cap,
+      ca.cap_date::text,
+      pay.split_percentage::text AS payment_split_percentage,
+      pay.gci_before_fees::text AS payment_gci_before_fees,
+      pay.production_royalties::text AS payment_production_royalties,
+      pay.growth_share::text AS payment_growth_share,
+      pay.gci_after_fees_excl_vat::text AS payment_gci_after_fees_excl_vat,
+      pay.cap_remaining::text AS payment_cap_remaining,
+      pay.associate_dollar::text AS payment_associate_dollar,
+      pay.team_dollar::text AS payment_team_dollar,
+      pay.mc_dollar::text AS payment_mc_dollar,
+      ct.transaction_category,
+      ct.source_type,
+      ct.source_rental_id::text,
+      ct.source_rental_payment_schedule_id::text,
+      ca.team_id::text AS associate_team_id,
+      COALESCE(td.cap_date, member_cycle.team_cap_date)::text AS team_cap_date,
+      team_cap.team_cap_amount::text AS team_cap_amount,
+      team_cap.commission_split_to_team::text AS team_commission_split_to_team,
+      ct.source_team_id AS transaction_source_team_id,
+      ct.current_source_team_id AS transaction_current_source_team_id,
+      ca.source_team_id AS associate_source_team_id,
+      ct.counts_toward_cap,
+      ct.manual_financial_override
+    FROM migration.transaction_agents ta
+    JOIN migration.core_transactions ct ON ct.id = ta.transaction_id
+    LEFT JOIN migration.core_associates ca ON ca.id = ta.associate_id
+    LEFT JOIN migration.team_dates td ON td.team_id = ca.team_id
+    LEFT JOIN LATERAL (
+      SELECT
+        GREATEST(COALESCE(tc.team_cap_amount, 0), 0)::numeric(18,2) AS team_cap_amount,
+        GREATEST(COALESCE(tc.commission_split_to_team, 0), 0)::numeric(10,4) AS commission_split_to_team
+      FROM migration.team_caps tc
+      WHERE tc.team_id = ca.team_id
+      ORDER BY tc.cap_year DESC NULLS LAST, tc.id DESC
+      LIMIT 1
+    ) team_cap ON true
+    LEFT JOIN LATERAL (
+      SELECT MIN(ca_team.cap_date)::date AS team_cap_date
+      FROM migration.core_associates ca_team
+      WHERE ca.team_id IS NOT NULL
+        AND ca_team.team_id = ca.team_id
+        AND LOWER(TRIM(COALESCE(ca_team.status_name, ''))) IN ('active', '1')
+    ) member_cycle ON true
+    LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = ca.source_market_center_id
+    LEFT JOIN LATERAL (
+      SELECT
+        tapd.split_percentage,
+        tapd.gci_before_fees,
+        tapd.production_royalties,
+        tapd.growth_share,
+        tapd.gci_after_fees_excl_vat,
+        tapd.cap_remaining,
+        tapd.associate_dollar,
+        tapd.team_dollar,
+        tapd.mc_dollar
+      FROM staging.transaction_associate_payment_details tapd
+      WHERE tapd.source_transaction_id = ct.source_transaction_id
+        AND COALESCE(tapd.source_associate_id, '') = COALESCE(ta.source_associate_id, '')
+      ORDER BY tapd.source_transaction_associate_id DESC NULLS LAST, tapd.source_associate_id DESC NULLS LAST
+      LIMIT 1
+    ) pay ON true
+    WHERE ta.associate_id = ANY($1::bigint[])
+    ORDER BY ta.transaction_id ASC, ta.sort_order ASC, ta.id ASC
+  `, [associateIds]);
 
   return result.rows;
 }
@@ -516,6 +724,30 @@ function resolveTransactionGci(row: RawAgentRow): number {
   if (gciExclVat > 0) return gciExclVat;
 
   return 0;
+}
+
+function hasTrustworthyPaymentTotals(rows: RawAgentRow[]): boolean {
+  if (rows.length === 0) return false;
+
+  const transactionGci = rows.reduce((maxValue, row) => Math.max(maxValue, resolveTransactionGci(row)), 0);
+  if (transactionGci <= 0) return false;
+
+  let paymentTotal = 0;
+  for (const row of rows) {
+    const paymentGciBeforeFees = toNumber(row.payment_gci_before_fees);
+    if (paymentGciBeforeFees <= 0) {
+      return false;
+    }
+    paymentTotal = roundMoney(paymentTotal + roundMoney(paymentGciBeforeFees));
+  }
+
+  // Allow for row-level rounding while rejecting materially stale payment snapshots.
+  const tolerance = Math.max(0.5, transactionGci * 0.005);
+  return Math.abs(roundMoney(paymentTotal) - roundMoney(transactionGci)) <= tolerance;
+}
+
+export function hasTrustworthyPaymentTotalsForTesting(rows: RawAgentRow[]): boolean {
+  return hasTrustworthyPaymentTotals(rows);
 }
 
 function hasAuthoritativePaymentDetails(row: RawAgentRow): boolean {
@@ -582,6 +814,7 @@ export function buildPreCapCalculatedRowsWithMeta(groups: TransactionGroup[]): C
       const transactionProductionRoyalties = Math.max(toNumber(row.transaction_production_royalties), 0);
       const transactionGrowthShare = Math.max(toNumber(row.transaction_growth_share), 0);
       const transactionNetComm = Math.max(toNumber(row.net_comm), 0);
+      const manualCapActive = row.manual_cap === true && !outside;
 
       const productionRoyalties = authoritativePaymentDetails
         ? roundMoney(toNumber(row.payment_production_royalties))
@@ -625,7 +858,7 @@ export function buildPreCapCalculatedRowsWithMeta(groups: TransactionGroup[]): C
 
       const associateDollarPreCap = roundMoney(gciAfterFees * (agentSplitPct / 100));
       const marketCenterDollarPreCap = roundMoney(gciAfterFees * (marketCenterSplitPct / 100));
-      const associateCapAmount = outside ? 0 : roundMoney(toNumber(row.cap));
+      const associateCapAmount = outside || manualCapActive ? 0 : roundMoney(toNumber(row.cap));
       const teamCapAmount = outside ? 0 : roundMoney(toNumber(row.team_cap_amount));
       const capAmount = teamTransaction && teamCapAmount > 0 ? teamCapAmount : associateCapAmount;
       const capCycleAnchor = teamTransaction
@@ -641,6 +874,19 @@ export function buildPreCapCalculatedRowsWithMeta(groups: TransactionGroup[]): C
       let teamDollar = authoritativePaymentDetails && !requiresCapProgression
         ? roundMoney(toNumber(row.payment_team_dollar))
         : 0;
+      let marketCenterDollar = authoritativePaymentDetails
+        ? (requiresCapProgression ? marketCenterDollarPreCap : paymentMarketCenterDollar)
+        : outside ? 0 : marketCenterDollarPreCap;
+
+      // Manual-capped associates should never receive MC allocations.
+      if (manualCapActive && marketCenterDollar > 0) {
+        if (teamTransaction) {
+          teamDollar = roundMoney(teamDollar + marketCenterDollar);
+        } else {
+          associateDollar = roundMoney(associateDollar + marketCenterDollar);
+        }
+        marketCenterDollar = 0;
+      }
 
       if (!outside && teamTransaction) {
         teamDollar = roundMoney(teamDollar + associateDollar);
@@ -672,11 +918,11 @@ export function buildPreCapCalculatedRowsWithMeta(groups: TransactionGroup[]): C
         associate_dollar: associateDollar,
         cap_amount: roundMoney(capAmount),
         cap_contribution: 0,
-        cap_remaining: authoritativePaymentDetails && !requiresCapProgression ? roundMoney(toNumber(row.payment_cap_remaining)) : 0,
+        cap_remaining: manualCapActive
+          ? 0
+          : authoritativePaymentDetails && !requiresCapProgression ? roundMoney(toNumber(row.payment_cap_remaining)) : 0,
         team_dollar: teamDollar,
-        market_center_dollar: authoritativePaymentDetails
-          ? (requiresCapProgression ? marketCenterDollarPreCap : paymentMarketCenterDollar)
-          : outside ? 0 : marketCenterDollarPreCap,
+        market_center_dollar: marketCenterDollar,
         cap_cycle_start_date: capCycleStartDate,
         cap_cycle_end_date: capCycleEndDate,
         effective_reporting_date: toIsoDate(effectiveDate),
@@ -743,8 +989,8 @@ export function applyCapProgressionToCalculatedRowsWithMeta(baseMetaRows: Calcul
     const capAmount = row.cap_amount;
     const capLeft = Math.max(capAmount - capUsedBefore, 0);
 
-    if (!shouldConsumeCap || withdrawn) {
-      if (withdrawn && row.market_center_dollar > 0) {
+    if (withdrawn) {
+      if (row.market_center_dollar > 0) {
         const restored = row.market_center_dollar;
         row.market_center_dollar = 0;
         if (row.is_team_transaction) {
@@ -753,6 +999,20 @@ export function applyCapProgressionToCalculatedRowsWithMeta(baseMetaRows: Calcul
           row.associate_dollar = roundMoney(row.associate_dollar + restored);
         }
       }
+      row.cap_contribution = 0;
+      row.cap_remaining = roundMoney(capLeft);
+      rows.push(row);
+      continue;
+    }
+
+    if (!row.is_registered) {
+      row.cap_contribution = 0;
+      row.cap_remaining = roundMoney(capLeft);
+      rows.push(row);
+      continue;
+    }
+
+    if (!shouldConsumeCap || withdrawn) {
       row.cap_contribution = 0;
       row.cap_remaining = roundMoney(capLeft);
       rows.push(row);
@@ -894,19 +1154,35 @@ async function fetchTeamNagelCapImpactSummary(
     next_cap_date: string | null;
   }>(`
     WITH team_base AS (
-      SELECT t.id AS team_id, MIN(ca.cap_date)::date AS cap_date
+      SELECT t.id AS team_id, COALESCE(td.cap_date::date, MIN(ca.cap_date)::date) AS cap_date
       FROM migration.core_teams t
+      LEFT JOIN migration.team_dates td ON td.team_id = t.id
       JOIN migration.core_associates ca ON ca.team_id = t.id
       WHERE LOWER(TRIM(COALESCE(t.name,''))) = 'team nagel'
         AND LOWER(TRIM(COALESCE(ca.status_name,''))) IN ('active','1')
-      GROUP BY t.id
+      GROUP BY t.id, td.cap_date
       LIMIT 1
     ),
     cycle_windows AS (
       SELECT team_id,
         CASE
           WHEN cap_date IS NULL THEN NULL::date
-          ELSE make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int, EXTRACT(MONTH FROM cap_date)::int, EXTRACT(DAY FROM cap_date)::int)
+          ELSE make_date(
+            EXTRACT(YEAR FROM CURRENT_DATE)::int,
+            EXTRACT(MONTH FROM cap_date)::int,
+            LEAST(
+              EXTRACT(DAY FROM cap_date)::int,
+              EXTRACT(
+                DAY FROM (
+                  make_date(
+                    EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                    EXTRACT(MONTH FROM cap_date)::int,
+                    1
+                  ) + INTERVAL '1 month - 1 day'
+                )
+              )::int
+            )
+          )
         END AS anniversary_this_year
       FROM team_base
     ),
@@ -1307,6 +1583,22 @@ export async function recomputeAllTransactionAgentCalculations(db: Queryable): P
   await insertCalculatedRows(db, calculated);
 }
 
+export async function recomputeAllTransactionAgentCalculationsSafe(db: Queryable): Promise<number> {
+  // Serialize recompute across all app instances sharing the same database.
+  await db.query(`SELECT pg_advisory_xact_lock(hashtext('kwsa:transaction-agent-calculations:recompute'))`);
+  await ensureCalculationColumns(db);
+  await ensureCalculationUniqueness(db);
+
+  // Rebuild calculations from source rows and upsert in place.
+  // This avoids TRUNCATE/DELETE paths that can be blocked by FK references
+  // from live reporting allocation tables.
+  const rawRows = await fetchRawRows(db);
+  const groups = groupByTransaction(rawRows);
+  const calculated = buildCalculatedRowsWithMeta(groups).map((entry) => entry.row);
+  await upsertCalculatedRows(db, calculated);
+  return calculated.length;
+}
+
 export async function recomputeScopedTransactionAgentCalculations(
   db: Queryable,
   strictTransactionNumbers: string[]
@@ -1383,5 +1675,56 @@ export async function recomputeScopedTransactionAgentCalculations(
     strict_transaction_numbers: normalizedStrictTransactionNumbers,
     affected_rows_count: envelopeRows.length,
     affected_transaction_ids: strictTransactionIds,
+  };
+}
+
+export async function recomputeScopedTransactionAgentCalculationsForAssociateIds(
+  db: Queryable,
+  associateIds: number[]
+): Promise<ScopedRecomputeResult> {
+  const normalizedAssociateIds = Array.from(new Set(
+    associateIds.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
+  ));
+
+  if (normalizedAssociateIds.length === 0) {
+    return {
+      strict_transaction_numbers: [],
+      affected_rows_count: 0,
+      affected_transaction_ids: [],
+    };
+  }
+
+  await db.query(`SELECT pg_advisory_xact_lock(hashtext('kwsa:transaction-agent-calculations:recompute'))`);
+  await ensureCalculationColumns(db);
+  await ensureCalculationUniqueness(db);
+
+  const scopedRawRows = await fetchRawRowsForAssociateIds(db, normalizedAssociateIds);
+  const affectedTransactionIds = Array.from(new Set(
+    scopedRawRows.map((row) => Number(row.transaction_id)).filter((value) => Number.isFinite(value) && value > 0)
+  ));
+
+  if (affectedTransactionIds.length === 0) {
+    return {
+      strict_transaction_numbers: [],
+      affected_rows_count: 0,
+      affected_transaction_ids: [],
+    };
+  }
+
+  const fullRows = await fetchRawRowsForTransactionIds(db, affectedTransactionIds);
+  const groups = groupByTransaction(fullRows);
+  const calculated = buildCalculatedRows(groups);
+
+  await db.query(
+    `DELETE FROM migration.transaction_agent_calculations WHERE transaction_id = ANY($1::bigint[])`,
+    [affectedTransactionIds]
+  );
+
+  await upsertCalculatedRows(db, calculated);
+
+  return {
+    strict_transaction_numbers: [],
+    affected_rows_count: calculated.length,
+    affected_transaction_ids: affectedTransactionIds,
   };
 }

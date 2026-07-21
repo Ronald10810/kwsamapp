@@ -40,9 +40,18 @@ router.get('/', resolvePermissions, async (req, res) => {
     });
   }
 
-  const dateInput = String(req.query.date ?? '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
-    return res.status(400).json({ error: 'Query parameter date (YYYY-MM-DD) is required.' });
+  const legacyDateInput = String(req.query.date ?? '').trim();
+  const dateFromInput = String(req.query.date_from ?? legacyDateInput).trim();
+  const dateToInput = String(req.query.date_to ?? legacyDateInput).trim();
+  const associateNameFilter = String(req.query.associate_name ?? '').trim();
+  const associateEmailFilter = String(req.query.associate_email ?? '').trim();
+  const marketCenterFilter = String(req.query.market_center ?? '').trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFromInput) || !/^\d{4}-\d{2}-\d{2}$/.test(dateToInput)) {
+    return res.status(400).json({ error: 'Query parameters date_from and date_to (YYYY-MM-DD) are required.' });
+  }
+  if (dateFromInput > dateToInput) {
+    return res.status(400).json({ error: 'date_from cannot be later than date_to.' });
   }
 
   try {
@@ -78,7 +87,9 @@ router.get('/', resolvePermissions, async (req, res) => {
         LEFT JOIN migration.core_associates a ON a.id = la.associate_id
         LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = a.source_market_center_id
         LEFT JOIN public.app_users au ON au.id = la.app_user_id
-        WHERE (la.logged_in_at AT TIME ZONE $1)::date = $2::date
+        WHERE (la.logged_in_at AT TIME ZONE $1)::date >= $2::date
+          AND (la.logged_in_at AT TIME ZONE $1)::date <= $3::date
+          AND LOWER(TRIM(COALESCE(la.login_method, ''))) <> 'dev-login'
       ),
       inferred_activity AS (
         SELECT
@@ -99,7 +110,8 @@ router.get('/', resolvePermissions, async (req, res) => {
         LEFT JOIN migration.core_associates a
           ON LOWER(TRIM(COALESCE(a.kwsa_email, a.private_email, a.email, ''))) = LOWER(TRIM(au.email))
         LEFT JOIN migration.core_market_centers mc ON mc.source_market_center_id = a.source_market_center_id
-        WHERE (au.updated_at AT TIME ZONE $1)::date = $2::date
+        WHERE (au.updated_at AT TIME ZONE $1)::date >= $2::date
+          AND (au.updated_at AT TIME ZONE $1)::date <= $3::date
           AND NOT EXISTS (
             SELECT 1
             FROM explicit_activity ea
@@ -119,15 +131,26 @@ router.get('/', resolvePermissions, async (req, res) => {
         UNION ALL
         SELECT * FROM inferred_activity
       ) AS combined
+      WHERE ($4::text = '' OR COALESCE(combined.associate_name, '') ILIKE '%' || $4 || '%')
+        AND ($5::text = '' OR COALESCE(combined.associate_email, '') ILIKE '%' || $5 || '%')
+        AND ($6::text = '' OR COALESCE(combined.market_center_name, '') ILIKE '%' || $6 || '%')
       ORDER BY combined.logged_in_at DESC
       LIMIT 5000
       `,
-      [env.appTimeZone, dateInput]
+      [env.appTimeZone, dateFromInput, dateToInput, associateNameFilter, associateEmailFilter, marketCenterFilter]
     );
 
+    const uniqueAssociates = new Set(result.rows.map((row) => row.associate_email.trim().toLowerCase()).filter(Boolean)).size;
+    const uniqueMarketCenters = new Set(result.rows.map((row) => (row.market_center_name ?? '').trim()).filter(Boolean)).size;
+
     return res.json({
-      date: dateInput,
+      date_from: dateFromInput,
+      date_to: dateToInput,
       count: result.rowCount,
+      summary: {
+        unique_associates: uniqueAssociates,
+        unique_market_centers: uniqueMarketCenters,
+      },
       items: result.rows,
     });
   } catch (error) {

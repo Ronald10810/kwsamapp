@@ -86,6 +86,11 @@ function officeAdminAllowedMcId(perms: { marketCenterId: string | null; homeMcId
   return perms.marketCenterId ?? perms.homeMcId ?? null;
 }
 
+function isAllMarketCenterScope(value: string | null | undefined): boolean {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === '__all__' || normalized === 'all';
+}
+
 async function callListingApi(
   path: string,
   method: 'GET' | 'POST' | 'PUT',
@@ -163,6 +168,7 @@ router.get('/mc-agents/:mcSourceId', resolvePermissions, async (req, res) => {
 
   const mcSourceId = req.params.mcSourceId;
   let effectiveMcSourceId = mcSourceId;
+  const allMarketCenters = perms.isRegionalAdmin && isAllMarketCenterScope(mcSourceId);
 
   // Regional Admins may query any MC; Office Admins must query their own MC
   if (perms.isOfficeAdmin && !perms.isRegionalAdmin) {
@@ -197,12 +203,15 @@ router.get('/mc-agents/:mcSourceId', resolvePermissions, async (req, res) => {
            WHERE cl.id = la.listing_id
              AND LOWER(TRIM(COALESCE(cl.status_name, ''))) = 'active'
          )
-       WHERE REGEXP_REPLACE(LOWER(TRIM(COALESCE(a.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g')
-               = REGEXP_REPLACE(LOWER(TRIM($1)), '[^a-z0-9]+', '', 'g')
+       WHERE (
+         $1::boolean = true
+         OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(a.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g')
+              = REGEXP_REPLACE(LOWER(TRIM($2)), '[^a-z0-9]+', '', 'g')
+       )
          AND LOWER(TRIM(COALESCE(a.status_name, ''))) = 'active'
        GROUP BY a.id, a.full_name, a.kwsa_email, a.private_email, a.email, a.mobile_number, a.image_url
        ORDER BY a.full_name`,
-      [effectiveMcSourceId]
+      [allMarketCenters, effectiveMcSourceId]
     );
     return res.json({ agents: result.rows });
   } catch (err) {

@@ -85,6 +85,25 @@ function reportingDateSql(alias: string): string {
   END`;
 }
 
+function buildCurrentYearAnniversarySql(capDateExpr: string): string {
+  return `make_date(
+    EXTRACT(YEAR FROM CURRENT_DATE)::int,
+    EXTRACT(MONTH FROM ${capDateExpr})::int,
+    LEAST(
+      EXTRACT(DAY FROM ${capDateExpr})::int,
+      EXTRACT(
+        DAY FROM (
+          make_date(
+            EXTRACT(YEAR FROM CURRENT_DATE)::int,
+            EXTRACT(MONTH FROM ${capDateExpr})::int,
+            1
+          ) + INTERVAL '1 month - 1 day'
+        )
+      )::int
+    )
+  )`;
+}
+
 function toText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -3437,11 +3456,7 @@ async function fetchAssociateCurrentCapRemainingByIds(db: Pool, associateIds: nu
         GREATEST(COALESCE(ca.cap, 0), 0)::numeric(18,2) AS associate_cap_amount,
         CASE
           WHEN ca.cap_date IS NULL THEN NULL::date
-          ELSE make_date(
-            EXTRACT(YEAR FROM CURRENT_DATE)::int,
-            EXTRACT(MONTH FROM ca.cap_date)::int,
-            EXTRACT(DAY FROM ca.cap_date)::int
-          )
+          ELSE ${buildCurrentYearAnniversarySql('ca.cap_date')}
         END AS anniversary_this_year
       FROM migration.core_associates ca
       WHERE ca.id = ANY($1::bigint[])
@@ -3546,11 +3561,7 @@ async function fetchTeamCurrentCapRemainingByIds(db: Pool, teamIds: number[]): P
         GREATEST(COALESCE(ca.cap, 0), 0)::numeric(18,2) AS associate_cap_amount,
         CASE
           WHEN ca.cap_date IS NULL THEN NULL::date
-          ELSE make_date(
-            EXTRACT(YEAR FROM CURRENT_DATE)::int,
-            EXTRACT(MONTH FROM ca.cap_date)::int,
-            EXTRACT(DAY FROM ca.cap_date)::int
-          )
+          ELSE ${buildCurrentYearAnniversarySql('ca.cap_date')}
         END AS anniversary_this_year
       FROM migration.core_associates ca
       WHERE ca.team_id = ANY($1::bigint[])
@@ -3633,25 +3644,51 @@ async function fetchTeamCurrentCapRemainingByIds(db: Pool, teamIds: number[]): P
       FROM migration.team_caps tc
       WHERE tc.team_id = ANY($1::bigint[])
     ),
-    team_member_counts AS (
+    member_cycle AS (
       SELECT
         ab.team_id,
-        MIN(ab.cap_date) AS cap_date
+        MIN(ab.cap_date) AS team_cap_date
       FROM associate_base ab
       WHERE ab.team_id IS NOT NULL
       GROUP BY ab.team_id
     ),
+    team_dates AS (
+      SELECT
+        t.id AS team_id,
+        COALESCE(td.cap_date, member_cycle.team_cap_date) AS cap_date,
+        CASE
+          WHEN COALESCE(td.cap_date, member_cycle.team_cap_date) IS NULL THEN NULL::date
+          ELSE ${buildCurrentYearAnniversarySql('COALESCE(td.cap_date, member_cycle.team_cap_date)')}
+        END AS anniversary_this_year
+      FROM migration.core_teams t
+      LEFT JOIN migration.team_dates td ON td.team_id = t.id
+      LEFT JOIN member_cycle ON member_cycle.team_id = t.id
+      WHERE t.id = ANY($1::bigint[])
+    ),
+    team_cycle_windows AS (
+      SELECT
+        tcd.team_id,
+        tcd.cap_date,
+        CASE
+          WHEN tcd.cap_date IS NULL THEN NULL::date
+          WHEN tcd.anniversary_this_year >= CURRENT_DATE THEN tcd.anniversary_this_year
+          ELSE (tcd.anniversary_this_year + INTERVAL '1 year')::date
+        END AS next_cap_date
+      FROM team_dates tcd
+    ),
     team_base AS (
       SELECT
         t.id AS team_id,
-        tmc.cap_date,
+        COALESCE(tcw.next_cap_date, tcd.cap_date) AS cap_date,
         GREATEST(COALESCE(ltc.team_cap_amount, 0), 0)::numeric(18,2) AS cap_amount
       FROM migration.core_teams t
-      INNER JOIN team_member_counts tmc ON tmc.team_id = t.id
+      INNER JOIN member_cycle mc_cycle ON mc_cycle.team_id = t.id
+      LEFT JOIN team_dates tcd ON tcd.team_id = t.id
+      LEFT JOIN team_cycle_windows tcw ON tcw.team_id = t.id
       LEFT JOIN latest_team_caps ltc ON ltc.team_id = t.id AND ltc.rn = 1
       WHERE t.id = ANY($1::bigint[])
         AND LOWER(TRIM(COALESCE(t.status_name, ''))) IN ('active', '1')
-      GROUP BY t.id, tmc.cap_date, ltc.team_cap_amount
+      GROUP BY t.id, tcd.cap_date, tcw.next_cap_date, ltc.team_cap_amount
     ),
     team_achieved AS (
       SELECT
@@ -3984,11 +4021,7 @@ router.get('/:id/calculated-summary', resolvePermissions, async (req, res) => {
             ta.team_id,
             CASE
               WHEN ta.cap_date IS NULL THEN NULL::date
-              ELSE make_date(
-                EXTRACT(YEAR FROM CURRENT_DATE)::int,
-                EXTRACT(MONTH FROM ta.cap_date)::int,
-                EXTRACT(DAY FROM ta.cap_date)::int
-              )
+              ELSE ${buildCurrentYearAnniversarySql('ta.cap_date')}
             END AS anniversary_this_year
           FROM team_anchor ta
         ),

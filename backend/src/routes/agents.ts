@@ -175,6 +175,25 @@ function toDate(value: unknown): string | null {
   return d.toISOString().slice(0, 10);
 }
 
+function buildCurrentYearAnniversarySql(capDateExpr: string): string {
+  return `make_date(
+    EXTRACT(YEAR FROM CURRENT_DATE)::int,
+    EXTRACT(MONTH FROM ${capDateExpr})::int,
+    LEAST(
+      EXTRACT(DAY FROM ${capDateExpr})::int,
+      EXTRACT(
+        DAY FROM (
+          make_date(
+            EXTRACT(YEAR FROM CURRENT_DATE)::int,
+            EXTRACT(MONTH FROM ${capDateExpr})::int,
+            1
+          ) + INTERVAL '1 month - 1 day'
+        )
+      )::int
+    )
+  )`;
+}
+
 function firstOfNextMonthFromDateText(dateText: string): string {
   const [yearText, monthText] = dateText.split('-');
   const year = Number(yearText);
@@ -887,6 +906,7 @@ router.get('/me/home', async (req, res) => {
         pool.query<{
           cap_year: string | null;
           team_cap_amount: string | null;
+          manual_cap: boolean;
           cap_date: string | null;
           period_start_date: string | null;
           period_end_date: string | null;
@@ -900,11 +920,7 @@ router.get('/me/home', async (req, res) => {
               GREATEST(COALESCE(ca.cap, 0), 0)::numeric(18,2) AS associate_cap_amount,
               CASE
                 WHEN ca.cap_date IS NULL THEN NULL::date
-                ELSE make_date(
-                  EXTRACT(YEAR FROM CURRENT_DATE)::int,
-                  EXTRACT(MONTH FROM ca.cap_date)::int,
-                  EXTRACT(DAY FROM ca.cap_date)::int
-                )
+                ELSE ${buildCurrentYearAnniversarySql('ca.cap_date')}
               END AS anniversary_this_year
             FROM migration.core_associates ca
             WHERE ca.team_id = $1
@@ -968,6 +984,7 @@ router.get('/me/home', async (req, res) => {
             SELECT
               tc.team_id,
               COALESCE(tc.team_cap_amount, 0)::numeric(18,2) AS team_cap_amount,
+              COALESCE(tc.manual_cap, false) AS manual_cap,
               tc.cap_year,
               ROW_NUMBER() OVER (
                 PARTITION BY tc.team_id
@@ -976,25 +993,57 @@ router.get('/me/home', async (req, res) => {
             FROM migration.team_caps tc
             WHERE tc.team_id = $1
           ),
-          team_member_counts AS (
+          member_cycle AS (
             SELECT
               ab.team_id,
-              MIN(ab.cap_date) AS cap_date
+              MIN(ab.cap_date) AS team_cap_date
             FROM associate_base ab
             WHERE ab.team_id IS NOT NULL
             GROUP BY ab.team_id
+          ),
+          team_dates AS (
+            SELECT
+              t.id AS team_id,
+              td.cap_date,
+              CASE
+                WHEN td.cap_date IS NULL THEN NULL::date
+                ELSE ${buildCurrentYearAnniversarySql('td.cap_date')}
+              END AS anniversary_this_year,
+              member_cycle.team_cap_date
+            FROM migration.core_teams t
+            LEFT JOIN migration.team_dates td ON td.team_id = t.id
+            LEFT JOIN member_cycle ON member_cycle.team_id = t.id
+            WHERE t.id = $1
+          ),
+          team_cycle_windows AS (
+            SELECT
+              tcd.team_id,
+              tcd.team_cap_date,
+              COALESCE(tcw.next_cap_date, td.cap_date) AS cap_date
+            FROM team_dates tcd
+            LEFT JOIN LATERAL (
+              SELECT
+                CASE
+                  WHEN tcd.cap_date IS NULL THEN NULL::date
+                  WHEN tcd.anniversary_this_year >= CURRENT_DATE THEN tcd.anniversary_this_year
+                  ELSE (tcd.anniversary_this_year + INTERVAL '1 year')::date
+                END AS next_cap_date
+            ) tcw ON true
+            LEFT JOIN migration.team_dates td ON td.team_id = tcd.team_id
           ),
           team_base AS (
             SELECT
               t.id AS team_id,
               GREATEST(COALESCE(ltc.team_cap_amount, 0), 0)::numeric(18,2) AS cap_amount,
+              COALESCE(ltc.manual_cap, false) AS manual_cap,
               ltc.cap_year,
-              tmc.cap_date
+              COALESCE(tcw.cap_date, tcw.team_cap_date) AS cap_date
             FROM migration.core_teams t
-            INNER JOIN team_member_counts tmc ON tmc.team_id = t.id
+            INNER JOIN member_cycle mc ON mc.team_id = t.id
+            LEFT JOIN team_cycle_windows tcw ON tcw.team_id = t.id
             LEFT JOIN latest_team_cap ltc ON ltc.team_id = t.id AND ltc.rn = 1
             WHERE t.id = $1
-            GROUP BY t.id, ltc.team_cap_amount, ltc.cap_year, tmc.cap_date
+            GROUP BY t.id, ltc.team_cap_amount, ltc.manual_cap, ltc.cap_year, tcw.cap_date, tcw.team_cap_date
           ),
           team_achieved AS (
             SELECT
@@ -1005,6 +1054,7 @@ router.get('/me/home', async (req, res) => {
             INNER JOIN migration.transaction_agent_calculations tac ON tac.associate_id = ca.id
             INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
             WHERE ${buildRegisteredStatusSql('ct')}
+              AND LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1')
               AND (
                 tb.cap_date IS NULL
                 OR (
@@ -1017,6 +1067,7 @@ router.get('/me/home', async (req, res) => {
           SELECT
             tb.cap_year::text,
             tb.cap_amount::text AS team_cap_amount,
+            tb.manual_cap,
             tb.cap_date::text AS cap_date,
             CASE
               WHEN tb.cap_date IS NULL THEN NULL
@@ -1117,8 +1168,10 @@ router.get('/me/home', async (req, res) => {
       ]);
 
       const teamCapAmount = Number(teamCapResult.rows[0]?.team_cap_amount ?? 0) || 0;
-      const teamCapAchieved = Number(teamCapResult.rows[0]?.team_cap_achieved ?? 0) || 0;
-      const teamCapRemaining = Math.max(teamCapAmount - teamCapAchieved, 0);
+      const teamManualCap = Boolean(teamCapResult.rows[0]?.manual_cap);
+      const teamCapAchievedRaw = Number(teamCapResult.rows[0]?.team_cap_achieved ?? 0) || 0;
+      const teamCapAchieved = teamManualCap ? teamCapAmount : Math.min(teamCapAchievedRaw, teamCapAmount);
+      const teamCapRemaining = teamManualCap ? 0 : Math.max(teamCapAmount - teamCapAchieved, 0);
       const teamProgressPct = teamCapAmount > 0 ? Math.min((teamCapAchieved / teamCapAmount) * 100, 100) : 0;
       const capYear = teamCapResult.rows[0]?.cap_year ? Number(teamCapResult.rows[0].cap_year) : new Date().getFullYear();
       const teamPeriodStartDate = teamCapResult.rows[0]?.period_start_date ?? `${capYear}-01-01`;
@@ -1180,14 +1233,11 @@ router.get('/me/home', async (req, res) => {
           SELECT
             ca.id AS associate_id,
             ca.cap_date,
+            COALESCE(ca.manual_cap, false) AS manual_cap,
             GREATEST(COALESCE(ca.cap, 0), 0)::numeric(18,2) AS associate_cap_amount,
             CASE
               WHEN ca.cap_date IS NULL THEN NULL::date
-              ELSE make_date(
-                EXTRACT(YEAR FROM CURRENT_DATE)::int,
-                EXTRACT(MONTH FROM ca.cap_date)::int,
-                EXTRACT(DAY FROM ca.cap_date)::int
-              )
+              ELSE ${buildCurrentYearAnniversarySql('ca.cap_date')}
             END AS anniversary_this_year
           FROM migration.core_associates ca
           WHERE ca.id = $1
@@ -1195,6 +1245,7 @@ router.get('/me/home', async (req, res) => {
         cycle_windows AS (
           SELECT
             cb.associate_id,
+            cb.manual_cap,
             cb.associate_cap_amount,
             CASE
               WHEN cb.cap_date IS NULL THEN NULL::date
@@ -1215,6 +1266,22 @@ router.get('/me/home', async (req, res) => {
           FROM migration.transaction_agent_calculations tac
           WHERE tac.associate_id = $1
         ),
+        latest_cycle_caps AS (
+          SELECT
+            tac.associate_id,
+            COALESCE(tac.cap_amount, 0) AS cap_amount,
+            COALESCE(tac.cap_remaining, 0) AS cap_remaining,
+            ROW_NUMBER() OVER (
+              PARTITION BY tac.associate_id
+              ORDER BY tac.effective_reporting_date DESC NULLS LAST, tac.updated_at DESC, tac.id DESC
+            ) AS rn
+          FROM migration.transaction_agent_calculations tac
+          INNER JOIN cycle_windows cw ON cw.associate_id = tac.associate_id
+          WHERE tac.associate_id = $1
+            AND cw.next_cap_date IS NOT NULL
+            AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
+            AND tac.effective_reporting_date::date < cw.next_cap_date
+        ),
         latest_cycle_registered_caps AS (
           SELECT
             tac.associate_id,
@@ -1232,6 +1299,19 @@ router.get('/me/home', async (req, res) => {
             AND cw.next_cap_date IS NOT NULL
             AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
             AND tac.effective_reporting_date::date < cw.next_cap_date
+        ),
+        associate_registered_achieved AS (
+          SELECT
+            cw.associate_id,
+            ROUND(COALESCE(SUM(tac.market_center_dollar), 0)::numeric, 2) AS cap_achieved
+          FROM cycle_windows cw
+          INNER JOIN migration.transaction_agent_calculations tac ON tac.associate_id = cw.associate_id
+          INNER JOIN migration.core_transactions ct ON ct.id = tac.transaction_id
+          WHERE cw.next_cap_date IS NOT NULL
+            AND tac.effective_reporting_date::date >= (cw.next_cap_date - INTERVAL '1 year')::date
+            AND tac.effective_reporting_date::date < cw.next_cap_date
+            AND ${buildRegisteredStatusSql('ct')}
+          GROUP BY cw.associate_id
         )
         SELECT
           CASE
@@ -1242,18 +1322,24 @@ router.get('/me/home', async (req, res) => {
             WHEN cw.next_cap_date IS NULL THEN NULL
             ELSE (cw.next_cap_date - INTERVAL '1 day')::date::text
           END AS cap_cycle_end_date,
-          GREATEST(COALESCE(lrc.cap_amount, cw.associate_cap_amount, 0), 0)::text AS cap_amount,
-          GREATEST(
-            COALESCE(
-              lrc.cap_remaining,
-              COALESCE(lrc.cap_amount, cw.associate_cap_amount, 0)
-            ),
-            0
-          )::text AS cap_remaining
+          GREATEST(COALESCE(lcc.cap_amount, lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)::text AS cap_amount,
+          CASE
+            WHEN cw.manual_cap = true THEN '0'
+            ELSE GREATEST(
+              GREATEST(COALESCE(lcc.cap_amount, lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0)
+              - LEAST(
+                GREATEST(COALESCE(lcc.cap_amount, lrc.cap_amount, lc.cap_amount, cw.associate_cap_amount, 0), 0),
+                COALESCE(ara.cap_achieved, 0)
+              ),
+              0
+            )::text
+          END AS cap_remaining
         FROM migration.core_associates ca
         LEFT JOIN cycle_windows cw ON cw.associate_id = ca.id
         LEFT JOIN latest_caps lc ON lc.associate_id = ca.id AND lc.rn = 1
+        LEFT JOIN latest_cycle_caps lcc ON lcc.associate_id = ca.id AND lcc.rn = 1
         LEFT JOIN latest_cycle_registered_caps lrc ON lrc.associate_id = ca.id AND lrc.rn = 1
+        LEFT JOIN associate_registered_achieved ara ON ara.associate_id = ca.id
         WHERE ca.id = $1
         LIMIT 1
         `,
@@ -2085,6 +2171,7 @@ router.post('/', resolvePermissions, async (req, res) => {
         source_associate_id,
         source_market_center_id,
         source_team_id,
+        team_id,
         market_center_id,
         first_name,
         last_name,
@@ -2125,10 +2212,10 @@ router.post('/', resolvePermissions, async (req, res) => {
         cap_date,
         updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-        $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-        $21,$22::date,$23,$24,$25,$26,$27,$28,$29,$30,
-        $31,$32,$33,$34,$35,$36,$37,$38::date,$39::date,$40::date,$41::date,
+        $1,$2,$3,(SELECT id FROM migration.core_teams WHERE source_team_id = $3 LIMIT 1),$4,$5,$6,$7,$8,$9,
+        $10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+        $20,$21::date,$22,$23,$24,$25,$26,$27,$28,$29,
+        $30,$31,$32,$33,$34,$35,$36,$37::date,$38::date,$39::date,$40::date,
         NOW()
       )
       RETURNING id::text
@@ -2264,6 +2351,7 @@ router.put('/:id', resolvePermissions, async (req, res) => {
       SET
         source_market_center_id = $1,
         source_team_id = $2,
+        team_id = (SELECT id FROM migration.core_teams WHERE source_team_id = $2 LIMIT 1),
         market_center_id = $3,
         first_name = $4,
         last_name = $5,

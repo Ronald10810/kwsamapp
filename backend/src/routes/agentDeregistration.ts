@@ -112,6 +112,7 @@ async function callListingApi(
   token: string,
   body?: unknown,
   activeContext?: string | null,
+  timeoutMs = 60_000,
 ): Promise<{ ok: boolean; status: number; body: unknown }> {
   const url = `${selfBaseUrl()}/api${path}`;
   const headers: Record<string, string> = {
@@ -125,7 +126,7 @@ async function callListingApi(
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     let responseBody: unknown = null;
     try { responseBody = await res.json(); } catch { /* empty body */ }
@@ -211,6 +212,142 @@ async function syncListingToActivePortals(
   return result;
 }
 
+async function syncListingToProperty24Only(
+  pool: ReturnType<typeof getRequiredPgPool>,
+  listingId: number,
+  token: string,
+  activeContext: string | null,
+): Promise<void> {
+  const listingRes = await pool.query<{
+    feed_to_property24: boolean | null;
+    property24_ref1: string | null;
+    property24_ref2: string | null;
+  }>(
+    `SELECT feed_to_property24, property24_ref1, property24_ref2
+       FROM migration.core_listings
+      WHERE id = $1
+      LIMIT 1`,
+    [listingId],
+  );
+
+  const listing = listingRes.rows[0];
+  if (!listing) return;
+
+  const hasP24Ref = !!(listing.property24_ref1?.trim() || listing.property24_ref2?.trim());
+  if (!hasP24Ref && !listing.feed_to_property24) return;
+
+  await callListingApi(`/listings/${listingId}/publish-to-property24`, 'POST', token, {}, activeContext, 15_000);
+}
+
+function buildProperty24ListingsBaseUrl(): string | null {
+  const p24BaseUrl = env.property24.baseUrl;
+  const p24Endpoint = (env.property24.listingsEndpoint ?? 'listings').replace(/^\/+|\/+$/g, '');
+  if (!p24BaseUrl) return null;
+
+  const trimmedBase = p24BaseUrl.replace(/\/+$/g, '');
+  if (!p24Endpoint) return trimmedBase;
+  if (trimmedBase.toLowerCase().endsWith(`/${p24Endpoint.toLowerCase()}`)) {
+    return trimmedBase;
+  }
+  return `${trimmedBase}/${p24Endpoint}`;
+}
+
+async function forceRetireProperty24Refs(refs: string[]): Promise<{ attempted: number; succeeded: number; details: string[] }> {
+  const p24ApiKey = env.property24.apiKey;
+  const p24UserGroupId = env.property24.userGroupId;
+  const listingsBase = buildProperty24ListingsBaseUrl();
+
+  if (!p24ApiKey || !listingsBase) {
+    return {
+      attempted: 0,
+      succeeded: 0,
+      details: ['Property24 ref-retirement skipped: missing Property24 API configuration.'],
+    };
+  }
+
+  const headers: Record<string, string> = {
+    'Authorization': `Basic ${Buffer.from(p24ApiKey, 'utf8').toString('base64')}`,
+    'Content-Type': 'application/json',
+  };
+  if (p24UserGroupId) headers['P24-UserGroupId'] = p24UserGroupId;
+
+  const RETIRE_DEADLINE_MS = 180_000;
+  const retireDeadline = Date.now() + RETIRE_DEADLINE_MS;
+  const uniqueRefs = Array.from(new Set(refs.map((ref) => ref.trim()).filter((ref) => ref.length > 0)));
+  const details: string[] = [];
+  let attempted = 0;
+  let succeeded = 0;
+
+  const isSuccess = (status: number): boolean => status >= 200 && status < 300;
+  const tryOne = async (ref: string): Promise<boolean> => {
+    const numericRef = Number(ref);
+    const commonPayload: Record<string, unknown> = {
+      listingNumber: Number.isFinite(numericRef) && numericRef > 0 ? numericRef : ref,
+      status: 'Withdrawn',
+      published: false,
+      listingVisibility: 'private',
+    };
+
+    const attempts: Array<{ method: 'PATCH' | 'PUT'; url: string; payload: Record<string, unknown> }> = [
+      { method: 'PATCH', url: `${listingsBase}/${encodeURIComponent(ref)}`, payload: commonPayload },
+      { method: 'PUT', url: `${listingsBase}/${encodeURIComponent(ref)}`, payload: commonPayload },
+    ];
+
+    for (const attempt of attempts) {
+      if (Date.now() >= retireDeadline) {
+        details.push(`retire deadline reached before ${attempt.method} ${ref}`);
+        return false;
+      }
+      attempted += 1;
+      try {
+        const response = await fetchWithTimeout(attempt.url, {
+          method: attempt.method,
+          headers,
+          body: JSON.stringify(attempt.payload),
+        }, 8_000);
+
+        const raw = await response.text().catch(() => '');
+        const parsed = parseJsonSafe(raw);
+        const message = extractP24Message(parsed) ?? (raw ? parseBodySnippet(raw) : `HTTP ${response.status}`);
+
+        if (isSuccess(response.status)) {
+          succeeded += 1;
+          details.push(`${attempt.method} ${ref}: success`);
+          return true;
+        }
+
+        if (response.status === 404 || isP24InvalidEntityId(message)) {
+          succeeded += 1;
+          details.push(`${attempt.method} ${ref}: not found/invalid -> treated retired`);
+          return true;
+        }
+
+        if (isP24AlreadyInactiveMessage(message) || String(message ?? '').toLowerCase().includes('withdraw')) {
+          succeeded += 1;
+          details.push(`${attempt.method} ${ref}: already inactive/withdrawn`);
+          return true;
+        }
+
+        details.push(`${attempt.method} ${ref}: HTTP ${response.status}${message ? ` (${message})` : ''}`);
+      } catch (err) {
+        details.push(`${attempt.method} ${ref}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return false;
+  };
+
+  for (const ref of uniqueRefs) {
+    if (Date.now() >= retireDeadline) {
+      details.push('retire deadline reached; skipped remaining refs');
+      break;
+    }
+    await tryOne(ref);
+  }
+
+  return { attempted, succeeded, details: details.slice(0, 40) };
+}
+
 function extractApiError(body: unknown): string {
   if (body && typeof body === 'object' && 'error' in body) {
     return String((body as Record<string, unknown>)['error']);
@@ -233,6 +370,11 @@ function toText(value: unknown): string | null {
 
 function normalizeId(value: string | null): string {
   return (value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function isAllMarketCenterScope(value: string | null | undefined): boolean {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === '__all__' || normalized === 'all';
 }
 
 async function resolveMarketCenterSourceId(rawId: string | null | undefined): Promise<string | null> {
@@ -389,6 +531,29 @@ function extractP24Message(value: unknown): string | null {
   return null;
 }
 
+function isP24AlreadyInactiveMessage(message: string | null | undefined): boolean {
+  const lower = String(message ?? '').toLowerCase();
+  return lower.includes('already inactive') || lower.includes('already deactivat');
+}
+
+function isP24ActiveListingBlock(message: string | null | undefined): boolean {
+  const lower = String(message ?? '').toLowerCase();
+  return lower.includes('active listing');
+}
+
+function isP24InvalidEntityId(message: string | null | undefined): boolean {
+  const lower = String(message ?? '').toLowerCase();
+  return (
+    lower.includes('specified entity id is invalid') ||
+    (lower.includes('invalid') && lower.includes('entity') && lower.includes('id'))
+  );
+}
+
+function isP24ActiveListingBlocked(summary: AgentPortalRemovalSummary): boolean {
+  const message = `${summary.property24.message} ${summary.property24.details ?? ''}`.toLowerCase();
+  return message.includes('active listing');
+}
+
 function parsePpFault(text: string): string | null {
   const fault = text.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i)?.[1]?.trim();
   return fault ? parseBodySnippet(fault) : null;
@@ -438,11 +603,15 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
-async function removeAgentFromProperty24(agent: AgentPortalProfile): Promise<AgentPortalRemovalResult> {
+async function removeAgentFromProperty24(
+  pool: ReturnType<typeof getRequiredPgPool>,
+  agent: AgentPortalProfile,
+): Promise<AgentPortalRemovalResult> {
   const p24Id = toText(agent.agent_property24_id);
   const p24ApiKey = env.property24.apiKey;
   const p24BaseUrl = env.property24.baseUrl;
   const p24UserGroupId = env.property24.userGroupId;
+  const p24DefaultAgencyId = env.property24.defaultAgencyId;
   const p24Endpoint = (env.property24.listingsEndpoint ?? 'listings').replace(/^\/+|\/+$/g, '');
 
   if (!p24Id) {
@@ -479,6 +648,7 @@ async function removeAgentFromProperty24(agent: AgentPortalProfile): Promise<Age
   if (p24UserGroupId) headers['P24-UserGroupId'] = p24UserGroupId;
 
   let existingPayload: Record<string, unknown> | null = null;
+  let getFailureDetail: string | null = null;
   try {
     const getRes = await fetchWithTimeout(byIdUrl, {
       method: 'GET',
@@ -499,25 +669,24 @@ async function removeAgentFromProperty24(agent: AgentPortalProfile): Promise<Age
 
     if (!getRes.ok) {
       const getMsg = extractP24Message(getJson) ?? (getText ? parseBodySnippet(getText) : `HTTP ${getRes.status}`);
-      return {
-        portal: 'Property24',
-        attempted: true,
-        removed: false,
-        message: 'Property24 lookup failed before deactivation.',
-        details: `GET /agents/{id} -> HTTP ${getRes.status} (${getMsg})`,
-      };
+      if (isP24InvalidEntityId(getMsg)) {
+        return {
+          portal: 'Property24',
+          attempted: true,
+          removed: true,
+          message: 'Property24 agent ID is invalid/not found; treated as already removed.',
+          details: `GET /agents/{id} -> HTTP ${getRes.status} (${getMsg})`,
+        };
+      }
+      getFailureDetail = `GET /agents/{id} -> HTTP ${getRes.status} (${getMsg})`;
+      existingPayload = null;
+    } else {
+      const root = getRecord(getJson);
+      existingPayload = getRecord(root?.data) ?? root;
     }
-
-    const root = getRecord(getJson);
-    existingPayload = getRecord(root?.data) ?? root;
   } catch (err) {
-    return {
-      portal: 'Property24',
-      attempted: true,
-      removed: false,
-      message: 'Property24 lookup failed before deactivation.',
-      details: `GET /agents/{id} -> ${err instanceof Error ? err.message : String(err)}`,
-    };
+    getFailureDetail = `GET /agents/{id} -> ${err instanceof Error ? err.message : String(err)}`;
+    existingPayload = null;
   }
 
   const firstName = pickStringField(existingPayload ?? {}, ['firstname', 'firstName', 'FirstName'])
@@ -539,7 +708,33 @@ async function removeAgentFromProperty24(agent: AgentPortalProfile): Promise<Age
     ?? mobileNumber).replace(/[()\s-]+/g, '');
   const sourceReference = pickStringField(existingPayload ?? {}, ['sourceReference', 'SourceReference'])
     ?? `KW_${toText(agent.source_market_center_id) ?? ''}_${toText(agent.source_associate_id) ?? agent.id}`.replace(/_+$/g, '');
-  const agencyId = pickNumberField(existingPayload ?? {}, ['agencyId', 'AgencyId']);
+  let agencyId = pickNumberField(existingPayload ?? {}, ['agencyId', 'AgencyId']);
+  if (agencyId === null) {
+    const sourceMcId = toText(agent.source_market_center_id);
+    if (sourceMcId) {
+      try {
+        const mcRes = await pool.query<{ market_center_property24_id: string | null }>(
+          `SELECT market_center_property24_id::text
+             FROM migration.core_market_centers
+            WHERE source_market_center_id = $1
+            LIMIT 1`,
+          [sourceMcId],
+        );
+        const mcAgency = Number(toText(mcRes.rows[0]?.market_center_property24_id ?? null) ?? NaN);
+        if (Number.isFinite(mcAgency) && mcAgency > 0) {
+          agencyId = mcAgency;
+        }
+      } catch {
+        // Best-effort fallback; continue to default agencyId below.
+      }
+    }
+  }
+  if (agencyId === null) {
+    const defaultAgency = Number(toText(p24DefaultAgencyId) ?? NaN);
+    if (Number.isFinite(defaultAgency) && defaultAgency > 0) {
+      agencyId = defaultAgency;
+    }
+  }
   const countryId = pickNumberField(existingPayload ?? {}, ['countryId', 'CountryId']) ?? 1;
   const cityId = pickNumberField(existingPayload ?? {}, ['cityId', 'CityId']);
   const idNumber = pickStringField(existingPayload ?? {}, ['idNumber', 'IdNumber']);
@@ -583,70 +778,122 @@ async function removeAgentFromProperty24(agent: AgentPortalProfile): Promise<Age
     active: false,
     countryId,
   };
-  if (agencyId !== null) deactivatePayload.agencyId = agencyId;
+  if (agencyId !== null) {
+    deactivatePayload.agencyId = agencyId;
+    deactivatePayload.AgencyId = agencyId;
+  }
   if (cityId !== null) deactivatePayload.cityId = cityId;
   if (idNumber) deactivatePayload.idNumber = idNumber;
   if (fidelityFundCertificationNumber) deactivatePayload.fidelityFundCertificationNumber = fidelityFundCertificationNumber;
   if (jobTitle) deactivatePayload.jobTitle = jobTitle;
 
-  try {
-    const res = await fetchWithTimeout(agentsUrl, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify(deactivatePayload),
-    }, 25_000);
+  const failures: string[] = [];
+  if (getFailureDetail) failures.push(getFailureDetail);
 
-    const text = await res.text().catch(() => '');
-    const json = parseJsonSafe(text);
-    const msg = extractP24Message(json) ?? (text ? parseBodySnippet(text) : null);
-    const lower = `${msg ?? ''} ${text}`.toLowerCase();
-
-    if (res.ok) {
+  const tryResult = (op: string, status: number, msg: string | null): AgentPortalRemovalResult | null => {
+    if (status >= 200 && status < 300) {
       return {
         portal: 'Property24',
         attempted: true,
         removed: true,
         message: 'Removed from Property24 (agent set to inactive).',
-        details: msg,
+        details: `${op}${msg ? ` (${msg})` : ''}`,
       };
     }
-
-    if (lower.includes('already inactive') || lower.includes('already deactivat')) {
+    if (status === 404 || isP24InvalidEntityId(msg)) {
+      return {
+        portal: 'Property24',
+        attempted: true,
+        removed: true,
+        message: 'Property24 agent record was not found; treated as already removed.',
+        details: `${op} -> HTTP ${status}${msg ? ` (${msg})` : ''}`,
+      };
+    }
+    if (isP24AlreadyInactiveMessage(msg)) {
       return {
         portal: 'Property24',
         attempted: true,
         removed: true,
         message: 'Property24 reports the agent is already inactive.',
-        details: msg,
+        details: `${op}${msg ? ` (${msg})` : ''}`,
       };
     }
-
-    if (lower.includes('active listing')) {
+    if (isP24ActiveListingBlock(msg)) {
       return {
         portal: 'Property24',
         attempted: true,
         removed: false,
         message: 'Property24 blocks deactivation while active listings are still linked to this agent.',
-        details: msg ?? `HTTP ${res.status}`,
+        details: msg ?? `${op} -> HTTP ${status}`,
       };
     }
+    return null;
+  };
 
-    return {
-      portal: 'Property24',
-      attempted: true,
-      removed: false,
-      message: 'Property24 removal failed.',
-      details: `PUT /agents -> HTTP ${res.status}${msg ? ` (${msg})` : ''}`,
-    };
+  const pushFailure = (detail: string) => {
+    failures.push(detail);
+  };
+
+  try {
+    const putRes = await fetchWithTimeout(agentsUrl, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(deactivatePayload),
+    }, 25_000);
+    const putText = await putRes.text().catch(() => '');
+    const putJson = parseJsonSafe(putText);
+    const putMsg = extractP24Message(putJson) ?? (putText ? parseBodySnippet(putText) : null);
+    const putOutcome = tryResult('PUT /agents', putRes.status, putMsg);
+    if (putOutcome) return putOutcome;
+    pushFailure(`PUT /agents -> HTTP ${putRes.status}${putMsg ? ` (${putMsg})` : ''}`);
   } catch (err) {
-    return {
-      portal: 'Property24',
-      attempted: true,
-      removed: false,
-      message: 'Property24 removal failed.',
-      details: `PUT /agents -> ${err instanceof Error ? err.message : String(err)}`,
-    };
+    pushFailure(`PUT /agents -> ${err instanceof Error ? err.message : String(err)}`);
   }
+
+  try {
+    const patchRes = await fetchWithTimeout(byIdUrl, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({
+        id: numericId,
+        published: false,
+        receiveStatsMail: false,
+        status: 'Inactive',
+        active: false,
+      }),
+    }, 25_000);
+    const patchText = await patchRes.text().catch(() => '');
+    const patchJson = parseJsonSafe(patchText);
+    const patchMsg = extractP24Message(patchJson) ?? (patchText ? parseBodySnippet(patchText) : null);
+    const patchOutcome = tryResult('PATCH /agents/{id}', patchRes.status, patchMsg);
+    if (patchOutcome) return patchOutcome;
+    pushFailure(`PATCH /agents/{id} -> HTTP ${patchRes.status}${patchMsg ? ` (${patchMsg})` : ''}`);
+  } catch (err) {
+    pushFailure(`PATCH /agents/{id} -> ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    const deleteRes = await fetchWithTimeout(byIdUrl, {
+      method: 'DELETE',
+      headers,
+    }, 25_000);
+    const deleteText = await deleteRes.text().catch(() => '');
+    const deleteJson = parseJsonSafe(deleteText);
+    const deleteMsg = extractP24Message(deleteJson) ?? (deleteText ? parseBodySnippet(deleteText) : null);
+    const deleteOutcome = tryResult('DELETE /agents/{id}', deleteRes.status, deleteMsg);
+    if (deleteOutcome) return deleteOutcome;
+    pushFailure(`DELETE /agents/{id} -> HTTP ${deleteRes.status}${deleteMsg ? ` (${deleteMsg})` : ''}`);
+  } catch (err) {
+    pushFailure(`DELETE /agents/{id} -> ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return {
+    portal: 'Property24',
+    attempted: true,
+    removed: false,
+    message: 'Property24 removal failed.',
+    details: failures.slice(0, 8).join(' | '),
+  };
 }
 
 async function removeAgentFromPrivateProperty(
@@ -863,7 +1110,7 @@ async function removeAgentFromPortals(
   agent: AgentPortalProfile,
 ): Promise<AgentPortalRemovalSummary> {
   const [property24, privateProperty] = await Promise.all([
-    removeAgentFromProperty24(agent),
+    removeAgentFromProperty24(pool, agent),
     removeAgentFromPrivateProperty(pool, agent),
   ]);
 
@@ -936,6 +1183,7 @@ router.get('/mc-agents/:mcSourceId', resolvePermissions, async (req, res) => {
 
   const mcSourceId = req.params.mcSourceId;
   let effectiveMcSourceId = mcSourceId;
+  const allMarketCenters = perms.isRegionalAdmin && isAllMarketCenterScope(mcSourceId);
 
   // Office Admins can only manage their own MC
   if (perms.isOfficeAdmin && !perms.isRegionalAdmin) {
@@ -971,12 +1219,15 @@ router.get('/mc-agents/:mcSourceId', resolvePermissions, async (req, res) => {
            WHERE cl.id = la.listing_id
              AND LOWER(TRIM(COALESCE(cl.status_name, ''))) IN ('active', '1')
          )
-       WHERE REGEXP_REPLACE(LOWER(TRIM(COALESCE(a.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g')
-               = REGEXP_REPLACE(LOWER(TRIM($1)), '[^a-z0-9]+', '', 'g')
+       WHERE (
+         $1::boolean = true
+         OR REGEXP_REPLACE(LOWER(TRIM(COALESCE(a.source_market_center_id, ''))), '[^a-z0-9]+', '', 'g')
+              = REGEXP_REPLACE(LOWER(TRIM($2)), '[^a-z0-9]+', '', 'g')
+       )
          AND LOWER(TRIM(COALESCE(a.status_name, ''))) IN ('active', '1')
        GROUP BY a.id, a.full_name, a.kwsa_email, a.private_email, a.email, a.mobile_number, a.image_url
        ORDER BY a.full_name`,
-      [effectiveMcSourceId]
+      [allMarketCenters, effectiveMcSourceId]
     );
     return res.json({ agents: result.rows });
   } catch (err) {
@@ -1183,6 +1434,47 @@ router.post('/deactivate', resolvePermissions, async (req, res) => {
       return res.status(404).json({ error: 'Agent not found.' });
     }
 
+    const p24CandidateListingRes = await pool.query<{ listing_id: string }>(
+      `SELECT DISTINCT cl.id::text AS listing_id
+         FROM migration.core_listings cl
+         JOIN migration.listing_agents la ON la.listing_id = cl.id
+        WHERE la.associate_id = $1
+          AND (
+            COALESCE(cl.feed_to_property24, false) = true
+            OR NULLIF(TRIM(cl.property24_ref1), '') IS NOT NULL
+            OR NULLIF(TRIM(cl.property24_ref2), '') IS NOT NULL
+          )
+        ORDER BY listing_id DESC
+        LIMIT 400`,
+      [agentId],
+    );
+
+    const p24CandidateListingIds = p24CandidateListingRes.rows
+      .map((row) => Number(row.listing_id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+
+    const p24ReferenceRows = await pool.query<{ ref: string }>(
+      `SELECT DISTINCT ref
+         FROM (
+           SELECT NULLIF(TRIM(cl.property24_ref1), '') AS ref
+             FROM migration.core_listings cl
+             JOIN migration.listing_agents la ON la.listing_id = cl.id
+            WHERE la.associate_id = $1
+           UNION ALL
+           SELECT NULLIF(TRIM(cl.property24_ref2), '') AS ref
+             FROM migration.core_listings cl
+             JOIN migration.listing_agents la ON la.listing_id = cl.id
+            WHERE la.associate_id = $1
+         ) refs
+        WHERE ref IS NOT NULL
+        LIMIT 300`,
+      [agentId],
+    );
+
+    const knownP24Refs = p24ReferenceRows.rows
+      .map((row) => row.ref)
+      .filter((value): value is string => Boolean(value && value.trim().length > 0));
+
     // Office Admins can only deregister agents in their own market centre.
     if (perms.isOfficeAdmin && !perms.isRegionalAdmin) {
       const hasAccess = await marketCenterIdsMatch(officeAdminAllowedMcId(perms), agentProfile.source_market_center_id);
@@ -1268,6 +1560,8 @@ router.post('/deactivate', resolvePermissions, async (req, res) => {
         ...extractListingNumbersFromText(portalSync.privateProperty.details),
       ]));
 
+      const listingIdsToResync = new Set<number>(p24CandidateListingIds);
+
       if (listingNumbers.length > 0) {
         const listingsRes = await pool.query<{ id: string }>(
           `SELECT id::text AS id
@@ -1279,10 +1573,33 @@ router.post('/deactivate', resolvePermissions, async (req, res) => {
         for (const row of listingsRes.rows) {
           const listingId = Number(row.id);
           if (!Number.isFinite(listingId) || listingId <= 0) continue;
-          await syncListingToActivePortals(pool, listingId, token, activeContext).catch(() => undefined);
+          listingIdsToResync.add(listingId);
+        }
+      }
+
+      // If Property24 still reports active linked listings, do a broader
+      // resync across all known P24-linked listings for this agent and retry.
+      if (isP24ActiveListingBlocked(portalSync) || listingIdsToResync.size > 0) {
+        const P24_RESYNC_MAX_LISTINGS = 400;
+        const P24_RESYNC_DEADLINE_MS = 75_000;
+        const resyncDeadline = Date.now() + P24_RESYNC_DEADLINE_MS;
+        const resyncQueue = Array.from(listingIdsToResync).slice(0, P24_RESYNC_MAX_LISTINGS);
+
+        for (const listingId of resyncQueue) {
+          if (Date.now() >= resyncDeadline) break;
+          await syncListingToProperty24Only(pool, listingId, token, activeContext).catch(() => undefined);
         }
 
         portalSync = await removeAgentFromPortals(pool, agentProfile);
+
+        if (!portalSync.allSucceeded && isP24ActiveListingBlocked(portalSync)) {
+          const forcedRetire = await forceRetireProperty24Refs(knownP24Refs);
+          portalSync = await removeAgentFromPortals(pool, agentProfile);
+          if (!portalSync.allSucceeded && forcedRetire.attempted > 0) {
+            const priorDetails = portalSync.property24.details ? `${portalSync.property24.details} | ` : '';
+            portalSync.property24.details = `${priorDetails}Forced ref retirement: ${forcedRetire.succeeded}/${forcedRetire.attempted} calls succeeded. ${forcedRetire.details.slice(0, 8).join(' | ')}`;
+          }
+        }
       }
     }
 

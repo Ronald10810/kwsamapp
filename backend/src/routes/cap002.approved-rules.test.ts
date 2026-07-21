@@ -80,6 +80,45 @@ describe('CAP-002 approved rules regression ledger', () => {
     expect(reportsSource).toContain('GREATEST(tb.cap_amount - LEAST(tb.cap_amount, COALESCE(ta.cap_achieved, 0)), 0)::numeric(18,2) AS cap_remaining');
   });
 
+  it('CAP002-T016A TEAM-ACTIVE-01: team achieved should only include active team members in home and cappers queries', () => {
+    expect(agentsSource).toContain("AND LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1')");
+    expect(reportsSource).toContain("AND LOWER(TRIM(COALESCE(ca.status_name, ''))) IN ('active', '1')");
+  });
+
+  it('CAP002-T017 ASSOC-DETAIL-01: cappers associate registered deals use TAC company dollar basis only', () => {
+    expect(reportsSource).toContain('ROUND(COALESCE(SUM(tac.market_center_dollar), 0)::numeric, 2) AS company_dollar');
+    expect(reportsSource).not.toContain('SUM(COALESCE(pay.mc_dollar, tac.market_center_dollar))');
+  });
+
+  it('CAP002-T018 TEAM-DATE-01: team cap cycle should prefer team_dates cap_date before member fallback', () => {
+    expect(reportsSource).toContain('LEFT JOIN migration.team_dates td ON td.team_id = t.id');
+    expect(reportsSource).toContain('COALESCE(td.cap_date, member_cycle.team_cap_date) AS cap_date');
+    expect(reportsSource).toContain('COALESCE(tcw.next_cap_date, tcd.cap_date) AS cap_date');
+    expect(agentsSource).toContain('LEFT JOIN migration.team_dates td ON td.team_id = t.id');
+    expect(agentsSource).toContain('COALESCE(tcw.next_cap_date, td.cap_date) AS cap_date');
+    expect(transactionsSource).toContain('LEFT JOIN migration.team_dates td ON td.team_id = t.id');
+    expect(transactionsSource).toContain('COALESCE(td.cap_date, member_cycle.team_cap_date) AS cap_date');
+  });
+
+  it('CAP002-T019 CALC-TEAM-DATE-01: transaction calculation raw rows should prefer team_dates cap_date before member fallback', () => {
+    expect(calculationsSource).toContain('LEFT JOIN migration.team_dates td ON td.team_id = ca.team_id');
+    expect(calculationsSource).toContain('COALESCE(td.cap_date, member_cycle.team_cap_date) AS team_cap_date');
+  });
+
+  it('CAP002-T020 HOME-IND-01: agent home dial should derive individual remaining from registered cycle achieved, not latest TAC remaining', () => {
+    expect(agentsSource).toContain('associate_registered_achieved AS (');
+    expect(agentsSource).toContain('ROUND(COALESCE(SUM(tac.market_center_dollar), 0)::numeric, 2) AS cap_achieved');
+    expect(agentsSource).toContain('LEFT JOIN latest_cycle_caps lcc ON lcc.associate_id = ca.id AND lcc.rn = 1');
+    expect(agentsSource).toContain('LEFT JOIN associate_registered_achieved ara ON ara.associate_id = ca.id');
+    expect(agentsSource).toContain('COALESCE(ara.cap_achieved, 0)');
+  });
+
+  it('CAP002-T021 HOME-TEAM-04: home team dial should clamp achieved to team cap amount and honor manual team cap', () => {
+    expect(agentsSource).toContain('const teamManualCap = Boolean(teamCapResult.rows[0]?.manual_cap);');
+    expect(agentsSource).toContain('const teamCapAchieved = teamManualCap ? teamCapAmount : Math.min(teamCapAchievedRaw, teamCapAmount);');
+    expect(agentsSource).toContain('const teamCapRemaining = teamManualCap ? 0 : Math.max(teamCapAmount - teamCapAchieved, 0);');
+  });
+
   it('CAP002-T009 TEAM-02: home should use cycle-window filtering aligned with cappers team cycle logic', () => {
     expect(agentsSource).toContain('tac.effective_reporting_date::date >= (tb.cap_date - INTERVAL \'1 year\')::date');
     expect(agentsSource).toContain('tac.effective_reporting_date::date < tb.cap_date');
