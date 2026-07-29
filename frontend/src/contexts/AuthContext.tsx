@@ -73,7 +73,7 @@ const ACTIVE_CONTEXT_KEY = 'kwsa_active_context_id';
 const AUTH_EXPIRED_EVENT = 'kwsa-auth-expired';
 const ACCESS_CONTROL_UPDATED_EVENT = 'kwsa-access-control-updated';
 const ACCESS_CONTROL_SYNC_KEY = 'kwsa-access-control-sync';
-const AUTH_FETCH_TIMEOUT_MS = 8000;
+const AUTH_FETCH_TIMEOUT_MS = 20000;
 
 function applyAccessControlUpdate(previous: AccessControlState, detail: Partial<AccessControlState>): AccessControlState {
   return {
@@ -126,6 +126,79 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}
   }
 }
 
+function decodeJwtUser(token: string): AuthUser | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1]));
+    const userId = Number(payload.userId);
+    const email = typeof payload.email === 'string' ? payload.email : '';
+    const name = typeof payload.name === 'string' ? payload.name : '';
+    const role = typeof payload.role === 'string' ? payload.role : 'Viewer';
+    const picture = typeof payload.picture === 'string' ? payload.picture : null;
+    if (!Number.isFinite(userId) || !email) return null;
+    return { userId, email, name, role, picture };
+  } catch {
+    return null;
+  }
+}
+
+function isOfflineFallbackContext(ctx: UserContext | null | undefined): boolean {
+  if (!ctx) return false;
+  const id = String(ctx.id ?? '').trim().toLowerCase();
+  return id === 'offline_fallback' || id === 'viewer';
+}
+
+function buildFallbackContext(role: string | null | undefined): UserContext {
+  const normalizedRole = String(role ?? '').trim().toLowerCase().replace(/[_\s]+/g, ' ');
+
+  if (normalizedRole === 'regional admin') {
+    return {
+      id: 'regional_admin',
+      label: 'Regional Admin',
+      role: 'Regional Admin',
+      marketCenter: null,
+      marketCenterId: null,
+      associateId: null,
+    };
+  }
+
+  if (normalizedRole === 'office admin' || normalizedRole === 'admin') {
+    return {
+      id: 'office_admin',
+      label: 'Office Admin',
+      role: 'Office Admin',
+      marketCenter: null,
+      marketCenterId: null,
+      associateId: null,
+    };
+  }
+
+  if (normalizedRole === 'lead agent' || normalizedRole === 'team admin' || normalizedRole === 'team agent' || normalizedRole === 'agent') {
+    const label = normalizedRole === 'agent'
+      ? 'Agent'
+      : normalizedRole.split(' ').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+
+    return {
+      id: normalizedRole.replace(/\s+/g, '_'),
+      label,
+      role: label,
+      marketCenter: null,
+      marketCenterId: null,
+      associateId: null,
+    };
+  }
+
+  return {
+    id: 'viewer',
+    label: 'Viewer',
+    role: 'Viewer',
+    marketCenter: null,
+    marketCenterId: null,
+    associateId: null,
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_STORAGE_KEY));
@@ -168,7 +241,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loadContexts = useCallback(async (authToken: string) => {
     try {
-      let data: { contexts: UserContext[] } | null = null;
+      let data: { contexts: UserContext[]; warning?: string } | null = null;
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const res = await fetchWithTimeout('/api/auth/contexts', {
@@ -190,9 +263,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Restore last-used context or default to first (highest priority)
       const savedId = localStorage.getItem(ACTIVE_CONTEXT_KEY);
       const restored = savedId ? list.find((c) => c.id === savedId) : null;
+      const warnedOffline = Boolean((data.warning ?? '').trim());
+
+      // During transient backend outages, keep the currently active non-offline
+      // context so role-based UI/actions do not get downgraded to offline fallback.
+      if (warnedOffline) {
+        setActiveContextState((prev) => {
+          if (prev && !isOfflineFallbackContext(prev)) {
+            const stillAvailable = list.find((c) => c.id === prev.id);
+            return stillAvailable ?? prev;
+          }
+          return restored ?? list[0] ?? null;
+        });
+        return;
+      }
+
       setActiveContextState(restored ?? list[0] ?? null);
     } catch {
-      // non-fatal — contexts just won't be shown
+      const decoded = decodeJwtUser(authToken);
+      const fallbackContext = buildFallbackContext(decoded?.role ?? null);
+      setContexts([fallbackContext]);
+      setActiveContextState(fallbackContext);
     }
   }, []);
 
@@ -247,42 +338,95 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    fetchWithTimeout('/api/auth/me', {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('Token invalid');
-        return res.json() as Promise<{
-          user: AuthUser;
-          access_control?: {
-            feature_enabled?: boolean;
-            is_temporarily_suspended?: boolean;
-            suspended_reason?: string | null;
-            suspended_by_email?: string | null;
-            suspended_at?: string | null;
-            updated_at?: string | null;
+    let cancelled = false;
+
+    const bootstrapAuth = async (): Promise<void> => {
+      let lastStatus: number | null = null;
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const res = await fetchWithTimeout('/api/auth/me', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          lastStatus = res.status;
+          if (res.status === 401) {
+            throw new Error('AUTH_UNAUTHORISED');
+          }
+
+          if (!res.ok) {
+            await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+            continue;
+          }
+
+          const body = await res.json() as {
+            user: AuthUser;
+            access_control?: {
+              feature_enabled?: boolean;
+              is_temporarily_suspended?: boolean;
+              suspended_reason?: string | null;
+              suspended_by_email?: string | null;
+              suspended_at?: string | null;
+              updated_at?: string | null;
+            };
           };
-        }>;
-      })
-      .then(({ user: u, access_control: control }) => {
-        setUser(u);
-        setAccessControl({
-          featureEnabled: Boolean(control?.feature_enabled),
-          isTemporarilySuspended: Boolean(control?.is_temporarily_suspended),
-          suspendedReason: control?.suspended_reason ?? null,
-          suspendedByEmail: control?.suspended_by_email ?? null,
-          suspendedAt: control?.suspended_at ?? null,
-          updatedAt: control?.updated_at ?? null,
-        });
-        return loadContexts(token);
-      })
-      .catch(() => {
+
+          if (cancelled) return;
+
+          setUser(body.user);
+          const control = body.access_control;
+          setAccessControl({
+            featureEnabled: Boolean(control?.feature_enabled),
+            isTemporarilySuspended: Boolean(control?.is_temporarily_suspended),
+            suspendedReason: control?.suspended_reason ?? null,
+            suspendedByEmail: control?.suspended_by_email ?? null,
+            suspendedAt: control?.suspended_at ?? null,
+            updatedAt: control?.updated_at ?? null,
+          });
+          await loadContexts(token);
+          return;
+        } catch (error) {
+          if (error instanceof Error && error.message === 'AUTH_UNAUTHORISED') {
+            localStorage.removeItem(TOKEN_STORAGE_KEY);
+            setToken(null);
+            setUser(null);
+            setAccessControl(DEFAULT_ACCESS_CONTROL);
+            return;
+          }
+
+          if (attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+          }
+        }
+      }
+
+      if (cancelled) return;
+
+      // Keep the user signed in during transient backend latency/outages.
+      const decoded = decodeJwtUser(token);
+      if (decoded) {
+        setUser(decoded);
+        void loadContexts(token);
+        return;
+      }
+
+      if (lastStatus === 401) {
         localStorage.removeItem(TOKEN_STORAGE_KEY);
         setToken(null);
         setUser(null);
         setAccessControl(DEFAULT_ACCESS_CONTROL);
-      })
-      .finally(() => setIsLoading(false));
+      }
+    };
+
+    void bootstrapAuth().finally(() => {
+      if (!cancelled) {
+        setIsLoading(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const login = useCallback(async (googleCredential: string) => {

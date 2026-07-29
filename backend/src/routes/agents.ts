@@ -221,6 +221,59 @@ function toStringArray(value: unknown): string[] {
     .filter((entry): entry is string => Boolean(entry));
 }
 
+function normalizeComparableText(value: string | null): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function parseNullableNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+type RecomputeSensitiveAssociateState = {
+  sourceMarketCenterId: string | null;
+  sourceTeamId: string | null;
+  statusName: string | null;
+  vested: boolean;
+  vestingPeriodStartDate: string | null;
+  cap: number | null;
+  manualCap: boolean;
+  agentSplit: number | null;
+  projectedCos: number | null;
+  projectedCap: number | null;
+  startDate: string | null;
+  endDate: string | null;
+  anniversaryDate: string | null;
+  capDate: string | null;
+};
+
+function hasRecomputeSensitiveAssociateChanges(
+  previous: RecomputeSensitiveAssociateState,
+  next: RecomputeSensitiveAssociateState,
+): boolean {
+  if (normalizeComparableText(previous.sourceMarketCenterId) !== normalizeComparableText(next.sourceMarketCenterId)) return true;
+  if (normalizeComparableText(previous.sourceTeamId) !== normalizeComparableText(next.sourceTeamId)) return true;
+  if (normalizeComparableText(previous.statusName) !== normalizeComparableText(next.statusName)) return true;
+  if (previous.vested !== next.vested) return true;
+  if (previous.vestingPeriodStartDate !== next.vestingPeriodStartDate) return true;
+  if (previous.cap !== next.cap) return true;
+  if (previous.manualCap !== next.manualCap) return true;
+  if (previous.agentSplit !== next.agentSplit) return true;
+  if (previous.projectedCos !== next.projectedCos) return true;
+  if (previous.projectedCap !== next.projectedCap) return true;
+  if (previous.startDate !== next.startDate) return true;
+  if (previous.endDate !== next.endDate) return true;
+  if (previous.anniversaryDate !== next.anniversaryDate) return true;
+  if (previous.capDate !== next.capDate) return true;
+  return false;
+}
+
 function normalizeListKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -2000,6 +2053,9 @@ router.post('/', resolvePermissions, async (req, res) => {
   const temporaryGrowthShareSponsor = toNullableBool(body.temporary_growth_share_sponsor);
   const proposedGrowthShareSponsor = toText(body.proposed_growth_share_sponsor);
   const kwuid = toText(body.kwuid);
+  if (!kwuid) {
+    return res.status(400).json({ error: 'kwuid is required.' });
+  }
   const vested = toBool(body.vested);
   const vestingPeriodStartDate = toDate(body.vesting_period_start_date);
   const listingApprovalRequired = toBool(body.listing_approval_required);
@@ -2202,13 +2258,116 @@ router.put('/:id', resolvePermissions, async (req, res) => {
     return res.status(400).json({ error: 'full_name (or first_name/last_name) is required.' });
   }
 
+  const kwuid = toText(body.kwuid);
+  if (!kwuid) {
+    return res.status(400).json({ error: 'kwuid is required.' });
+  }
+
   const sourceMarketCenterId = toText(body.source_market_center_id);
+  const sourceTeamId = toText(body.source_team_id);
+  const statusName = toText(body.status_name);
+  const vested = toBool(body.vested);
+  const vestingPeriodStartDate = toDate(body.vesting_period_start_date);
+  const listingApprovalRequired = toBool(body.listing_approval_required);
+  const excludeFromIndividualReports = toBool(body.exclude_from_individual_reports);
   const property24OptIn = toBool(body.property24_opt_in);
+  const entegralOptIn = toBool(body.entegral_opt_in);
+  const privatePropertyOptIn = toBool(body.private_property_opt_in);
+  const cap = toNumber(body.cap);
+  const manualCap = toBool(body.manual_cap);
+  const agentSplit = toNumber(body.agent_split);
+  const projectedCos = toNumber(body.projected_cos);
+  const projectedCap = toNumber(body.projected_cap);
+  const startDate = toDate(body.start_date);
+  const endDate = toDate(body.end_date);
+  const anniversaryDate = toDate(body.anniversary_date);
+  const capDate = toDate(body.cap_date);
   const normalizedP24 = normalizeProperty24Fields(property24OptIn, body.agent_property24_id, body.property24_status);
 
   const client = await pool.connect();
+  let shouldRecomputeTransactions = false;
   try {
     await client.query('BEGIN');
+
+    const existingResult = await client.query<{
+      source_market_center_id: string | null;
+      source_team_id: string | null;
+      status_name: string | null;
+      vested: boolean | null;
+      vesting_period_start_date: string | null;
+      cap: string | number | null;
+      manual_cap: boolean | null;
+      agent_split: string | number | null;
+      projected_cos: string | number | null;
+      projected_cap: string | number | null;
+      start_date: string | null;
+      end_date: string | null;
+      anniversary_date: string | null;
+      cap_date: string | null;
+    }>(
+      `
+      SELECT
+        source_market_center_id,
+        source_team_id,
+        status_name,
+        vested,
+        vesting_period_start_date::text,
+        cap,
+        manual_cap,
+        agent_split,
+        projected_cos,
+        projected_cap,
+        start_date::text,
+        end_date::text,
+        anniversary_date::text,
+        cap_date::text
+      FROM migration.core_associates
+      WHERE id = $1
+      FOR UPDATE
+      `,
+      [id]
+    );
+
+    if (existingResult.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Associate not found.' });
+    }
+
+    const previousState: RecomputeSensitiveAssociateState = {
+      sourceMarketCenterId: existingResult.rows[0].source_market_center_id,
+      sourceTeamId: existingResult.rows[0].source_team_id,
+      statusName: existingResult.rows[0].status_name,
+      vested: Boolean(existingResult.rows[0].vested),
+      vestingPeriodStartDate: existingResult.rows[0].vesting_period_start_date,
+      cap: parseNullableNumber(existingResult.rows[0].cap),
+      manualCap: Boolean(existingResult.rows[0].manual_cap),
+      agentSplit: parseNullableNumber(existingResult.rows[0].agent_split),
+      projectedCos: parseNullableNumber(existingResult.rows[0].projected_cos),
+      projectedCap: parseNullableNumber(existingResult.rows[0].projected_cap),
+      startDate: existingResult.rows[0].start_date,
+      endDate: existingResult.rows[0].end_date,
+      anniversaryDate: existingResult.rows[0].anniversary_date,
+      capDate: existingResult.rows[0].cap_date,
+    };
+
+    const nextState: RecomputeSensitiveAssociateState = {
+      sourceMarketCenterId,
+      sourceTeamId,
+      statusName,
+      vested,
+      vestingPeriodStartDate,
+      cap,
+      manualCap,
+      agentSplit,
+      projectedCos,
+      projectedCap,
+      startDate,
+      endDate,
+      anniversaryDate,
+      capDate,
+    };
+
+    shouldRecomputeTransactions = hasRecomputeSensitiveAssociateChanges(previousState, nextState);
 
     const mcLookup = sourceMarketCenterId
       ? await client.query<{ id: string }>(
@@ -2268,14 +2427,14 @@ router.put('/:id', resolvePermissions, async (req, res) => {
       `,
       [
         sourceMarketCenterId,
-        toText(body.source_team_id),
+        sourceTeamId,
         marketCenterId,
         firstName,
         lastName,
         fullName,
         toEmail(body.kwsa_email) ?? toEmail(body.email),
-        toText(body.status_name),
-        toText(body.kwuid),
+        statusName,
+        kwuid,
         toText(body.image_url),
         toPhone(body.mobile_number),
         toText(body.national_id),
@@ -2286,27 +2445,27 @@ router.put('/:id', resolvePermissions, async (req, res) => {
         toText(body.growth_share_sponsor),
         toNullableBool(body.temporary_growth_share_sponsor),
         toText(body.proposed_growth_share_sponsor),
-        toBool(body.vested),
-        toDate(body.vesting_period_start_date),
-        toBool(body.listing_approval_required),
-        toBool(body.exclude_from_individual_reports),
+        vested,
+        vestingPeriodStartDate,
+        listingApprovalRequired,
+        excludeFromIndividualReports,
         property24OptIn,
         normalizedP24.agentProperty24Id,
         normalizedP24.property24Status,
-        toBool(body.entegral_opt_in),
+        entegralOptIn,
         toText(body.agent_entegral_id),
         toText(body.entegral_status),
-        toBool(body.private_property_opt_in),
+        privatePropertyOptIn,
         toText(body.private_property_status),
-        toNumber(body.cap),
-        toBool(body.manual_cap),
-        toNumber(body.agent_split),
-        toNumber(body.projected_cos),
-        toNumber(body.projected_cap),
-        toDate(body.start_date),
-        toDate(body.end_date),
-        toDate(body.anniversary_date),
-        toDate(body.cap_date),
+        cap,
+        manualCap,
+        agentSplit,
+        projectedCos,
+        projectedCap,
+        startDate,
+        endDate,
+        anniversaryDate,
+        capDate,
         id,
       ]
     );
@@ -2327,8 +2486,10 @@ router.put('/:id', resolvePermissions, async (req, res) => {
     client.release();
   }
 
-  // Fire background recalculation after response is sent — do not block the save.
-  scheduleTransactionAgentRecompute('agents-update');
+  // Fire background recalculation only when save touched transaction-calculation inputs.
+  if (shouldRecomputeTransactions) {
+    scheduleTransactionAgentRecompute('agents-update');
+  }
   return;
 });
 
